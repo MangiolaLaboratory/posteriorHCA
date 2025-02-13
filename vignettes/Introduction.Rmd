@@ -1,0 +1,162 @@
+---
+title: "posteriorHCA"
+output: "html_vignette"
+params:
+  demo_metadata: true
+vignette: >
+  %\VignetteIndexEntry{posteriorHCA}
+  %\VignetteEncoding{UTF-8}
+  %\VignetteEngine{knitr::rmarkdown}
+knit: >
+    (function(x, ...){
+        proj_root <- rprojroot::find_package_root_file() |> normalizePath()
+        rmarkdown::render(
+            x,
+            output_format = "html_document",
+            params = list(
+                demo_metadata = TRUE
+            )
+        )
+        rmarkdown::render(
+            x,
+            output_file = "README.md",
+            output_format = "github_document",
+            output_dir = proj_root,
+            knit_root_dir = proj_root,
+            params = list(
+                demo_metadata = FALSE
+            )
+        )
+    })
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+    collapse = TRUE,
+    comment = "#>"
+)
+root_dir <- knitr::opts_knit$get("root.dir")
+if (!is.null(root_dir)){
+    # This hack fixes the relative image paths. 
+    # See https://github.com/rstudio/rmarkdown/issues/2473
+    knitr::opts_knit$set(
+        output.dir = root_dir
+    )
+}
+proj_root <- rprojroot::find_package_root_file() |> normalizePath() 
+# Utility function for figures to force them to have the correct path
+find_figure <- function(names){
+    rprojroot::find_package_root_file() |>
+        file.path("man", "figures", names) 
+}
+```
+
+<!-- badges: start -->
+
+[![Lifecycle:experimental](https://lifecycle.r-lib.org/articles/figures/lifecycle-experimental.svg)](https://lifecycle.r-lib.org/articles/stages.html#experimental)
+
+<!-- badges: end -->
+
+`PosteriorHCA` applies **Bayesian inference** from the `sccomp` package to model the comprehensive **Human Cell Atlas (HCA)**, allowing researchers to probabilistically measure human cellular composition.
+
+This package **models variations in tissue composition** across:
+
+-   **Cell Types**
+
+-   **Sex**
+
+-   **Age**
+
+-   **Ethnicity**
+
+-   **Disease conditions**
+
+-   **Tissue Groups**
+
+The probabilistic landscape is **pre-trained**, meaning it represents a **posterior distribution** estimated from millions of cells. `PosteriorHCA` makes this **queryable**, allowing researchers to:
+
+-   **Test hypotheses** against a precomputed reference baseline.
+-   **Compare new samples** to the expected cellular composition distribution.
+-   **Assess how cell proportions vary** across human conditions.
+
+## **Installation**
+
+To install the latest development version of `PosteriorHCA` from GitHub, run:
+
+```{r eval=FALSE}
+# Install devtools if not already installed
+install.packages("devtools")
+
+# Install PosteriorHCA from GitHub
+devtools::install_github("MangiolaLaboratory/posteriorHCA")
+```
+
+Once installed, load the package:
+
+```{r}
+library(posteriorHCA)
+```
+
+## Usage Example
+
+### 1. Load Example Data
+
+The package includes a small example dataset for demonstration:
+
+```{r}
+data(example_proportions)
+print(example_proportions)
+```
+
+### **2. Run Posterior Testing**
+
+The core function, `posterior_test()`, allows testing new data against the probabilistic model:
+
+```{r}
+result <- posterior_test(
+    proportions = example_proportions,
+    sex = "male",
+    age_bin = "Middle Age",
+    disease_groups = "Normal",
+    ethnicity_groups = "European",
+    tissue_groups = "blood"
+)
+```
+
+### **3. Inspect the Results**
+
+#### **Posterior Distribution Table**
+
+```{r}
+print(result$result_table)
+```
+
+Density Plot of Posterior Predictions
+
+```{r}
+print(result$plot)
+```
+
+## **Input Arguments and Valid Values**
+
+With the `posterior_test()` function, users can provide various metadata inputs corresponding to observed sample characteristics. These include **sex, age group, disease condition, ethnicity, and tissue type, etc**, along with observed cell type proportions. However, if some metadata or proportions are unknown, users can leave these fields empty, and the function will still generate meaningful posterior estimates based on the comprehensive reference.
+
+If users choose to specify metadata, it must be consistent with the **Human Cell Atlas (HCA) annotations** to ensure accurate comparisons. Below is a comprehensive list of valid arguments:
+
+-   **Cell Types:** "b memory", "b naive", "cd14 mono", "cd16 mono", "cd4 naive", "cd4 tcm", "cd4 tem", "cd8 naive", "cd8 tcm", "cd8 tem", "cdc", "cytotoxic", "erythrocyte", "granulocyte", "ilc", "macrophage", "mait", "mast", "nk", "nkt", "pdc", "plasma", "tgd", "treg"
+
+-   **Sex:** "female", "male", "unknown"
+
+-   **Age Groups:** "Young Adulthood", "Senior", "Middle Age", "Childhood", "Adolescence", "Infancy"
+
+-   **Disease Groups:** "Normal", "COVID-19 related", "Metabolic and Other Disorders: Renal and Urinary Disorders", "other", "Metabolic and Other Disorders: Gastrointestinal Disorders", "Respiratory Conditions: General Respiratory Disorders", "Infectious and Immune-related Diseases: Autoimmune and Immune-Related Disorders", "Infectious and Immune-related Diseases: Respiratory Infections", "Cancer: Renal Cancer", "Cancer: Gastrointestinal Cancer", "Cancer: Hematologic Cancer", "Cancer: Breast Cancer", "Cancer: Lung Cancer", "Respiratory Conditions: Restrictive Lung Diseases", "Neurodegenerative and Neurological Disorders: Neurodegenerative Disorders", "Metabolic and Other Disorders: Metabolic Disorders", "Respiratory Conditions: Obstructive Lung Diseases"
+
+-   **Ethnicity Groups:** "African", "Other/Unknown", "European", "East Asian", "Hispanic/Latin American", "South Asian", "Native American & Pacific Islander"
+
+-   **Tissue Groups:** "respiratory system", "blood", "renal system", "epithelium and mucosal tissues", "nasal, oral, and pharyngeal regions", "cerebral lobes and cortical areas", "breast", "cardiovascular system", "small intestine", "trachea", "endocrine system", "lymphatic system", "prostate", "sensory-related structures", "liver", "oesophagus", "large intestine", "spleen", "brainstem and cerebellar structures", "bone marrow", "stomach", "female reproductive system", "thymus", "adipose tissue", "integumentary system (skin)", "gallbladder", "pancreas"
+
+# Session Info
+
+```{r}
+sessionInfo()
+```

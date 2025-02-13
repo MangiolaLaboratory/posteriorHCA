@@ -1,0 +1,24 @@
+Package: posteriorHCA
+Type: Package
+Title: A Package for Sample Testing against Posterior Learned from Human Cell Atlas
+Version: 0.1.0
+Authors@R: person("Chen", "Zhan", , "chen.zhan@adelaide.edu.au", role = c("aut", "cre"))
+Description: A Package for Sample Testing against Posterior Learned from Human Cell Atlas
+License: GPL-3 
+Encoding: UTF-8
+Depends: R (>= 4.2.0)
+Imports:
+    dplyr,
+    tidyr,
+    purrr,
+    ggplot2,
+    sccomp,
+    dittoSeq
+LazyData: true
+RoxygenNote: 7.3.2
+Suggests: 
+    knitr,
+    rmarkdown,
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3
+VignetteBuilder: knitr

@@ -1,0 +1,104 @@
+name: PosteriorHCA CI/CD
+
+'on':
+  push:
+    branches:
+      - master
+      - main
+      - devel
+      - RELEASE_**
+  pull_request:
+    branches:
+      - master
+      - main
+      - devel
+      - RELEASE_**
+
+jobs:
+  rworkflows:
+    permissions: write-all
+    runs-on: ${{ matrix.config.os }}
+    name: ${{ matrix.config.os }} (${{ matrix.config.r }})
+    container: ${{ matrix.config.cont }}
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - os: ubuntu-latest
+            bioc: devel
+            r: auto
+            cont: ghcr.io/bioconductor/bioconductor_docker:devel
+            rspm: ~
+          - os: macOS-latest
+            bioc: release
+            r: auto
+            cont: ~
+            rspm: ~
+          - os: windows-latest
+            bioc: release
+            r: auto
+            cont: ~
+            rspm: ~
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up R environment
+        uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: ${{ matrix.config.r }}
+
+      - name: Install dependencies
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: |
+            remotes
+            rcmdcheck
+            covr
+            roxygen2
+            testthat
+            pkgdown
+            any::BiocManager
+          needs: dependencies
+
+      - name: Install package
+        run: |
+          Rscript -e 'remotes::install_deps(dependencies = TRUE)'
+
+      - name: Check package (R CMD check)
+        run: |
+          Rscript -e 'rcmdcheck::rcmdcheck(args = c("--no-manual", "--as-cran"), error_on = "error")'
+
+      - name: Run tests with testthat
+        run: |
+          Rscript -e 'testthat::test_package("PosteriorHCA")'
+
+      - name: Compute test coverage
+        run: |
+          Rscript -e 'covr::codecov()'
+
+      - name: Build vignettes
+        run: |
+          Rscript -e 'devtools::build_vignettes()'
+
+      - name: Build pkgdown site
+        run: |
+          Rscript -e 'pkgdown::build_site()'
+
+      - name: Deploy pkgdown site
+        if: github.ref == 'refs/heads/main'
+        run: |
+          Rscript -e 'pkgdown::deploy_to_branch(new_process = FALSE)'
+
+      - name: Upload R CMD check results
+        uses: actions/upload-artifact@v3
+        with:
+          name: R-CMD-check-results
+          path: check
+
+      - name: Upload test coverage results
+        uses: actions/upload-artifact@v3
+        with:
+          name: test-coverage-results
+          path: coverage
