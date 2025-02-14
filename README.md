@@ -116,7 +116,7 @@ result <- posterior_test(
 #> # ℹ 1 more variable: upper <dbl>
 ```
 
-![](/home/chzhan1/R/SAiGENCI/posteriorHCA/README_files/figure-gfm/unnamed-chunk-5-1.png)<!-- -->
+![](README_files/figure-gfm/unnamed-chunk-5-1.png)<!-- -->
 
 ### **3. Inspect the Results**
 
@@ -147,7 +147,7 @@ Density Plot of Posterior Predictions
 print(result$plot)
 ```
 
-![](/home/chzhan1/R/SAiGENCI/posteriorHCA/README_files/figure-gfm/unnamed-chunk-7-1.png)<!-- -->
+![](README_files/figure-gfm/unnamed-chunk-7-1.png)<!-- -->
 
 ## **Input Arguments and Valid Values**
 
