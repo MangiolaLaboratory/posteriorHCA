@@ -131,13 +131,13 @@ result <- posterior_test(
 
 #### **Posterior Distribution Table**
 
-```{r}
+```{r eval = instantiate::stan_cmdstan_exists()}
 print(result$result_table)
 ```
 
 #### Density Plot of Posterior Predictions
 
-```{r}
+```{r eval = instantiate::stan_cmdstan_exists()}
 print(result$plot)
 ```
 
