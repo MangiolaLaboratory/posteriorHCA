@@ -99,11 +99,15 @@ library(posteriorHCA)
 
 ## Usage Example
 
-### 1. Load Example Data
+### 1. Load relavent packages and example data
 
 The package includes a small example dataset for demonstration:
 
-```{r}
+```{r message=FALSE, warning=FALSE}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
 data(example_proportions)
 print(example_proportions)
 ```
@@ -112,7 +116,7 @@ print(example_proportions)
 
 The core function, `posterior_test()`, allows testing new data against the probabilistic model:
 
-```{r}
+```{r eval = instantiate::stan_cmdstan_exists()}
 result <- posterior_test(
     proportions = example_proportions,
     sex = "male",
@@ -131,7 +135,7 @@ result <- posterior_test(
 print(result$result_table)
 ```
 
-Density Plot of Posterior Predictions
+#### Density Plot of Posterior Predictions
 
 ```{r}
 print(result$plot)
