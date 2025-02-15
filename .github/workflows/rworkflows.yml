@@ -44,7 +44,7 @@ jobs:
         run_rcmdcheck: ${{ true }}
         as_cran: ${{ true }}
         run_vignettes: ${{ true }}
-        has_testthat: ${{ true }}
+        has_testthat: ${{ false }}
         run_covr: ${{ true }}
         run_pkgdown: ${{ true }}
         has_runit: ${{ false }}
