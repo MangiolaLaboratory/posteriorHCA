@@ -25,14 +25,21 @@ posterior_test <-
     ethnicity_groups = NULL,
     assay_groups = NULL,
     tissue_groups = NULL,
-    path_to_model = "~/R/SAiGENCI/immune_map/pseudobulk_sample_is_immune/estimates_age_bins___L2.rds"
+    load_model_to_global_env = T
     ){
+    
+    # Get the path to the model file (cached or downloaded)
+    path_to_model <- get_model_file()
 
-    # Load posterior model if not already loaded
-    if (!exists("estimates_age_bins___L2")) {
+    # Check if model is loaded in the environment
+    if (!exists("estimates_age_bins___L2", envir = if (load_model_to_global_env) .GlobalEnv else environment())) {
       message('Load model...')
-      estimates_age_bins___L2 <<- readRDS(path_to_model)
-
+      
+      if (load_model_to_global_env) {
+        estimates_age_bins___L2 <<- readRDS(path_to_model)
+      } else {
+        estimates_age_bins___L2 <- readRDS(path_to_model)
+      }
     }
 
     message('Model loaded!')

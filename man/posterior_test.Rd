@@ -12,8 +12,7 @@ posterior_test(
   ethnicity_groups = NULL,
   assay_groups = NULL,
   tissue_groups = NULL,
-  path_to_model =
-    "~/R/SAiGENCI/immune_map/pseudobulk_sample_is_immune/estimates_age_bins___L2.rds"
+  load_model_to_global_env = T
 )
 }
 \arguments{
