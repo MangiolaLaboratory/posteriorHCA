@@ -27,22 +27,46 @@ posterior_test <-
     tissue_groups = NULL,
     load_model_to_global_env = T
     ){
-    
-    # Get the path to the model file (cached or downloaded)
-    path_to_model <- get_model_file()
 
-    # Check if model is loaded in the environment
-    if (!exists("estimates_age_bins___L2", envir = if (load_model_to_global_env) .GlobalEnv else environment())) {
-      message('Load model...')
-      
-      if (load_model_to_global_env) {
-        estimates_age_bins___L2 <<- readRDS(path_to_model)
-      } else {
+    # Get the path to the model file (cached or downloaded)
+    path_to_model <- get_model_ready()
+
+    # Check if model is loaded in the wanted environment
+    if (load_model_to_global_env){
+      if (exists("estimates_age_bins___L2", envir = .GlobalEnv)){
+        message('Model file loaded: Global Env.')
+      }else{
+        if (exists("estimates_age_bins___L2", envir = environment())){
+          message('Model file loaded in local Env. Moving it to Global Env.')
+          estimates_age_bins___L2 <<- estimates_age_bins___L2
+          message('Model file loaded: Global Env.')
+        }else{
+          message('Load model file... (to Global Env)')
+          estimates_age_bins___L2 <<- readRDS(path_to_model)
+          message('Model file loaded: Global Env.')
+        }
+      }
+    }else{
+      if (exists("estimates_age_bins___L2")){
+        message('Model file loaded.')
+      }else{
+        message('Load model file... (to local Env)')
         estimates_age_bins___L2 <- readRDS(path_to_model)
+        message('Model file loaded: local Env.')
       }
     }
 
-    message('Model loaded!')
+    # if (!exists("estimates_age_bins___L2", envir = if (load_model_to_global_env) .GlobalEnv else environment())) {
+    #   message('Load model...')
+    #
+    #   if (load_model_to_global_env) {
+    #     estimates_age_bins___L2 <<- readRDS(path_to_model)
+    #   } else {
+    #     estimates_age_bins___L2 <- readRDS(path_to_model)
+    #   }
+    # }
+    #
+    # message('Model loaded!')
 
     # Define valid values
     valid_cell_types <- estimates_age_bins___L2 %>% attr('truncation_df2') %>% pull(L2) %>% unique() # refer to L2 cell type annotation
