@@ -10,11 +10,11 @@
 #' @param ethnicity_groups A string indicating ethnicity group.
 #' @param assay_groups A string indicating assay group.
 #' @param tissue_groups A string indicating tissue group.
-#' @param path_to_model Path to the `.rds` posterior model file.
+#' @param load_model_to_global_env Flag whether load model file to global env.
 #' @return A list with a result table and a density plot.
 #' @export
 #'
-#' @import dplyr tidyr purrr ggplot2 sccomp dittoSeq
+#' @import dplyr tidyr purrr ggplot2 sccomp dittoSeq ggrepel
 #' @importFrom scales trans_new
 posterior_test <-
   function(
@@ -184,6 +184,8 @@ posterior_test <-
       inverse = function(x) (sin(x))^2
     )
 
+    # browser()
+
     # If user provided observed proportions, filter out unwanted cell types
     if (!is.null(proportions)){
       predict_res <-
@@ -221,7 +223,7 @@ posterior_test <-
         group_by(sample_id_observed, cell_type) %>%
         reframe(
           proportion_observed = proportion_observed %>% unique(),
-          p_value = 2 * pmin(
+          Empirical_Confidence = 2 * pmin(
             mean(proportion_observed > proportion_sampled), # this calculate the quantile of observed proportion against sampling
             1- mean(proportion_observed > proportion_sampled)
           )
@@ -232,20 +234,35 @@ posterior_test <-
         )
 
       # add dash line for observed proportion against density plot
-      dist_plot <- dist_plot +
+      dist_plot <-
+        dist_plot +
         geom_vline(
           data = dist_by_cell_type,
           aes(xintercept = proportion_observed, color = sample_id_observed),
-          # color = "red",
           linetype = "dashed",
-          linewidth = 0.5
+          linewidth = 0.5,
+          show.legend = TRUE  # Ensure only vlines contribute to the legend
         )  +
         scale_color_manual(values = dittoSeq::dittoColors()) +
-        labs(color = "Sample ID") +  # Legend label
+        labs(color = "EC: Empirical Confidence, Sample ID:") +  # Legend label
         theme(
           legend.position = "bottom",  # Move legend below the plot
           legend.title = element_text(size = 12, face = "bold"),  # Style legend title
           legend.text = element_text(size = 10)  # Style legend text
+        ) +
+        geom_text_repel(
+          data = dist_by_cell_type,
+          aes(
+            x = proportion_observed,  #
+            y = Inf,  # keep text to right top corner
+            label = paste0("EC:", signif(Empirical_Confidence, 2)),
+            color = sample_id_observed  # Match text color to vertical line color
+          ),
+          size = 4,
+          direction = "y",  # Spread text vertically
+          segment.color = NA,  # Remove repelling line
+          inherit.aes = FALSE,
+          show.legend = FALSE  # Prevents text from modifying the legend
         )
     }
 

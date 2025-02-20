@@ -18,7 +18,8 @@ Imports:
     tools,
     httr,
     cli,
-    utils
+    utils,
+    ggrepel
 LazyData: true
 RoxygenNote: 7.3.2
 Suggests: 

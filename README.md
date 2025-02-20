@@ -1,5 +1,10 @@
-posteriorHCA
-================
+---
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+# posteriorHCA
 
 <!-- badges: start -->
 
@@ -55,11 +60,15 @@ library(posteriorHCA)
 
 ## Usage Example
 
-### 1. Load Example Data
+### 1. Load relavent packages and example data
 
 The package includes a small example dataset for demonstration:
 
 ``` r
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
 data(example_proportions)
 print(example_proportions)
 #> # A tibble: 48 × 3
@@ -90,9 +99,11 @@ result <- posterior_test(
     age_bin = "Middle Age",
     disease_groups = "Normal",
     ethnicity_groups = "European",
-    tissue_groups = "blood"
+    tissue_groups = "blood", 
+    load_model_to_global_env = T
 )
-#> Model loaded!
+#> ℹ Using cached model file: /home/chzhan1/.cache/R/posteriorHCA/estimates_age_bins___L2.rds
+#> Model file loaded: Global Env.
 #> All inputs of metadata are valid.
 #> Start to generative sampling form posterior...
 #> Loading model from cache...
@@ -100,23 +111,34 @@ result <- posterior_test(
 #> 
 #> Chain 1 finished in 0.0 seconds.
 #> # A tibble: 48 × 7
-#>    sample_id_observed       cell_type proportion_observed p_value   mean   lower
-#>    <chr>                    <chr>                   <dbl>   <dbl>  <dbl>   <dbl>
-#>  1 0000c153da22cf963b807c0… b memory             0              0 0.102  0.0731 
-#>  2 0000c153da22cf963b807c0… b naive              0              0 0.101  0.0709 
-#>  3 0000c153da22cf963b807c0… cd14 mono            0.0259         0 0.227  0.155  
-#>  4 0000c153da22cf963b807c0… cd16 mono            0              0 0.0349 0.0222 
-#>  5 0000c153da22cf963b807c0… cd4 naive            0              0 0.0467 0.0287 
-#>  6 0000c153da22cf963b807c0… cd4 tcm              0.00104        0 0.0483 0.0333 
-#>  7 0000c153da22cf963b807c0… cd4 tem              0.000692       0 0.0347 0.0260 
-#>  8 0000c153da22cf963b807c0… cd8 naive            0              0 0.0154 0.00872
-#>  9 0000c153da22cf963b807c0… cd8 tcm              0              0 0.0205 0.0140 
-#> 10 0000c153da22cf963b807c0… cd8 tem              0              0 0.120  0.0928 
+#>    sample_id_observed  cell_type proportion_observed Empirical_Confidence   mean
+#>    <chr>               <chr>                   <dbl>                <dbl>  <dbl>
+#>  1 0000c153da22cf963b… b memory             0                           0 0.103 
+#>  2 0000c153da22cf963b… b naive              0                           0 0.100 
+#>  3 0000c153da22cf963b… cd14 mono            0.0259                      0 0.227 
+#>  4 0000c153da22cf963b… cd16 mono            0                           0 0.0352
+#>  5 0000c153da22cf963b… cd4 naive            0                           0 0.0468
+#>  6 0000c153da22cf963b… cd4 tcm              0.00104                     0 0.0482
+#>  7 0000c153da22cf963b… cd4 tem              0.000692                    0 0.0349
+#>  8 0000c153da22cf963b… cd8 naive            0                           0 0.0152
+#>  9 0000c153da22cf963b… cd8 tcm              0                           0 0.0206
+#> 10 0000c153da22cf963b… cd8 tem              0                           0 0.120 
 #> # ℹ 38 more rows
-#> # ℹ 1 more variable: upper <dbl>
+#> # ℹ 2 more variables: lower <dbl>, upper <dbl>
 ```
 
-![](README_files/figure-gfm/unnamed-chunk-5-1.png)<!-- -->
+![](/home/chzhan1/R/SAiGENCI/posteriorHCA/README_files/figure-gfm/unnamed-chunk-5-1.png)<!-- -->
+
+#### About `load_model_to_global_env`
+
+In the `posterior_test` function, we added arg -
+`load_model_to_global_env` to determine if the model file should be
+loaded into global env or local env (scoop within the function running)
+in R session. By default, it is set to be TRUE -
+`load_model_to_global_env = T`, and this is particularly useful when you
+wish to repeatedly running the function. Loading model file into global
+env prevents re-loading the model file, which usually will cost you
+minutes to run.
 
 ### **3. Inspect the Results**
 
@@ -125,29 +147,29 @@ result <- posterior_test(
 ``` r
 print(result$result_table)
 #> # A tibble: 48 × 7
-#>    sample_id_observed       cell_type proportion_observed p_value   mean   lower
-#>    <chr>                    <chr>                   <dbl>   <dbl>  <dbl>   <dbl>
-#>  1 0000c153da22cf963b807c0… b memory             0              0 0.102  0.0731 
-#>  2 0000c153da22cf963b807c0… b naive              0              0 0.101  0.0709 
-#>  3 0000c153da22cf963b807c0… cd14 mono            0.0259         0 0.227  0.155  
-#>  4 0000c153da22cf963b807c0… cd16 mono            0              0 0.0349 0.0222 
-#>  5 0000c153da22cf963b807c0… cd4 naive            0              0 0.0467 0.0287 
-#>  6 0000c153da22cf963b807c0… cd4 tcm              0.00104        0 0.0483 0.0333 
-#>  7 0000c153da22cf963b807c0… cd4 tem              0.000692       0 0.0347 0.0260 
-#>  8 0000c153da22cf963b807c0… cd8 naive            0              0 0.0154 0.00872
-#>  9 0000c153da22cf963b807c0… cd8 tcm              0              0 0.0205 0.0140 
-#> 10 0000c153da22cf963b807c0… cd8 tem              0              0 0.120  0.0928 
+#>    sample_id_observed  cell_type proportion_observed Empirical_Confidence   mean
+#>    <chr>               <chr>                   <dbl>                <dbl>  <dbl>
+#>  1 0000c153da22cf963b… b memory             0                           0 0.103 
+#>  2 0000c153da22cf963b… b naive              0                           0 0.100 
+#>  3 0000c153da22cf963b… cd14 mono            0.0259                      0 0.227 
+#>  4 0000c153da22cf963b… cd16 mono            0                           0 0.0352
+#>  5 0000c153da22cf963b… cd4 naive            0                           0 0.0468
+#>  6 0000c153da22cf963b… cd4 tcm              0.00104                     0 0.0482
+#>  7 0000c153da22cf963b… cd4 tem              0.000692                    0 0.0349
+#>  8 0000c153da22cf963b… cd8 naive            0                           0 0.0152
+#>  9 0000c153da22cf963b… cd8 tcm              0                           0 0.0206
+#> 10 0000c153da22cf963b… cd8 tem              0                           0 0.120 
 #> # ℹ 38 more rows
-#> # ℹ 1 more variable: upper <dbl>
+#> # ℹ 2 more variables: lower <dbl>, upper <dbl>
 ```
 
-Density Plot of Posterior Predictions
+#### Density Plot of Posterior Predictions
 
 ``` r
 print(result$plot)
 ```
 
-![](README_files/figure-gfm/unnamed-chunk-7-1.png)<!-- -->
+![](/home/chzhan1/R/SAiGENCI/posteriorHCA/README_files/figure-gfm/unnamed-chunk-7-1.png)<!-- -->
 
 ## **Input Arguments and Valid Values**
 
@@ -163,17 +185,43 @@ If users choose to specify metadata, it must be consistent with the
 **Human Cell Atlas (HCA) annotations** to ensure accurate comparisons.
 Below is a comprehensive list of valid arguments:
 
--   **Cell Types:** "b memory", "b naive", "cd14 mono", "cd16 mono", "cd4 naive", "cd4 tcm", "cd4 tem", "cd8 naive", "cd8 tcm", "cd8 tem", "cdc", "cytotoxic", "erythrocyte", "granulocyte", "ilc", "macrophage", "mait", "mast", "nk", "nkt", "pdc", "plasma", "tgd", "treg"
+-   **Cell Types:** “b memory”, “b naive”, “cd14 mono”, “cd16 mono”,
+    “cd4 naive”, “cd4 tcm”, “cd4 tem”, “cd8 naive”, “cd8 tcm”, “cd8
+    tem”, “cdc”, “cytotoxic”, “erythrocyte”, “granulocyte”, “ilc”,
+    “macrophage”, “mait”, “mast”, “nk”, “nkt”, “pdc”, “plasma”, “tgd”,
+    “treg”
 
--   **Sex:** "female", "male", "unknown"
+-   **Sex:** “female”, “male”, “unknown”
 
--   **Age Groups:** "Young Adulthood", "Senior", "Middle Age", "Childhood", "Adolescence", "Infancy"
+-   **Age Groups:** “Young Adulthood”, “Senior”, “Middle Age”,
+    “Childhood”, “Adolescence”, “Infancy”
 
--   **Disease Groups:** "Normal", "COVID-19 related", "Metabolic and Other Disorders: Renal and Urinary Disorders", "other", "Metabolic and Other Disorders: Gastrointestinal Disorders", "Respiratory Conditions: General Respiratory Disorders", "Infectious and Immune-related Diseases: Autoimmune and Immune-Related Disorders", "Infectious and Immune-related Diseases: Respiratory Infections", "Cancer: Renal Cancer", "Cancer: Gastrointestinal Cancer", "Cancer: Hematologic Cancer", "Cancer: Breast Cancer", "Cancer: Lung Cancer", "Respiratory Conditions: Restrictive Lung Diseases", "Neurodegenerative and Neurological Disorders: Neurodegenerative Disorders", "Metabolic and Other Disorders: Metabolic Disorders", "Respiratory Conditions: Obstructive Lung Diseases"
+-   **Disease Groups:** “Normal”, “COVID-19 related”, “Metabolic and
+    Other Disorders: Renal and Urinary Disorders”, “other”, “Metabolic
+    and Other Disorders: Gastrointestinal Disorders”, “Respiratory
+    Conditions: General Respiratory Disorders”, “Infectious and
+    Immune-related Diseases: Autoimmune and Immune-Related Disorders”,
+    “Infectious and Immune-related Diseases: Respiratory Infections”,
+    “Cancer: Renal Cancer”, “Cancer: Gastrointestinal Cancer”, “Cancer:
+    Hematologic Cancer”, “Cancer: Breast Cancer”, “Cancer: Lung Cancer”,
+    “Respiratory Conditions: Restrictive Lung Diseases”,
+    “Neurodegenerative and Neurological Disorders: Neurodegenerative
+    Disorders”, “Metabolic and Other Disorders: Metabolic Disorders”,
+    “Respiratory Conditions: Obstructive Lung Diseases”
 
--   **Ethnicity Groups:** "African", "Other/Unknown", "European", "East Asian", "Hispanic/Latin American", "South Asian", "Native American & Pacific Islander"
+-   **Ethnicity Groups:** “African”, “Other/Unknown”, “European”, “East
+    Asian”, “Hispanic/Latin American”, “South Asian”, “Native American &
+    Pacific Islander”
 
--   **Tissue Groups:** "respiratory system", "blood", "renal system", "epithelium and mucosal tissues", "nasal, oral, and pharyngeal regions", "cerebral lobes and cortical areas", "breast", "cardiovascular system", "small intestine", "trachea", "endocrine system", "lymphatic system", "prostate", "sensory-related structures", "liver", "oesophagus", "large intestine", "spleen", "brainstem and cerebellar structures", "bone marrow", "stomach", "female reproductive system", "thymus", "adipose tissue", "integumentary system (skin)", "gallbladder", "pancreas"
+-   **Tissue Groups:** “respiratory system”, “blood”, “renal system”,
+    “epithelium and mucosal tissues”, “nasal, oral, and pharyngeal
+    regions”, “cerebral lobes and cortical areas”, “breast”,
+    “cardiovascular system”, “small intestine”, “trachea”, “endocrine
+    system”, “lymphatic system”, “prostate”, “sensory-related
+    structures”, “liver”, “oesophagus”, “large intestine”, “spleen”,
+    “brainstem and cerebellar structures”, “bone marrow”, “stomach”,
+    “female reproductive system”, “thymus”, “adipose tissue”,
+    “integumentary system (skin)”, “gallbladder”, “pancreas”
 
 # Session Info
 
@@ -201,54 +249,53 @@ sessionInfo()
 #> [1] stats     graphics  grDevices utils     datasets  methods   base     
 #> 
 #> other attached packages:
-#> [1] posteriorHCA_0.1.0
+#> [1] ggplot2_3.5.1      tidyr_1.3.1        dplyr_1.1.4        posteriorHCA_0.1.0
 #> 
 #> loaded via a namespace (and not attached):
-#>  [1] tidyselect_1.2.1            dplyr_1.1.4                
-#>  [3] farver_2.1.2                fastmap_1.2.0              
-#>  [5] SingleCellExperiment_1.28.1 tensorA_0.36.2.1           
-#>  [7] digest_0.6.37               dittoSeq_1.18.0            
-#>  [9] lifecycle_1.0.4             sccomp_1.99.12             
-#> [11] processx_3.8.5              magrittr_2.0.3             
-#> [13] posterior_1.6.0             compiler_4.4.0             
-#> [15] rlang_1.1.5                 sass_0.4.9                 
-#> [17] tools_4.4.0                 utf8_1.2.4                 
-#> [19] yaml_2.3.10                 data.table_1.16.4          
-#> [21] knitr_1.49                  labeling_0.4.3             
-#> [23] S4Arrays_1.6.0              DelayedArray_0.32.0        
-#> [25] RColorBrewer_1.1-3          cmdstanr_0.8.1             
-#> [27] abind_1.4-8                 withr_3.0.2                
-#> [29] purrr_1.0.4                 BiocGenerics_0.52.0        
-#> [31] grid_4.4.0                  stats4_4.4.0               
-#> [33] colorspace_2.1-1            ggplot2_3.5.1              
-#> [35] scales_1.3.0                ggridges_0.5.6             
-#> [37] SummarizedExperiment_1.36.0 cli_3.6.4                  
-#> [39] rmarkdown_2.29              crayon_1.5.3               
-#> [41] generics_0.1.3              rstudioapi_0.17.1          
-#> [43] httr_1.4.7                  tzdb_0.4.0                 
-#> [45] cachem_1.1.0                stringr_1.5.1              
-#> [47] zlibbioc_1.52.0             parallel_4.4.0             
-#> [49] XVector_0.46.0              matrixStats_1.5.0          
-#> [51] vctrs_0.6.5                 Matrix_1.7-2               
-#> [53] jsonlite_1.8.9              callr_3.7.6                
-#> [55] IRanges_2.40.0              hms_1.1.3                  
-#> [57] patchwork_1.3.0             S4Vectors_0.44.0           
-#> [59] ggrepel_0.9.6               jquerylib_0.1.4            
-#> [61] tidyr_1.3.1                 glue_1.8.0                 
-#> [63] ps_1.8.1                    distributional_0.5.0       
-#> [65] cowplot_1.1.3               stringi_1.8.4              
-#> [67] gtable_0.3.6                GenomeInfoDb_1.42.1        
-#> [69] GenomicRanges_1.58.0        UCSC.utils_1.2.0           
-#> [71] munsell_0.5.1               instantiate_0.2.3          
-#> [73] tibble_3.2.1                pillar_1.10.1              
-#> [75] htmltools_0.5.8.1           GenomeInfoDbData_1.2.13    
-#> [77] R6_2.6.0                    rprojroot_2.0.4            
-#> [79] evaluate_1.0.3              lattice_0.22-6             
-#> [81] Biobase_2.66.0              readr_2.1.5                
-#> [83] backports_1.5.0             pheatmap_1.0.12            
-#> [85] bslib_0.9.0                 Rcpp_1.0.14                
-#> [87] gridExtra_2.3               SparseArray_1.6.1          
-#> [89] checkmate_2.3.2             xfun_0.50                  
-#> [91] MatrixGenerics_1.18.1       fs_1.6.5                   
-#> [93] forcats_1.0.0               pkgconfig_2.0.3
+#>  [1] tidyselect_1.2.1            farver_2.1.2               
+#>  [3] fastmap_1.2.0               SingleCellExperiment_1.28.1
+#>  [5] tensorA_0.36.2.1            digest_0.6.37              
+#>  [7] dittoSeq_1.18.0             lifecycle_1.0.4            
+#>  [9] sccomp_1.99.12              processx_3.8.5             
+#> [11] magrittr_2.0.3              posterior_1.6.0            
+#> [13] compiler_4.4.0              rlang_1.1.5                
+#> [15] sass_0.4.9                  tools_4.4.0                
+#> [17] utf8_1.2.4                  yaml_2.3.10                
+#> [19] data.table_1.16.4           knitr_1.49                 
+#> [21] labeling_0.4.3              S4Arrays_1.6.0             
+#> [23] DelayedArray_0.32.0         RColorBrewer_1.1-3         
+#> [25] cmdstanr_0.8.1              abind_1.4-8                
+#> [27] withr_3.0.2                 purrr_1.0.4                
+#> [29] BiocGenerics_0.52.0         grid_4.4.0                 
+#> [31] stats4_4.4.0                colorspace_2.1-1           
+#> [33] scales_1.3.0                ggridges_0.5.6             
+#> [35] SummarizedExperiment_1.36.0 cli_3.6.4                  
+#> [37] rmarkdown_2.29              crayon_1.5.3               
+#> [39] generics_0.1.3              rstudioapi_0.17.1          
+#> [41] httr_1.4.7                  tzdb_0.4.0                 
+#> [43] cachem_1.1.0                stringr_1.5.1              
+#> [45] zlibbioc_1.52.0             parallel_4.4.0             
+#> [47] XVector_0.46.0              matrixStats_1.5.0          
+#> [49] vctrs_0.6.5                 Matrix_1.7-2               
+#> [51] jsonlite_1.8.9              callr_3.7.6                
+#> [53] IRanges_2.40.0              hms_1.1.3                  
+#> [55] patchwork_1.3.0             S4Vectors_0.44.0           
+#> [57] ggrepel_0.9.6               jquerylib_0.1.4            
+#> [59] glue_1.8.0                  ps_1.8.1                   
+#> [61] distributional_0.5.0        cowplot_1.1.3              
+#> [63] stringi_1.8.4               gtable_0.3.6               
+#> [65] GenomeInfoDb_1.42.3         GenomicRanges_1.58.0       
+#> [67] UCSC.utils_1.2.0            munsell_0.5.1              
+#> [69] instantiate_0.2.3           tibble_3.2.1               
+#> [71] pillar_1.10.1               htmltools_0.5.8.1          
+#> [73] GenomeInfoDbData_1.2.13     R6_2.6.0                   
+#> [75] rprojroot_2.0.4             evaluate_1.0.3             
+#> [77] lattice_0.22-6              Biobase_2.66.0             
+#> [79] readr_2.1.5                 backports_1.5.0            
+#> [81] pheatmap_1.0.12             bslib_0.9.0                
+#> [83] Rcpp_1.0.14                 gridExtra_2.3              
+#> [85] SparseArray_1.6.1           checkmate_2.3.2            
+#> [87] xfun_0.50                   MatrixGenerics_1.18.1      
+#> [89] fs_1.6.5                    forcats_1.0.0              
+#> [91] pkgconfig_2.0.3
 ```

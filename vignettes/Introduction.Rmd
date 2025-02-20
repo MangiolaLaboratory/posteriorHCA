@@ -123,9 +123,14 @@ result <- posterior_test(
     age_bin = "Middle Age",
     disease_groups = "Normal",
     ethnicity_groups = "European",
-    tissue_groups = "blood"
+    tissue_groups = "blood", 
+    load_model_to_global_env = T
 )
 ```
+
+#### About `load_model_to_global_env`
+
+In the `posterior_test` function, we added arg - `load_model_to_global_env` to determine if the model file should be loaded into global env or local env (scoop within the function running) in R session. By default, it is set to be TRUE - `load_model_to_global_env = T`, and this is particularly useful when you wish to repeatedly running the function. Loading model file into global env prevents re-loading the model file, which usually will cost you minutes to run.
 
 ### **3. Inspect the Results**
 

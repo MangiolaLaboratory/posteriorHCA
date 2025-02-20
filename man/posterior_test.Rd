@@ -30,7 +30,7 @@ posterior_test(
 
 \item{tissue_groups}{A string indicating tissue group.}
 
-\item{path_to_model}{Path to the `.rds` posterior model file.}
+\item{load_model_to_global_env}{Flag whether load model file to global env.}
 }
 \value{
 A list with a result table and a density plot.

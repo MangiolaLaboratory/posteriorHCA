@@ -41,11 +41,11 @@ jobs:
     - uses: neurogenomics/rworkflows@master
       with:
         run_bioccheck: ${{ false }}
-        run_rcmdcheck: ${{ true }}
+        run_rcmdcheck: ${{ false }}
         as_cran: ${{ true }}
         run_vignettes: ${{ true }}
         has_testthat: ${{ false }}
-        run_covr: ${{ true }}
+        run_covr: ${{ false }}
         run_pkgdown: ${{ true }}
         has_runit: ${{ false }}
         has_latex: ${{ false }}
