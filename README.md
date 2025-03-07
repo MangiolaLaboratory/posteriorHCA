@@ -1,4 +1,5 @@
-# posteriorHCA
+posteriorHCA
+================
 
 <!-- badges: start -->
 
@@ -108,13 +109,13 @@ result <- posterior_test(
 #>    sample_id_observed  cell_type proportion_observed Empirical_Confidence   mean
 #>    <chr>               <chr>                   <dbl>                <dbl>  <dbl>
 #>  1 0000c153da22cf963b… b memory             0                           0 0.103 
-#>  2 0000c153da22cf963b… b naive              0                           0 0.100 
-#>  3 0000c153da22cf963b… cd14 mono            0.0259                      0 0.227 
-#>  4 0000c153da22cf963b… cd16 mono            0                           0 0.0352
-#>  5 0000c153da22cf963b… cd4 naive            0                           0 0.0468
-#>  6 0000c153da22cf963b… cd4 tcm              0.00104                     0 0.0482
-#>  7 0000c153da22cf963b… cd4 tem              0.000692                    0 0.0349
-#>  8 0000c153da22cf963b… cd8 naive            0                           0 0.0152
+#>  2 0000c153da22cf963b… b naive              0                           0 0.101 
+#>  3 0000c153da22cf963b… cd14 mono            0.0259                      0 0.226 
+#>  4 0000c153da22cf963b… cd16 mono            0                           0 0.0348
+#>  5 0000c153da22cf963b… cd4 naive            0                           0 0.0465
+#>  6 0000c153da22cf963b… cd4 tcm              0.00104                     0 0.0484
+#>  7 0000c153da22cf963b… cd4 tem              0.000692                    0 0.0348
+#>  8 0000c153da22cf963b… cd8 naive            0                           0 0.0154
 #>  9 0000c153da22cf963b… cd8 tcm              0                           0 0.0206
 #> 10 0000c153da22cf963b… cd8 tem              0                           0 0.120 
 #> # ℹ 38 more rows
@@ -144,13 +145,13 @@ print(result$result_table)
 #>    sample_id_observed  cell_type proportion_observed Empirical_Confidence   mean
 #>    <chr>               <chr>                   <dbl>                <dbl>  <dbl>
 #>  1 0000c153da22cf963b… b memory             0                           0 0.103 
-#>  2 0000c153da22cf963b… b naive              0                           0 0.100 
-#>  3 0000c153da22cf963b… cd14 mono            0.0259                      0 0.227 
-#>  4 0000c153da22cf963b… cd16 mono            0                           0 0.0352
-#>  5 0000c153da22cf963b… cd4 naive            0                           0 0.0468
-#>  6 0000c153da22cf963b… cd4 tcm              0.00104                     0 0.0482
-#>  7 0000c153da22cf963b… cd4 tem              0.000692                    0 0.0349
-#>  8 0000c153da22cf963b… cd8 naive            0                           0 0.0152
+#>  2 0000c153da22cf963b… b naive              0                           0 0.101 
+#>  3 0000c153da22cf963b… cd14 mono            0.0259                      0 0.226 
+#>  4 0000c153da22cf963b… cd16 mono            0                           0 0.0348
+#>  5 0000c153da22cf963b… cd4 naive            0                           0 0.0465
+#>  6 0000c153da22cf963b… cd4 tcm              0.00104                     0 0.0484
+#>  7 0000c153da22cf963b… cd4 tem              0.000692                    0 0.0348
+#>  8 0000c153da22cf963b… cd8 naive            0                           0 0.0154
 #>  9 0000c153da22cf963b… cd8 tcm              0                           0 0.0206
 #> 10 0000c153da22cf963b… cd8 tem              0                           0 0.120 
 #> # ℹ 38 more rows
@@ -250,12 +251,12 @@ sessionInfo()
 #>  [3] fastmap_1.2.0               SingleCellExperiment_1.28.1
 #>  [5] tensorA_0.36.2.1            digest_0.6.37              
 #>  [7] dittoSeq_1.18.0             lifecycle_1.0.4            
-#>  [9] sccomp_1.99.12              processx_3.8.5             
-#> [11] magrittr_2.0.3              posterior_1.6.0            
+#>  [9] sccomp_1.99.12              processx_3.8.6             
+#> [11] magrittr_2.0.3              posterior_1.6.1            
 #> [13] compiler_4.4.0              rlang_1.1.5                
 #> [15] sass_0.4.9                  tools_4.4.0                
 #> [17] utf8_1.2.4                  yaml_2.3.10                
-#> [19] data.table_1.16.4           knitr_1.49                 
+#> [19] data.table_1.17.0           knitr_1.49                 
 #> [21] labeling_0.4.3              S4Arrays_1.6.0             
 #> [23] DelayedArray_0.32.0         RColorBrewer_1.1-3         
 #> [25] cmdstanr_0.8.1              abind_1.4-8                
@@ -271,25 +272,25 @@ sessionInfo()
 #> [45] zlibbioc_1.52.0             parallel_4.4.0             
 #> [47] XVector_0.46.0              matrixStats_1.5.0          
 #> [49] vctrs_0.6.5                 Matrix_1.7-2               
-#> [51] jsonlite_1.8.9              callr_3.7.6                
-#> [53] IRanges_2.40.0              hms_1.1.3                  
+#> [51] jsonlite_1.9.1              callr_3.7.6                
+#> [53] IRanges_2.40.1              hms_1.1.3                  
 #> [55] patchwork_1.3.0             S4Vectors_0.44.0           
 #> [57] ggrepel_0.9.6               jquerylib_0.1.4            
-#> [59] glue_1.8.0                  ps_1.8.1                   
+#> [59] glue_1.8.0                  ps_1.9.0                   
 #> [61] distributional_0.5.0        cowplot_1.1.3              
 #> [63] stringi_1.8.4               gtable_0.3.6               
 #> [65] GenomeInfoDb_1.42.3         GenomicRanges_1.58.0       
 #> [67] UCSC.utils_1.2.0            munsell_0.5.1              
 #> [69] instantiate_0.2.3           tibble_3.2.1               
 #> [71] pillar_1.10.1               htmltools_0.5.8.1          
-#> [73] GenomeInfoDbData_1.2.13     R6_2.6.0                   
+#> [73] GenomeInfoDbData_1.2.13     R6_2.6.1                   
 #> [75] rprojroot_2.0.4             evaluate_1.0.3             
 #> [77] lattice_0.22-6              Biobase_2.66.0             
 #> [79] readr_2.1.5                 backports_1.5.0            
 #> [81] pheatmap_1.0.12             bslib_0.9.0                
 #> [83] Rcpp_1.0.14                 gridExtra_2.3              
-#> [85] SparseArray_1.6.1           checkmate_2.3.2            
-#> [87] xfun_0.50                   MatrixGenerics_1.18.1      
+#> [85] SparseArray_1.6.2           checkmate_2.3.2            
+#> [87] xfun_0.51                   MatrixGenerics_1.18.1      
 #> [89] fs_1.6.5                    forcats_1.0.0              
 #> [91] pkgconfig_2.0.3
 ```

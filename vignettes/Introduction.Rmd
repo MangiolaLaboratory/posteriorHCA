@@ -116,7 +116,7 @@ print(example_proportions)
 
 The core function, `posterior_test()`, allows testing new data against the probabilistic model:
 
-```{r eval = instantiate::stan_cmdstan_exists()}
+```{r eval = instantiate::stan_cmdstan_exists(), fig.width= 12, fig.height= 10 }
 result <- posterior_test(
     proportions = example_proportions,
     sex = "male",
@@ -142,7 +142,7 @@ print(result$result_table)
 
 #### Density Plot of Posterior Predictions
 
-```{r eval = instantiate::stan_cmdstan_exists()}
+```{r eval = instantiate::stan_cmdstan_exists(), fig.width= 12, fig.height= 10 }
 print(result$plot)
 ```
 
