@@ -122,7 +122,7 @@ result <- posterior_test(
 #> # ℹ 2 more variables: lower <dbl>, upper <dbl>
 ```
 
-![](/home/chzhan1/R/SAiGENCI/posteriorHCA/README_files/figure-gfm/unnamed-chunk-5-1.png)<!-- -->
+![](README_files/figure-gfm/unnamed-chunk-5-1.png)<!-- -->
 
 #### About `load_model_to_global_env`
 
@@ -164,7 +164,7 @@ print(result$result_table)
 print(result$plot)
 ```
 
-![](/home/chzhan1/R/SAiGENCI/posteriorHCA/README_files/figure-gfm/unnamed-chunk-7-1.png)<!-- -->
+![](README_files/figure-gfm/unnamed-chunk-7-1.png)<!-- -->
 
 ## **Input Arguments and Valid Values**
 
