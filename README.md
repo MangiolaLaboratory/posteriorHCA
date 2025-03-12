@@ -11,7 +11,7 @@ posteriorHCA
 to model the comprehensive **Human Cell Atlas (HCA)**, allowing
 researchers to probabilistically measure human cellular composition.
 
-This package **models variations in tissue composition** across:
+This package **models variations in cellular composition** across:
 
 -   **Cell Types**
 
@@ -25,7 +25,7 @@ This package **models variations in tissue composition** across:
 
 -   **Tissue Groups**
 
-The probabilistic landscape is **pre-trained**, meaning it represents a
+The probabilistic landscape is **pre-learned**, meaning it represents a
 **posterior distribution** estimated from millions of cells.
 `PosteriorHCA` makes this **queryable**, allowing researchers to:
 
@@ -55,7 +55,7 @@ library(posteriorHCA)
 
 ## Usage Example
 
-### 1. Load relavent packages and example data
+### 1. Load relevant packages and example data
 
 The package includes a small example dataset for demonstration:
 
