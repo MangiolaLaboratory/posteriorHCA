@@ -299,6 +299,7 @@ composition_posterior_test <-
 #'
 #' @import dplyr ggplot2
 #' @importFrom qs2 qs_read
+#' @importFrom readr read_csv
 expr_predict <- function(
   cell_type,
   gene_ensg,
@@ -314,7 +315,7 @@ expr_predict <- function(
   prefix <- cell_type %>% make.names
   
   container <- 
-    read_csv(
+    readr::read_csv(
       'https://object-store.rc.nectar.org.au/v1/AUTH_b0a86a29c8b74630aac35f471cfe1396/meta/meta_available_cell_type.csv',
       show_col_types = FALSE
     ) %>% 

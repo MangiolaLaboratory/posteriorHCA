@@ -112,8 +112,7 @@ library(posteriorHCA)
 The package includes a small example dataset for demonstration:
 
 ```{r message=FALSE, warning=FALSE}
-library(dplyr)
-library(tidyr)
+library(tidyverse)
 library(ggplot2)
 
 data(example_proportions)
