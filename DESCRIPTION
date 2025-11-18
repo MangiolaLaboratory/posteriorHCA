@@ -19,7 +19,9 @@ Imports:
     httr,
     cli,
     utils,
-    ggrepel
+    ggrepel,
+    qs2,
+    brms
 LazyData: true
 RoxygenNote: 7.3.2
 Suggests: 

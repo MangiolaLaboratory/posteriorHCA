@@ -84,14 +84,14 @@ print(example_proportions)
 
 ### **2. Run Posterior Testing**
 
-The core function, `posterior_test()`, allows testing new data against
+The core function, `composition_posterior_test()`, allows testing new data against
 the probabilistic model:
 
 ``` r
-result <- posterior_test(
+result <- composition_posterior_test(
     proportions = example_proportions,
     sex = "male",
-    age_bin = "Middle Age",
+    age_decade = '4',
     disease_groups = "Normal",
     ethnicity_groups = "European",
     tissue_groups = "blood", 
@@ -126,7 +126,7 @@ result <- posterior_test(
 
 #### About `load_model_to_global_env`
 
-In the `posterior_test` function, we added arg -
+In the `composition_posterior_test` function, we added arg -
 `load_model_to_global_env` to determine if the model file should be
 loaded into global env or local env (scoop within the function running)
 in R session. By default, it is set to be TRUE -
@@ -168,9 +168,9 @@ print(result$plot)
 
 ## **Input Arguments and Valid Values**
 
-With the `posterior_test()` function, users can provide various metadata
+With the `composition_posterior_test()` function, users can provide various metadata
 inputs corresponding to observed sample characteristics. These include
-**sex, age group, disease condition, ethnicity, and tissue type, etc**,
+**sex, age decade, disease condition, ethnicity, and tissue type, etc**,
 along with observed cell type proportions. However, if some metadata or
 proportions are unknown, users can leave these fields empty, and the
 function will still generate meaningful posterior estimates based on the
@@ -180,43 +180,72 @@ If users choose to specify metadata, it must be consistent with the
 **Human Cell Atlas (HCA) annotations** to ensure accurate comparisons.
 Below is a comprehensive list of valid arguments:
 
--   **Cell Types:** “b memory”, “b naive”, “cd14 mono”, “cd16 mono”,
-    “cd4 naive”, “cd4 tcm”, “cd4 tem”, “cd8 naive”, “cd8 tcm”, “cd8
-    tem”, “cdc”, “cytotoxic”, “erythrocyte”, “granulocyte”, “ilc”,
-    “macrophage”, “mait”, “mast”, “nk”, “nkt”, “pdc”, “plasma”, “tgd”,
-    “treg”
+-   **Cell Types:** "b memory", "b naive", "cd14 mono", "cd16 mono",
+    "cd4 fh em", "cd4 naive", "cd4 tcm", "cd4 th1 em", "cd4 th1/th17 em",
+    "cd4 th17 em", "cd4 th2 em", "cd8 naive", "cd8 tcm", "cd8 tem", "cdc",
+    "granulocyte", "ilc", "macrophage", "mait", "mast", "nk", "nkt", "pdc",
+    "plasma", "tgd", "treg"
 
--   **Sex:** “female”, “male”, “unknown”
+-   **Sex:** "female", "male", "unknown"
 
--   **Age Groups:** “Young Adulthood”, “Senior”, “Middle Age”,
-    “Childhood”, “Adolescence”, “Infancy”
+-   **Age Decades:** 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
 
--   **Disease Groups:** “Normal”, “COVID-19 related”, “Metabolic and
-    Other Disorders: Renal and Urinary Disorders”, “other”, “Metabolic
-    and Other Disorders: Gastrointestinal Disorders”, “Respiratory
-    Conditions: General Respiratory Disorders”, “Infectious and
-    Immune-related Diseases: Autoimmune and Immune-Related Disorders”,
-    “Infectious and Immune-related Diseases: Respiratory Infections”,
-    “Cancer: Renal Cancer”, “Cancer: Gastrointestinal Cancer”, “Cancer:
-    Hematologic Cancer”, “Cancer: Breast Cancer”, “Cancer: Lung Cancer”,
-    “Respiratory Conditions: Restrictive Lung Diseases”,
-    “Neurodegenerative and Neurological Disorders: Neurodegenerative
-    Disorders”, “Metabolic and Other Disorders: Metabolic Disorders”,
-    “Respiratory Conditions: Obstructive Lung Diseases”
+-   **Disease Groups:** "Normal", "COVID-19 related_blood", "Metabolic and
+    Other Disorders: Renal and Urinary Disorders_renal system", "Systemic
+    Lupus Erythematosus_blood", "Respiratory Conditions: General
+    Respiratory Disorders_blood", "COVID-19 related_nasal, oral, and
+    pharyngeal regions", "COVID-19 related_respiratory system",
+    "Glioblastoma_cerebral lobes and cortical areas", "Cancer: Hematologic
+    Cancer_bone marrow", "Lung Adenocarcinoma_respiratory system",
+    "Infectious and Immune-related Diseases: Autoimmune and
+    Immune-Related Disorders_small intestine", "Infectious and
+    Immune-related Diseases: Respiratory Infections_blood", "Metabolic
+    and Other Disorders: Gastrointestinal Disorders_large intestine",
+    "Cancer: Renal Cancer_renal system", "Infectious and Immune-related
+    Diseases: Autoimmune and Immune-Related Disorders_respiratory system",
+    "Infectious and Immune-related Diseases: Respiratory Infections_nasal,
+    oral, and pharyngeal regions", "Metabolic and Other Disorders: Renal
+    and Urinary Disorders_prostate", "Metabolic and Other
+    Disorders_sensory-related structures", "Cancer: Gastrointestinal
+    Cancer_large intestine", "Other Diseases_brainstem and cerebellar
+    structures", "Metabolic and Other Disorders: Gastrointestinal
+    Disorders_oesophagus", "Cancer: Lung Cancer_respiratory system", "Lung
+    Adenocarcinoma_cerebral lobes and cortical areas", "Metabolic and
+    Other Disorders: Gastrointestinal Disorders_stomach", "Lung
+    Adenocarcinoma_liver", "Cancer: Lung Cancer_liver", "Respiratory
+    Conditions: Restrictive Lung Diseases_respiratory system",
+    "Cancer_integumentary system (skin)", "Infectious and Immune-related
+    Diseases: Autoimmune and Immune-Related Disorders_large intestine",
+    "Other Diseases_nasal, oral, and pharyngeal regions", "Cancer: Lung
+    Cancer_lymphatic system", "Neurodegenerative and Neurological
+    Disorders: Neurodegenerative Disorders_cerebral lobes and cortical
+    areas", "Cancer: Breast Cancer_respiratory system", "Metabolic and
+    Other Disorders: Metabolic Disorders_blood", "Cancer: Gastrointestinal
+    Cancer_liver", "Cancer: Renal Cancer_blood", "Glioblastoma_brainstem
+    and cerebellar structures", "Lung Adenocarcinoma_lymphatic system",
+    "Cancer: Lung Cancer_integumentary system (skin)", "Respiratory
+    Conditions: Obstructive Lung Diseases_respiratory system", "Metabolic
+    and Other Disorders_female reproductive system", "Metabolic and Other
+    Disorders: Gastrointestinal Disorders_liver", "Cancer: Lung
+    Cancer_endocrine system", "Lung Adenocarcinoma_endocrine system",
+    "COVID-19 related_trachea", "Neurodegenerative and Neurological
+    Disorders_cerebral lobes and cortical areas", "Other Diseases_renal
+    system", "Cancer: Renal Cancer_endocrine system", "Cancer: Renal
+    Cancer_lymphatic system"
 
--   **Ethnicity Groups:** “African”, “Other/Unknown”, “European”, “East
-    Asian”, “Hispanic/Latin American”, “South Asian”, “Native American &
-    Pacific Islander”
+-   **Ethnicity Groups:** "African", "Other/Unknown", "European", "East
+    Asian", "Hispanic/Latin American", "South Asian", "Native American &
+    Pacific Islander"
 
--   **Tissue Groups:** “respiratory system”, “blood”, “renal system”,
-    “epithelium and mucosal tissues”, “nasal, oral, and pharyngeal
-    regions”, “cerebral lobes and cortical areas”, “breast”,
-    “cardiovascular system”, “small intestine”, “trachea”, “endocrine
-    system”, “lymphatic system”, “prostate”, “sensory-related
-    structures”, “liver”, “oesophagus”, “large intestine”, “spleen”,
-    “brainstem and cerebellar structures”, “bone marrow”, “stomach”,
-    “female reproductive system”, “thymus”, “adipose tissue”,
-    “integumentary system (skin)”, “gallbladder”, “pancreas”
+-   **Tissue Groups:** "respiratory system", "blood", "renal system",
+    "small intestine", "nasal, oral, and pharyngeal regions", "cerebral
+    lobes and cortical areas", "bone marrow", "breast", "cardiovascular
+    system", "trachea", "endocrine system", "liver", "large intestine",
+    "lymphatic system", "prostate", "sensory-related structures",
+    "oesophagus", "spleen", "brainstem and cerebellar structures",
+    "stomach", "female reproductive system", "thymus", "adipose tissue",
+    "integumentary system (skin)", "digestive system (general)",
+    "gallbladder", "pancreas"
 
 # Session Info
 
