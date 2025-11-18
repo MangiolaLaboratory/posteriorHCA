@@ -344,7 +344,12 @@ evaluate_posterior_density_mclust <- function(
   
   # Ensure x is a matrix
   if (!is.matrix(x)) {
-    x <- as.matrix(x)
+    # If x is a vector, convert to row matrix (1 x d)
+    if (is.vector(x)) {
+      x <- matrix(x, nrow = 1)
+    } else {
+      x <- as.matrix(x)
+    }
   }
   
   # Evaluate density: sum over all mixture components
