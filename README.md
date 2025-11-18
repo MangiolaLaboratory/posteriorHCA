@@ -133,7 +133,7 @@ result <- composition_posterior_test(
 #> # ℹ 2 more variables: lower <dbl>, upper <dbl>
 ```
 
-![](/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/README_files/figure-gfm/unnamed-chunk-5-1.png)<!-- -->
+![](/README_files/figure-gfm/unnamed-chunk-5-1.png)<!-- -->
 
 #### About `load_model_to_global_env`
 
@@ -175,7 +175,7 @@ print(result$result_table)
 print(result$plot)
 ```
 
-![](/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/README_files/figure-gfm/unnamed-chunk-7-1.png)<!-- -->
+![](/README_files/figure-gfm/unnamed-chunk-7-1.png)<!-- -->
 
 ### **2. Gene Expression Prediction**
 
@@ -219,7 +219,7 @@ print(expr_result$summary)
 print(expr_result$plot)
 ```
 
-![](/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/README_files/figure-gfm/unnamed-chunk-10-1.png)<!-- -->
+![](/README_files/figure-gfm/unnamed-chunk-10-1.png)<!-- -->
 
 **Predicted Values:**
 
