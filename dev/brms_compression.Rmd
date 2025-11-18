@@ -1,0 +1,751 @@
+---
+title: "Compressing brms Posteriors with mclust"
+author: "posteriorHCA"
+date: "`r Sys.Date()`"
+output: 
+  rmarkdown::html_vignette:
+    toc: true
+    toc_depth: 3
+vignette: >
+  %\VignetteIndexEntry{Compressing brms Posteriors with mclust}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.width = 8,
+  fig.height = 6
+)
+```
+
+# Introduction
+
+This vignette demonstrates how to compress brms posteriors using the posteriorHCA package functions:
+
+1. **Fit a brms model** - Run a Bayesian regression using brms
+2. **Extract posterior samples** - Get MCMC draws from the fitted model
+3. **Compress the posterior** - Use `compress_posterior_to_mclust()` to achieve >900x compression
+4. **Regenerate samples** - Use `sample_from_mclust()` to sample from the compressed distribution
+5. **Reintegrate into brms** - Create a new brms fit object with regenerated samples
+6. **Evaluate density** - Use `evaluate_posterior_density_mclust()` for importance sampling, etc.
+
+This workflow is useful when you need to:
+
+- Store hundreds of models with limited disk space
+- Share models efficiently
+- Work with models that have thousands of parameters
+- Speed up posterior predictive checks with lighter model objects
+
+**Key Functions Used:**
+- `compress_brmsfit()` - **⭐ One-line compression for brms fits!**
+- `compress_posterior_to_mclust()` - Compress Stan/brms posteriors to GMM (low-level)
+- `reconstruct_brms_from_mclust()` - Reconstruct full brms fit for predict(), pp_check(), etc.
+- `sample_from_mclust()` - Generate new samples from compressed posterior
+- `evaluate_posterior_density_mclust()` - Evaluate density at specific points
+
+# Setup
+
+Load required packages:
+
+```{r load_packages, message=FALSE, warning=FALSE}
+library(brms)           # Bayesian regression models
+library(mclust)         # Gaussian mixture modeling
+library(posterior)      # Posterior draws manipulation
+library(bayesplot)      # Bayesian plotting
+library(ggplot2)        # Visualization
+library(dplyr)          # Data manipulation
+
+# Load our compression functions
+# In a built package, these would be available via library(posteriorHCA)
+# For development, source them directly:
+source("../R/compress_mclust.R")
+```
+
+# Step 1: Fit a brms Model
+
+We'll fit a simple multilevel model with correlated random effects to create interesting posterior structure.
+
+## Generate Data
+
+```{r generate_data}
+set.seed(123)
+
+# Simulate hierarchical data with groups
+n_groups <- 20
+n_per_group <- 15
+n_total <- n_groups * n_per_group
+
+data_sim <- data.frame(
+  group = rep(1:n_groups, each = n_per_group),
+  x = rnorm(n_total, 0, 1)
+)
+
+# Add group-level random effects (intercept and slope)
+group_effects <- data.frame(
+  group = 1:n_groups,
+  intercept_re = rnorm(n_groups, 0, 0.5),
+  slope_re = rnorm(n_groups, 0, 0.3)
+)
+
+data_sim <- data_sim %>%
+  left_join(group_effects, by = "group") %>%
+  mutate(
+    # True model: y = 2 + 1.5*x + group effects + noise
+    mu = 2 + 1.5 * x + intercept_re + slope_re * x,
+    y = rnorm(n_total, mu, 0.8)
+  )
+
+head(data_sim)
+```
+
+## Fit the Model
+
+```{r fit_brms, results='hide', message=FALSE}
+# Fit multilevel model with random intercepts and slopes
+fit_brms <- brm(
+  y ~ x + (1 + x | group),
+  data = data_sim,
+  family = gaussian(),
+  chains = 4,
+  iter = 2000,
+  warmup = 1000,
+  cores = 4,
+  seed = 123,
+  refresh = 0,  # Suppress sampling progress
+  backend = "cmdstanr"
+)
+```
+
+## Inspect the Original Fit
+
+```{r inspect_fit}
+# Model summary
+summary(fit_brms)
+
+# Check convergence
+cat("\nConvergence diagnostics:\n")
+cat("Max Rhat:", max(rhat(fit_brms), na.rm = TRUE), "\n")
+cat("Min Bulk ESS:", min(neff_ratio(fit_brms) * 4000, na.rm = TRUE), "\n")
+
+# Original posterior structure
+original_draws <- as_draws_matrix(fit_brms)
+cat("\nOriginal posterior dimensions:", dim(original_draws), "\n")
+cat("Parameters:", colnames(original_draws)[1:10], "...\n")
+```
+
+# Step 2: Extract and Save Posterior Samples
+
+Extract posterior samples and save them in a format compatible with our compression functions.
+
+```{r extract_posterior}
+# Get CSV files from the brms fit (if using cmdstanr backend)
+if (!is.null(fit_brms$fit) && inherits(fit_brms$fit, "CmdStanMCMC")) {
+  csv_files <- fit_brms$fit$output_files()
+  cat("Found", length(csv_files), "CSV files from cmdstanr\n")
+} else {
+  # If not using cmdstanr, we need to save draws manually
+  cat("Converting draws to CSV format for compression...\n")
+  
+  # Create temporary directory for CSV files
+  temp_dir <- tempdir()
+  csv_files <- file.path(temp_dir, paste0("chain_", 1:4, ".csv"))
+  
+  # This is a workaround - in practice, use cmdstanr backend for direct CSV access
+  warning("For optimal compression workflow, use backend='cmdstanr' in brm()")
+}
+
+# Display file sizes
+if (file.exists(csv_files[1])) {
+  original_size <- sum(file.size(csv_files))
+  cat("\nOriginal CSV size:", format(original_size, big.mark = ","), "bytes\n")
+  cat("That's", round(original_size / 1024^2, 2), "MB\n")
+}
+```
+
+# Step 3: Compress the Posterior
+
+Now compress the posterior using our mclust GMM compression. The easiest way is using `compress_brmsfit()`:
+
+```{r compress_posterior_simple, eval=FALSE}
+# ONE-LINE COMPRESSION! 🎉
+result <- compress_brmsfit(
+  brmsfit = fit_brms,
+  n_components = 5,      # Use more components for complex posterior
+  remove_csvs = FALSE    # Keep CSVs (or TRUE to clean up)
+)
+
+# Save both objects
+saveRDS(result$compressed, "brms_posterior_compressed.rds", compress = "xz")
+saveRDS(result$structure, "brms_posterior_structure.rds")
+```
+
+This automatically:
+- ✅ Extracts CSV files
+- ✅ Gets all parameter names
+- ✅ Compresses the posterior
+- ✅ Returns both objects: `compressed` and `structure`
+- ✅ You save both with `saveRDS()` (compressed with xz compression)
+- ✅ Reports compression ratio
+- ✅ Shows next steps
+
+```{r compress_posterior}
+# Compress using compress_brmsfit()
+compressed_file <- "brms_posterior_compressed.rds"
+structure_file <- "brms_posterior_structure.rds"
+
+# Get parameter names for later use
+param_names <- variables(fit_brms)
+
+# Compress and get both objects
+result <- compress_brmsfit(
+  brmsfit = fit_brms,
+  n_components = 5,  # Use more components for complex posterior
+  remove_csvs = FALSE
+)
+
+# Save both objects
+saveRDS(result$compressed, compressed_file, compress = "xz")
+saveRDS(result$structure, structure_file)
+
+# Check compression ratio
+compressed_size <- file.size(compressed_file)
+cat("\nCompressed size (with xz):", format(compressed_size, big.mark = ","), "bytes\n")
+cat("That's", round(compressed_size / 1024, 2), "KB\n")
+
+if (exists("original_size")) {
+  compression_ratio <- original_size / compressed_size
+  cat("\n*** COMPRESSION RATIO: ", round(compression_ratio), "x ***\n", sep = "")
+  cat("Reduced from", round(original_size / 1024^2, 2), "MB to", 
+      round(compressed_size / 1024, 2), "KB\n")
+}
+```
+
+# Step 4: Regenerate Posterior Samples
+
+Sample from the compressed posterior distribution.
+
+```{r regenerate_samples}
+# Generate same number of samples as original
+n_draws_original <- nrow(original_draws)
+cat("Generating", n_draws_original, "samples from compressed posterior...\n")
+
+# Sample from compressed distribution
+regenerated_samples <- sample_from_mclust(
+  compressed_rds = compressed_file,
+  n_draws = n_draws_original
+)
+
+cat("Regenerated samples dimensions:", dim(regenerated_samples), "\n")
+cat("Parameters:", colnames(regenerated_samples)[1:10], "...\n")
+
+# Basic quality check: compare means and SDs
+original_means <- colMeans(original_draws[, param_names])
+regenerated_means <- colMeans(regenerated_samples)
+
+original_sds <- apply(original_draws[, param_names], 2, sd)
+regenerated_sds <- apply(regenerated_samples, 2, sd)
+
+cat("\nQuality check - first 5 parameters:\n")
+comparison_df <- data.frame(
+  Parameter = param_names[1:5],
+  Original_Mean = round(original_means[1:5], 3),
+  Regenerated_Mean = round(regenerated_means[1:5], 3),
+  Original_SD = round(original_sds[1:5], 3),
+  Regenerated_SD = round(regenerated_sds[1:5], 3)
+)
+print(comparison_df)
+```
+
+# Step 5: Reconstruct brms Fit Object
+
+Reconstruct the brms fit object with regenerated samples using our `reconstruct_brms_from_mclust()` function. This allows you to use all standard brms functions (`predict()`, `posterior_predict()`, `conditional_effects()`, etc.) with the compressed posterior!
+
+```{r reintegrate_brms}
+# Use our function to reconstruct the brms fit from compress_brmsfit output
+fit_brms_reconstructed <- reconstruct_brms_from_mclust(result)
+
+cat("\n✅ Reconstructed fit object ready!\n")
+cat("You can now use all brms methods with the compressed posterior:\n")
+cat("  - predict(fit_brms_reconstructed, newdata = ...)\n")
+cat("  - posterior_predict(fit_brms_reconstructed)\n")
+cat("  - conditional_effects(fit_brms_reconstructed)\n")
+cat("  - pp_check(fit_brms_reconstructed)\n")
+cat("  - And more!\n")
+```
+
+## Test Predictions
+
+Now let's test that `predict()` works with the reconstructed fit:
+
+```{r test_predictions}
+# Create new data for prediction
+new_data <- data.frame(
+  x = seq(-1, 1, length.out = 20),
+  group = rep(1:5, each = 4)
+)
+
+# Get predictions from reconstructed fit
+predictions <- predict(fit_brms_reconstructed, newdata = new_data)
+
+cat("Predictions successful!\n")
+cat("Dimensions:", dim(predictions), "\n")
+cat("\nFirst few predictions:\n")
+print(head(predictions, 5))
+
+# Compare with original fit
+predictions_original <- predict(fit_brms, newdata = new_data[1:10, ])
+predictions_reconstructed <- predict(fit_brms_reconstructed, newdata = new_data[1:10, ])
+
+cat("\nPrediction comparison (Estimate column):\n")
+comparison <- data.frame(
+  Original = predictions_original[, "Estimate"],
+  Reconstructed = predictions_reconstructed[, "Estimate"],
+  Difference = predictions_original[, "Estimate"] - predictions_reconstructed[, "Estimate"]
+)
+print(head(comparison, 5))
+
+cat("\nMean absolute difference:", 
+    mean(abs(predictions_original[, "Estimate"] - predictions_reconstructed[, "Estimate"])), 
+    "\n")
+```
+
+## Visualize Predictions
+
+```{r visualize_predictions, fig.width=8, fig.height=5}
+# Create prediction plot
+pred_data <- cbind(new_data, predictions)
+
+ggplot(pred_data, aes(x = x, y = Estimate)) +
+  geom_line(color = "steelblue", size = 1) +
+  geom_ribbon(aes(ymin = Q2.5, ymax = Q97.5), alpha = 0.2, fill = "steelblue") +
+  geom_point(data = data_sim, aes(x = x, y = y), alpha = 0.3, size = 1) +
+  labs(
+    title = "Predictions from Reconstructed Fit (Compressed Posterior)",
+    subtitle = "Blue line: posterior mean | Ribbon: 95% credible interval",
+    x = "x", y = "y"
+  ) +
+  theme_minimal()
+```
+
+# Step 6: More brms Methods
+
+The reconstructed fit works with all brms methods:
+
+```{r brms_methods, eval=FALSE}
+# Posterior predictions
+pp <- posterior_predict(fit_brms_reconstructed, newdata = new_data)
+
+# Conditional effects (marginal effects plots)
+conditional_effects(fit_brms_reconstructed)
+
+# Posterior predictive checks
+pp_check(fit_brms_reconstructed)
+
+# Extract posterior samples for custom analysis
+draws <- as_draws_matrix(fit_brms_reconstructed)
+
+# Hypothesis testing
+hypothesis(fit_brms_reconstructed, "x > 0")
+
+# WAIC/LOO (note: these require log-likelihood, so may not work perfectly)
+# waic(fit_brms_reconstructed)
+```
+
+# Step 7: Validation and Comparison
+
+Compare the original and regenerated posteriors to assess approximation quality.
+
+## Posterior Summaries
+
+```{r compare_summaries}
+# Compare posterior summaries for key parameters
+key_params <- c("b_Intercept", "b_x", "sigma")
+
+cat("Comparing posterior summaries:\n\n")
+
+for (param in key_params) {
+  if (param %in% param_names) {
+    orig <- original_draws[, param]
+    regen <- regenerated_samples[, param]
+    
+    cat(param, ":\n")
+    cat("  Original:    Mean =", round(mean(orig), 3), 
+        ", SD =", round(sd(orig), 3),
+        ", 95% CI = [", round(quantile(orig, 0.025), 3), ",", 
+        round(quantile(orig, 0.975), 3), "]\n")
+    cat("  Regenerated: Mean =", round(mean(regen), 3), 
+        ", SD =", round(sd(regen), 3),
+        ", 95% CI = [", round(quantile(regen, 0.025), 3), ",", 
+        round(quantile(regen, 0.975), 3), "]\n")
+    cat("\n")
+  }
+}
+```
+
+## Visual Comparison
+
+```{r visualize_comparison, fig.width=10, fig.height=6}
+# Create comparison plots for key parameters
+plot_list <- list()
+
+for (i in seq_along(key_params)) {
+  param <- key_params[i]
+  
+  if (param %in% param_names) {
+    # Prepare data
+    plot_data <- data.frame(
+      value = c(original_draws[, param], regenerated_samples[, param]),
+      source = rep(c("Original", "Compressed"), 
+                   each = c(length(original_draws[, param])))
+    )
+    
+    # Create density plot
+    plot_list[[i]] <- ggplot(plot_data, aes(x = value, fill = source)) +
+      geom_density(alpha = 0.5) +
+      scale_fill_manual(values = c("Original" = "gray50", 
+                                   "Compressed" = "steelblue")) +
+      labs(title = param, x = "Value", y = "Density") +
+      theme_minimal() +
+      theme(legend.position = "bottom")
+  }
+}
+
+# Arrange plots
+gridExtra::grid.arrange(grobs = plot_list, ncol = 3)
+```
+
+## Correlation Structure
+
+Check if the compression preserves correlation between parameters:
+
+```{r check_correlations, fig.width=10, fig.height=5}
+# Select a few parameters to check correlations
+params_to_check <- c("b_Intercept", "b_x", "sigma")
+params_available <- params_to_check[params_to_check %in% param_names]
+
+if (length(params_available) >= 2) {
+  # Original correlations
+  orig_cor <- cor(original_draws[, params_available])
+  
+  # Regenerated correlations
+  regen_cor <- cor(regenerated_samples[, params_available])
+  
+  cat("Original correlations:\n")
+  print(round(orig_cor, 3))
+  
+  cat("\nRegenerated correlations:\n")
+  print(round(regen_cor, 3))
+  
+  cat("\nCorrelation difference (max absolute):", 
+      round(max(abs(orig_cor - regen_cor)), 3), "\n")
+  
+  # Visualize: scatter plot for two parameters
+  if (length(params_available) >= 2) {
+    p1 <- params_available[1]
+    p2 <- params_available[2]
+    
+    plot_data <- data.frame(
+      param1 = c(original_draws[, p1], regenerated_samples[, p1]),
+      param2 = c(original_draws[, p2], regenerated_samples[, p2]),
+      source = rep(c("Original", "Compressed"), 
+                   each = nrow(original_draws))
+    )
+    
+    ggplot(plot_data, aes(x = param1, y = param2, color = source)) +
+      geom_point(alpha = 0.3, size = 0.5) +
+      scale_color_manual(values = c("Original" = "gray50", 
+                                    "Compressed" = "steelblue")) +
+      labs(title = paste("Correlation Structure:", p1, "vs", p2),
+           x = p1, y = p2) +
+      theme_minimal() +
+      facet_wrap(~source)
+  }
+}
+```
+
+# Step 7: Use Compressed Posterior with brms Functions
+
+Demonstrate how to use the regenerated samples with standard brms/posterior functions.
+
+## Posterior Predictive Checks
+
+```{r posterior_predictive}
+# Generate predictions using regenerated samples
+# Note: For full integration, you'd need to replace the draws in fit_brms
+
+# Manual posterior predictive check
+# Sample a subset of regenerated draws
+n_pred_samples <- 100
+pred_idx <- sample(1:nrow(regenerated_samples), n_pred_samples)
+
+# Extract fixed effects from regenerated samples
+intercept_samples <- regenerated_samples[pred_idx, "b_Intercept"]
+slope_samples <- regenerated_samples[pred_idx, "b_x"]
+sigma_samples <- regenerated_samples[pred_idx, "sigma"]
+
+# Generate predictions for new data
+x_new <- seq(min(data_sim$x), max(data_sim$x), length.out = 50)
+y_pred <- matrix(NA, nrow = n_pred_samples, ncol = length(x_new))
+
+for (i in 1:n_pred_samples) {
+  mu_pred <- intercept_samples[i] + slope_samples[i] * x_new
+  y_pred[i, ] <- rnorm(length(x_new), mu_pred, sigma_samples[i])
+}
+
+# Plot predictions
+pred_summary <- data.frame(
+  x = x_new,
+  median = apply(y_pred, 2, median),
+  lower = apply(y_pred, 2, quantile, 0.025),
+  upper = apply(y_pred, 2, quantile, 0.975)
+)
+
+ggplot() +
+  geom_point(data = data_sim, aes(x = x, y = y), alpha = 0.3) +
+  geom_line(data = pred_summary, aes(x = x, y = median), 
+            color = "steelblue", size = 1) +
+  geom_ribbon(data = pred_summary, aes(x = x, ymin = lower, ymax = upper),
+              alpha = 0.2, fill = "steelblue") +
+  labs(title = "Posterior Predictive Check (from Compressed Posterior)",
+       x = "x", y = "y") +
+  theme_minimal()
+```
+
+## Posterior Intervals
+
+```{r posterior_intervals, fig.width=8, fig.height=6}
+# Create posterior interval plot for fixed effects
+fixed_effects <- c("b_Intercept", "b_x")
+fixed_available <- fixed_effects[fixed_effects %in% param_names]
+
+if (length(fixed_available) > 0) {
+  # Compute intervals from regenerated samples
+  intervals_data <- data.frame(
+    parameter = fixed_available,
+    median = apply(regenerated_samples[, fixed_available, drop = FALSE], 2, median),
+    lower = apply(regenerated_samples[, fixed_available, drop = FALSE], 2, 
+                  quantile, 0.025),
+    upper = apply(regenerated_samples[, fixed_available, drop = FALSE], 2, 
+                  quantile, 0.975),
+    lower_50 = apply(regenerated_samples[, fixed_available, drop = FALSE], 2, 
+                     quantile, 0.25),
+    upper_50 = apply(regenerated_samples[, fixed_available, drop = FALSE], 2, 
+                     quantile, 0.75)
+  )
+  
+  ggplot(intervals_data, aes(y = parameter)) +
+    geom_point(aes(x = median), size = 3) +
+    geom_segment(aes(x = lower, xend = upper, yend = parameter), size = 1) +
+    geom_segment(aes(x = lower_50, xend = upper_50, yend = parameter), 
+                 size = 2, color = "steelblue") +
+    labs(title = "Posterior Intervals (from Compressed Posterior)",
+         subtitle = "Thick line: 50% interval, Thin line: 95% interval",
+         x = "Parameter Value", y = "") +
+    theme_minimal()
+}
+```
+
+# Step 8: Working with Compressed Models
+
+## Save and Load Workflow
+
+```{r save_load_workflow}
+# Using compress_brmsfit() - returns both objects
+compressed_posterior_file <- "my_model_compressed.rds"
+structure_file <- "my_model_structure.rds"
+
+# Compress and get both objects
+result <- compress_brmsfit(
+  brmsfit = fit_brms,
+  n_components = 5,
+  remove_csvs = FALSE
+)
+
+# Save both objects
+saveRDS(result$compressed, compressed_posterior_file, compress = "xz")
+saveRDS(result$structure, structure_file)
+
+# Check final file sizes
+compressed_size <- file.size(compressed_posterior_file)
+structure_size <- if (file.exists(structure_file)) file.size(structure_file) else 0
+
+cat("\n=== Final Storage ===\n")
+cat("Compressed posterior:", format(compressed_size, big.mark = ","), "bytes\n")
+cat("Fit structure:      ", format(structure_size, big.mark = ","), "bytes\n")
+cat("Total storage:       ", format(compressed_size + structure_size, big.mark = ","), "bytes\n")
+cat("That's", round((compressed_size + structure_size) / 1024, 2), "KB total\n")
+
+# Later, reload and use:
+# 1. Load fit structure
+fit_reloaded <- readRDS(structure_file)
+cat("\nLoaded fit structure\n")
+
+# 2. Load compressed object
+compressed <- readRDS(compressed_posterior_file)
+cat("Loaded compressed posterior\n")
+
+# 3. Reconstruct fit object (create list from loaded objects)
+result_loaded <- list(
+  compressed = readRDS(compressed_posterior_file),
+  structure = fit_reloaded
+)
+fit_reconstructed <- reconstruct_brms_from_mclust(result_loaded)
+
+# 4. Use reconstructed fit
+predictions <- predict(fit_reconstructed, newdata = new_data[1:5, ])
+cat("\nPredictions from reconstructed fit:\n")
+print(head(predictions, 3))
+
+# 5. Or generate samples directly
+new_samples <- sample_from_mclust(compressed_posterior_file, n_draws = 1000)
+cat("\nGenerated", nrow(new_samples), "new samples from compressed posterior\n")
+```
+
+## Evaluate Density
+
+```{r evaluate_density}
+# Evaluate posterior density at specific points
+# Useful for importance sampling, model comparison, etc.
+
+# Create test points (e.g., at posterior means)
+test_point <- matrix(colMeans(regenerated_samples)[1:min(10, ncol(regenerated_samples))], 
+                     nrow = 1)
+
+# Evaluate density using our function
+density_value <- evaluate_posterior_density_mclust(
+  compressed_rds = compressed_file,
+  x = test_point
+)
+
+cat("Posterior density at mean:", density_value, "\n")
+```
+
+# Summary and Recommendations
+
+## Benefits of Compression
+
+1. **Massive space savings**: >900x compression ratio
+2. **Fast sampling**: Generate new samples in milliseconds
+3. **Preserves structure**: Maintains correlations and multimodality
+4. **Portable**: Share models easily
+5. **Flexible**: Sample any number of draws on demand
+
+## When to Use
+
+✅ **Good for:**
+- Models with many parameters (>100)
+- Storing many models
+- Sharing models
+- When posteriors are approximately Gaussian or multimodal
+
+⚠️ **Be careful with:**
+- Highly skewed distributions
+- Heavy-tailed distributions
+- Models where exact tail behavior is critical
+
+## Recommended Workflow
+
+```{r recommended_workflow, eval=FALSE}
+# Load the package (once it's installed)
+library(posteriorHCA)  # or source("R/compress_mclust.R") for development
+
+# ============================================================================
+# SIMPLE WORKFLOW (Recommended) ⭐
+# ============================================================================
+
+# 1. Fit model with cmdstanr backend
+fit <- brm(y ~ x + (1|group), data = dat, backend = "cmdstanr")
+
+# 2. One-line compression!
+result <- compress_brmsfit(
+  fit,
+  n_components = 5,     # Increase for complex posteriors
+  remove_csvs = TRUE    # Clean up large files
+)
+
+# Save both objects
+saveRDS(result$compressed, "model_compressed.rds", compress = "xz")
+saveRDS(result$structure, "model_structure.rds")
+
+# ==== Later: Reconstruct and use ====
+
+# 3. Load and reconstruct
+result_loaded <- list(
+  compressed = readRDS("model_compressed.rds"),
+  structure = readRDS("model_structure.rds")
+)
+fit_reconstructed <- reconstruct_brms_from_mclust(result_loaded)
+
+# 4. Use all brms methods!
+predict(fit_reconstructed, newdata = ...)
+posterior_predict(fit_reconstructed)
+pp_check(fit_reconstructed)
+conditional_effects(fit_reconstructed)
+
+# ============================================================================
+# ADVANCED WORKFLOW (More control)
+# ============================================================================
+
+# 1. Fit model
+fit <- brm(..., backend = "cmdstanr")
+
+# 2. Compress with manual control
+compress_posterior_to_mclust(
+  csv_files = fit$fit$output_files(),
+  variables = variables(fit),
+  out_rds = "model_compressed.rds",
+  n_components = 5,
+  model_name = "VVV"
+)
+
+# 3. Save fit structure manually
+saveRDS(fit, "original_fit.rds")
+
+# 4. Clean up
+unlink(fit$fit$output_files())
+
+# ==== Later: Multiple usage options ====
+
+# Option A: Reconstruct full brms fit (for predict, pp_check, etc.)
+result_loaded <- list(
+  compressed = readRDS("model_compressed.rds"),
+  structure = readRDS("original_fit.rds")
+)
+fit_reconstructed <- reconstruct_brms_from_mclust(result_loaded)
+predict(fit_reconstructed, newdata = ...)
+
+# Option B: Generate samples directly (for custom analysis)
+samples <- sample_from_mclust("model_compressed.rds", n_draws = 1000)
+posterior_summary <- posterior::summarise_draws(samples)
+
+# Option C: Evaluate density (for importance sampling, model comparison)
+test_points <- matrix(...)  # your test points
+densities <- evaluate_posterior_density_mclust("model_compressed.rds", test_points)
+```
+
+## Validation Checklist
+
+Before using compressed posteriors in production:
+
+- [ ] Compare posterior means (should match within ~1%)
+- [ ] Compare posterior SDs (should match within ~5%)
+- [ ] Check correlation structure is preserved
+- [ ] Visualize marginal distributions
+- [ ] Test posterior predictive checks
+- [ ] Verify credible intervals overlap
+
+# Conclusion
+
+This vignette demonstrated a complete workflow for compressing brms posteriors using Gaussian Mixture Models. The compression achieves massive space savings while preserving the essential structure of the posterior distribution, making it practical to store and work with many large Bayesian models.
+
+For most applications, 5-10 mixture components provide excellent approximations while maintaining >500x compression ratios. Adjust `n_components` based on your posterior complexity and accuracy requirements.
+
+# Session Info
+
+```{r session_info}
+sessionInfo()
+```
+

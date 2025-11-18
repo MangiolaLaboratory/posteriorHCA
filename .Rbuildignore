@@ -1,0 +1,4 @@
+^dev$
+
+^.*\.Rproj$
+^\.Rproj\.user$
