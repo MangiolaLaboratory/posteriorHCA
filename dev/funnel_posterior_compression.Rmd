@@ -1,0 +1,530 @@
+---
+title: "Funnel Posterior Compression with mclust"
+author: "posteriorHCA"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.width = 10,
+  fig.height = 7,
+  warning = FALSE,
+  message = FALSE
+)
+```
+
+# Introduction
+
+This document demonstrates how to compress and regenerate a **funnel posterior** using Gaussian Mixture Models (GMM) via the `mclust` package. The funnel posterior is a classic challenging distribution in Bayesian statistics, often used to test MCMC samplers.
+
+## What is a Funnel Posterior?
+
+The funnel posterior is a bivariate distribution with a characteristic funnel shape:
+
+- $x \sim \text{Normal}(0, 3)$
+- $y \mid x \sim \text{Normal}(0, \exp(x/2))$
+
+This creates a distribution where:
+- The variance of $y$ depends exponentially on $x$
+- The distribution is narrow at the top (large $x$) and wide at the bottom (small $x$)
+- It's challenging for MCMC samplers due to the varying scales
+
+## Objectives
+
+1. Generate samples from a funnel posterior
+2. Visualize the original posterior distribution
+3. Compress the posterior using `compress_posterior_to_mclust`
+4. Regenerate samples using `sample_from_mclust`
+5. Compare original vs. regenerated distributions
+6. Evaluate compression quality and performance
+
+# Setup
+
+```{r load_packages}
+if (!requireNamespace("posteriorHCA", quietly = TRUE)) {
+  if (requireNamespace("pkgload", quietly = TRUE)) {
+    pkgload::load_all("..", quiet = TRUE)
+  } else {
+    stop("posteriorHCA is not installed and pkgload is unavailable. Install the package or install.packages('pkgload').")
+  }
+}
+library(posteriorHCA)  # Our compression functions
+library(cmdstanr)      # CmdStan utilities for CSV handling
+library(mclust)        # Gaussian mixture modeling
+library(ggplot2)       # Visualization
+library(dplyr)         # Data manipulation
+library(viridis)       # Color scales
+library(gridExtra)     # Multiple plots
+
+# Set seed for reproducibility
+set.seed(123)
+```
+
+# Step 1: Sample the Funnel Posterior with Stan
+
+Rather than simulating by hand, we'll fit a tiny Stan model that directly samples from the funnel posterior. This automatically gives us CmdStan CSV files that plug into `compress_posterior_to_mclust()`.
+
+```{r generate_funnel_samples}
+# Stan program for funnel posterior
+funnel_stan_code <- "
+parameters {
+  real x;
+  real y;
+}
+model {
+  x ~ normal(0, 3);
+  y ~ normal(0, exp(x / 2));
+}
+"
+
+# Write Stan model to temporary file
+temp_dir <- tempdir()
+stan_file <- file.path(temp_dir, "funnel_model.stan")
+writeLines(funnel_stan_code, stan_file)
+
+# Compile model (cached if file unchanged)
+funnel_mod <- cmdstan_model(stan_file)
+
+# Sample from the model
+n_chains <- 4
+iter_warmup <- 1000
+iter_sampling <- 2000
+funnel_fit <- funnel_mod$sample(
+  chains = n_chains,
+  iter_warmup = iter_warmup,
+  iter_sampling = iter_sampling,
+  refresh = 500,
+  seed = 123
+)
+
+# Extract draws matrix for analysis and plotting
+funnel_samples <- funnel_fit$draws(
+  variables = c("x", "y"),
+  format = "matrix"
+)
+
+n_samples <- nrow(funnel_samples)
+funnel_df <- data.frame(
+  x = funnel_samples[, "x"],
+  y = funnel_samples[, "y"],
+  source = "original"
+)
+
+csv_files <- funnel_fit$output_files()
+
+cat("Generated", n_samples, "posterior draws via CmdStan\n")
+cat("CSV files stored at:\n")
+cat(paste("  -", csv_files), sep = "\n")
+```
+
+## Visualize Original Funnel Posterior
+
+```{r visualize_original}
+# Create scatter plot with density
+p1 <- ggplot(funnel_df, aes(x = x, y = y)) +
+  geom_point(alpha = 0.3, size = 0.5, color = "steelblue") +
+  stat_density_2d(aes(fill = after_stat(level)), geom = "polygon", alpha = 0.5) +
+  scale_fill_viridis_c(name = "Density") +
+  labs(
+    title = "Original Funnel Posterior",
+    subtitle = paste("n =", n_samples, "samples"),
+    x = "x ~ Normal(0, 3)",
+    y = "y | x ~ Normal(0, exp(x/2))"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "right")
+
+# Marginal distributions
+p2 <- ggplot(funnel_df, aes(x = x)) +
+  geom_density(fill = "steelblue", alpha = 0.5) +
+  labs(title = "Marginal: x", x = "x", y = "Density") +
+  theme_minimal()
+
+p3 <- ggplot(funnel_df, aes(x = y)) +
+  geom_density(fill = "steelblue", alpha = 0.5) +
+  labs(title = "Marginal: y", x = "y", y = "Density") +
+  theme_minimal()
+
+# Combine plots
+grid.arrange(p1, arrangeGrob(p2, p3, ncol = 2), nrow = 2, heights = c(2, 1))
+```
+
+# Step 2: Compress the Funnel Posterior
+
+Now we'll compress the posterior using `compress_posterior_to_mclust`. We'll try different numbers of components to see how well the GMM captures the funnel shape.
+
+```{r compress_funnel}
+# Compress with different numbers of components
+n_components_options <- c(3, 5, 10)
+
+compressed_results <- list()
+compression_stats <- data.frame()
+
+for (n_comp in n_components_options) {
+  cat("\n=== Compressing with", n_comp, "components ===\n")
+  
+  # Output file for compressed posterior
+  out_file <- file.path(temp_dir, paste0("funnel_compressed_", n_comp, ".rds"))
+  
+  # Compress
+  start_time <- Sys.time()
+  compressed <- compress_posterior_to_mclust(
+    csv_files = csv_files,
+    variables = c("x", "y"),
+    out_rds = out_file,
+    n_components = n_comp,
+    model_name = "VVV"  # Variable volume, shape, orientation
+  )
+  compression_time <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
+  
+  # Calculate compression ratio
+  original_size <- sum(file.size(csv_files))
+  compressed_size <- file.size(out_file)
+  compression_ratio <- original_size / compressed_size
+  
+  # Store results
+  compressed_results[[as.character(n_comp)]] <- list(
+    compressed = compressed,
+    file = out_file,
+    n_components = n_comp
+  )
+  
+  # Store stats
+  compression_stats <- rbind(compression_stats, data.frame(
+    n_components = n_comp,
+    compression_time = compression_time,
+    original_size_mb = original_size / 1024^2,
+    compressed_size_kb = compressed_size / 1024,
+    compression_ratio = compression_ratio,
+    loglik = compressed$loglik,
+    bic = compressed$bic
+  ))
+  
+  cat("Compression time:", round(compression_time, 2), "seconds\n")
+  cat("Compression ratio:", round(compression_ratio, 1), "x\n")
+  cat("BIC:", round(compressed$bic, 2), "\n")
+}
+
+# Display compression statistics
+print(compression_stats)
+```
+
+## Select Best Model
+
+We'll use the model with the best BIC (lower is better, but we also want enough components to capture the funnel shape).
+
+```{r select_best_model}
+# Select model (we'll use 10 components for better capture of funnel shape)
+selected_n_comp <- 10
+selected_compressed <- compressed_results[[as.character(selected_n_comp)]]
+
+cat("Selected model with", selected_n_comp, "components\n")
+cat("BIC:", round(selected_compressed$compressed$bic, 2), "\n")
+cat("Log-likelihood:", round(selected_compressed$compressed$loglik, 2), "\n")
+```
+
+# Step 4: Regenerate Samples from Compressed Posterior
+
+Now we'll generate new samples from the compressed GMM using `sample_from_mclust`.
+
+```{r regenerate_samples}
+# Regenerate samples
+n_regenerated <- n_samples
+
+cat("Regenerating", n_regenerated, "samples from compressed posterior...\n")
+
+start_time <- Sys.time()
+regenerated_samples <- sample_from_mclust(
+  compressed_rds = selected_compressed$file,
+  n_draws = n_regenerated
+)
+regeneration_time <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
+
+cat("Regeneration time:", round(regeneration_time * 1000, 2), "milliseconds\n")
+cat("Samples per second:", round(n_regenerated / regeneration_time, 0), "\n")
+
+# Convert to data frame
+regenerated_df <- data.frame(
+  x = regenerated_samples[, "x"],
+  y = regenerated_samples[, "y"],
+  source = "regenerated"
+)
+
+# Combine original and regenerated for comparison
+comparison_df <- rbind(
+  funnel_df,
+  regenerated_df
+)
+```
+
+# Step 5: Compare Original vs. Regenerated
+
+## Side-by-Side Visualization
+
+```{r compare_visualizations}
+# Original
+p_orig <- ggplot(funnel_df, aes(x = x, y = y)) +
+  geom_point(alpha = 0.3, size = 0.5, color = "steelblue") +
+  stat_density_2d(aes(fill = after_stat(level)), geom = "polygon", alpha = 0.5) +
+  scale_fill_viridis_c(name = "Density") +
+  labs(
+    title = "Original Funnel Posterior",
+    x = "x",
+    y = "y"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+# Regenerated
+p_regen <- ggplot(regenerated_df, aes(x = x, y = y)) +
+  geom_point(alpha = 0.3, size = 0.5, color = "darkgreen") +
+  stat_density_2d(aes(fill = after_stat(level)), geom = "polygon", alpha = 0.5) +
+  scale_fill_viridis_c(name = "Density") +
+  labs(
+    title = "Regenerated from GMM",
+    x = "x",
+    y = "y"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+# Overlay comparison
+p_overlay <- ggplot(comparison_df, aes(x = x, y = y, color = source)) +
+  geom_point(alpha = 0.2, size = 0.5) +
+  stat_density_2d(aes(fill = source), alpha = 0.3, geom = "polygon") +
+  scale_color_manual(values = c("original" = "steelblue", "regenerated" = "darkgreen")) +
+  scale_fill_manual(values = c("original" = "steelblue", "regenerated" = "darkgreen")) +
+  labs(
+    title = "Overlay: Original (blue) vs. Regenerated (green)",
+    x = "x",
+    y = "y"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+# Arrange plots
+grid.arrange(p_orig, p_regen, p_overlay, ncol = 3)
+```
+
+## Marginal Distribution Comparison
+
+```{r compare_marginals}
+# Marginal x
+p_x <- ggplot(comparison_df, aes(x = x, fill = source)) +
+  geom_density(alpha = 0.5) +
+  scale_fill_manual(values = c("original" = "steelblue", "regenerated" = "darkgreen")) +
+  labs(title = "Marginal: x", x = "x", y = "Density", fill = "Source") +
+  theme_minimal()
+
+# Marginal y
+p_y <- ggplot(comparison_df, aes(x = y, fill = source)) +
+  geom_density(alpha = 0.5) +
+  scale_fill_manual(values = c("original" = "steelblue", "regenerated" = "darkgreen")) +
+  labs(title = "Marginal: y", x = "y", y = "Density", fill = "Source") +
+  theme_minimal()
+
+grid.arrange(p_x, p_y, ncol = 2)
+```
+
+## Statistical Comparison
+
+```{r statistical_comparison}
+# Calculate summary statistics
+stats_comparison <- comparison_df %>%
+  group_by(source) %>%
+  summarise(
+    mean_x = mean(x),
+    sd_x = sd(x),
+    mean_y = mean(y),
+    sd_y = sd(y),
+    cor_xy = cor(x, y),
+    .groups = "drop"
+  )
+
+print(stats_comparison)
+
+# Calculate differences
+diff_stats <- data.frame(
+  statistic = c("mean_x", "sd_x", "mean_y", "sd_y", "cor_xy"),
+  original = as.numeric(stats_comparison[stats_comparison$source == "original", -1]),
+  regenerated = as.numeric(stats_comparison[stats_comparison$source == "regenerated", -1])
+) %>%
+  mutate(
+    difference = regenerated - original,
+    relative_error = abs(difference / original) * 100
+  )
+
+print(diff_stats)
+```
+
+# Step 6: Evaluate Density Approximation
+
+We can evaluate how well the GMM approximates the true density at specific points.
+
+```{r evaluate_density}
+# Select some test points
+test_points <- data.frame(
+  x = c(-3, 0, 3, -2, 0, 2),
+  y = c(0, 0, 0, 1, 1, 1)
+)
+
+# Evaluate density using compressed posterior
+densities <- evaluate_posterior_density_mclust(
+  compressed_rds = selected_compressed$file,
+  x = as.matrix(test_points)
+)
+
+test_points$density <- densities
+
+cat("Density evaluation at test points:\n")
+print(test_points)
+
+# Visualize density surface
+p_density <- ggplot(test_points, aes(x = x, y = y, size = density, color = density)) +
+  geom_point() +
+  scale_size_continuous(range = c(3, 10), name = "Density") +
+  scale_color_viridis_c(name = "Density") +
+  labs(
+    title = "Density at Test Points",
+    x = "x",
+    y = "y"
+  ) +
+  theme_minimal()
+
+print(p_density)
+```
+
+# Step 7: Component Visualization
+
+Let's visualize the GMM components to see how they capture the funnel shape.
+
+```{r visualize_components}
+# Extract component information
+compressed <- selected_compressed$compressed
+n_comp <- compressed$n_components
+
+# Create plot showing component centers and ellipses
+p_components <- ggplot(funnel_df, aes(x = x, y = y)) +
+  geom_point(alpha = 0.1, size = 0.3, color = "gray") +
+  labs(
+    title = paste("GMM Components (", n_comp, "components)"),
+    subtitle = "Component centers and 95% confidence ellipses",
+    x = "x",
+    y = "y"
+  ) +
+  theme_minimal()
+
+# Add component centers and ellipses
+for (k in 1:n_comp) {
+  # Component center
+  center <- compressed$means[, k]
+  weight <- compressed$weights[k]
+  sigma <- compressed$covariances[, , k]
+  
+  # Add center point
+  p_components <- p_components +
+    geom_point(
+      data = data.frame(x = center[1], y = center[2]),
+      aes(x = x, y = y),
+      color = "red",
+      size = 3,
+      shape = 16
+    )
+  
+  # Add ellipse (95% confidence)
+  # Using ellipse package or manual calculation
+  eigen_result <- eigen(sigma)
+  angles <- atan2(eigen_result$vectors[2, 1], eigen_result$vectors[1, 1])
+  chisq_val <- qchisq(0.95, df = 2)
+  
+  # Create ellipse points
+  theta <- seq(0, 2 * pi, length.out = 100)
+  ellipse_points <- cbind(
+    cos(theta),
+    sin(theta)
+  ) %*% (eigen_result$vectors %*% diag(sqrt(eigen_result$values * chisq_val))) +
+    matrix(center, nrow = 100, ncol = 2, byrow = TRUE)
+  
+  ellipse_df <- data.frame(
+    x = ellipse_points[, 1],
+    y = ellipse_points[, 2],
+    component = k
+  )
+  
+  p_components <- p_components +
+    geom_path(
+      data = ellipse_df,
+      aes(x = x, y = y),
+      color = "red",
+      alpha = 0.5,
+      linetype = "dashed"
+    )
+}
+
+print(p_components)
+
+# Component weights
+weights_df <- data.frame(
+  component = 1:n_comp,
+  weight = compressed$weights
+)
+
+p_weights <- ggplot(weights_df, aes(x = component, y = weight)) +
+  geom_bar(stat = "identity", fill = "steelblue", alpha = 0.7) +
+  labs(
+    title = "Component Weights",
+    x = "Component",
+    y = "Weight"
+  ) +
+  theme_minimal()
+
+print(p_weights)
+```
+
+# Summary
+
+## Key Findings
+
+1. **Compression Performance:**
+   - Achieved `r round(compression_stats$compression_ratio[compression_stats$n_components == selected_n_comp], 1)`x compression ratio
+   - Compression time: `r round(compression_stats$compression_time[compression_stats$n_components == selected_n_comp], 2)` seconds
+   - Regeneration time: `r round(regeneration_time * 1000, 2)` milliseconds
+
+2. **Quality of Approximation:**
+   - The GMM with `r selected_n_comp` components captures the funnel shape reasonably well
+   - Marginal distributions are well-preserved
+   - Correlation structure is maintained
+
+3. **Challenges:**
+   - The funnel posterior is challenging due to its varying scales
+   - More components may be needed for better approximation
+   - The exponential relationship between x and y makes it difficult to capture with Gaussian components
+
+## Recommendations
+
+- Use more components (10-20) for complex distributions like the funnel
+- Consider using "VVV" model (variable volume, shape, orientation) for maximum flexibility
+- Evaluate BIC to balance model complexity and fit quality
+- Visual inspection is important for assessing approximation quality
+
+## Next Steps
+
+- Try different covariance structures (EEE, VVE, etc.)
+- Experiment with different numbers of components
+- Compare with other compression methods
+- Test on other challenging posterior distributions
+
+```{r cleanup}
+# Cleanup temporary files
+unlink(csv_files)
+unlink(file.path(temp_dir, "funnel_compressed_*.rds"))
+cat("Cleaned up temporary files\n")
+```
+
