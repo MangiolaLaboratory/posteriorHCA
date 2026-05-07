@@ -2,6 +2,6 @@
 .Rhistory
 .RData
 .Ruserdata
+.Rbuildignore
 posteriorHCA.Rproj
 inst/doc
-cmdstanr_draws
