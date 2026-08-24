@@ -1,0 +1,7 @@
+url	dest	expected_bytes	bytes	md5
+https://ftp.ncbi.nlm.nih.gov/geo/series/GSE293nnn/GSE293189/soft/GSE293189_family.soft.gz	/scratchdata1/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/dev/TM4SF1_bladder/data/raw/GSE293189_family.soft.gz	8310	8310	def2d30dab6299a025e88996580d1387
+https://ftp.ncbi.nlm.nih.gov/geo/series/GSE293nnn/GSE293189/miniml/GSE293189_family.xml.tgz	/scratchdata1/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/dev/TM4SF1_bladder/data/raw/GSE293189_family.xml.tgz	8211	8211	6bc127fb62f0aa504c9098cbc94ee453
+https://ftp.ncbi.nlm.nih.gov/geo/series/GSE293nnn/GSE293189/suppl/filelist.txt	/scratchdata1/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/dev/TM4SF1_bladder/data/raw/GSE293189_filelist.txt	5081	5081	e8cc8761cc785b5c55cd7f1936984dd1
+https://ftp.ncbi.nlm.nih.gov/geo/series/GSE293nnn/GSE293189/suppl/GSE293189_RAW.tar	/scratchdata1/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/dev/TM4SF1_bladder/data/raw/GSE293189_RAW.tar	92139520	92139520	e594a066635732224dbf29311b21c1b3
+https://www.ebi.ac.uk/europepmc/webservices/rest/PMC12174346/supplementaryFiles	/scratchdata1/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/dev/TM4SF1_bladder/data/raw/PMC12174346_supplementaryFiles.zip		20421951	ab63feb12da4d0368de8f798c6ba5ae5
+https://www.ebi.ac.uk/europepmc/webservices/rest/PMC12174346/fullTextXML	/scratchdata1/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/dev/TM4SF1_bladder/data/raw/PMC12174346_fullTextXML.xml		153909	e17c2a111512281406e5329e693de5bb

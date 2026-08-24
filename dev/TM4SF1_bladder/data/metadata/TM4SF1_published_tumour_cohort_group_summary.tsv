@@ -1,0 +1,3 @@
+histology_group	n_published_patients	n_reconstructed_patients_ge150	total_cells	total_raw_TM4SF1_count	pooled_library_size	pooled_CPM	median_patient_CPM	pooled_detection_rate
+HV	9	9	7191	16720	34451235	485.323675624401	146.20212716661	0.235294117647059
+UC	3	2	671	183	2268295	80.6773369425053	41.819520887689	0.0730253353204173

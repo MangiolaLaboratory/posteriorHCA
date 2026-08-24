@@ -1,0 +1,1189 @@
+---
+title: "SAVI — marginalise unknown fixed effects (brms tuning)"
+subtitle: "Compare predict vs epred and marginalisation methods on universal healthy null"
+date: today
+date-format: "DD MMM YYYY"
+format:
+  html:
+    theme: minty
+    df-print: paged
+    code-line-numbers: true
+    embed-resources: true
+    code-fold: true
+    code-fold-default: true
+    toc: true
+    toc-location: left
+    toc-title: "Contents"
+knitr:
+  opts_chunk:
+    message: false
+    warning: false
+params:
+  target_cell_type: "monocytic"
+  estimates_rds: "/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/dev/SAVI/data/SAVI_estimates_chunk.rds"
+  savi_pseudobulk_rds: "/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/dev/SAVI/data/GSE226598_SAVI_pseudobulk_Sample_CellType.rds"
+  pseudobulk_h5ad: "/home/a1237163/lab/Mangiola_ImmuneAtlas/zenodo/pseudobulk_se.h5ad"
+  model_store_root: "/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/HPC_posterior/NEW_CELL_TYPE"
+  ndraws: 400
+  hierarchical_order:
+    - age_decade
+    - assay_groups_altered
+    - ethnicity_groups
+    - sex
+  seed: 42
+---
+
+# Purpose
+
+Minimal notebook to **tune marginalisation** of multiple unknown categorical fixed effects for gene-level Immune Atlas `brms` models under the **universal** healthy null (`offset = 0`, `tissue_groups = blood`, `disease_groups_altered = Normal`, other covariates `NA`).
+
+Use **`brms_universal_null_draws()`** to switch:
+
+- **`predict_type`**: `predict` (`posterior_predict`, observation noise) vs `epred` (`posterior_epred`, mean only)
+- **`marginalize_method`**: `sample`, `mean`, `pool`, `hierarchical`
+
+Evaluation: summary table, **% of SAVI donor × gene tests elevated vs baseline** by method, and a **facet grid** of density curves (rows = genes, cols = parameter combos) with SAVI sample locations.
+
+------------------------------------------------------------------------
+
+# Setup
+
+```{r}
+#| label: setup
+.libPaths("/hpcfs/users/a1237163/R/x86_64-pc-linux-gnu-library/4.5")
+
+library(tibble)
+library(tidyr)
+library(dplyr)
+library(purrr)
+library(ggplot2)
+library(SummarizedExperiment)
+library(S4Vectors)
+library(AnnotationDbi)
+library(org.Hs.eg.db)
+library(tidybulk)
+library(brms)
+library(poco)
+library(targets)
+library(Seurat)
+library(tidyseurat)
+library(tidySingleCellExperiment)
+library(tidySummarizedExperiment)
+library(progressr)
+```
+
+```{r}
+#| label: tuning-config
+set.seed(params$seed)
+
+hierarchical_order <- params$hierarchical_order
+
+marginalize_methods <- c("sample", "mean", "pool")
+
+method_grid <- tidyr::crossing(
+  predict_type = c("predict", "epred"),
+  marginalize_method = marginalize_methods
+) |>
+  dplyr::mutate(
+    method_label = paste(.data$predict_type, .data$marginalize_method, sep = " · ")
+  )
+
+method_grid
+```
+
+------------------------------------------------------------------------
+
+# Generic marginalisation API
+
+```{r}
+#| label: marginalize-api
+
+fit_levels <- function(fit, var) {
+  d <- fit$data
+  if (is.null(d) || !var %in% names(d)) return(character(0))
+  v <- d[[var]]
+  lv <- if (is.factor(v)) levels(v) else sort(unique(as.character(v)))
+  lv[!is.na(lv) & nzchar(lv)]
+}
+
+universal_baseline_new_level_tag <- "__universal_baseline__"
+
+newdata_universal_baseline <- function() {
+  tibble::tibble(
+    age_decade = NA_character_,
+    sex = NA_character_,
+    ethnicity_groups = NA_character_,
+    assay_groups_altered = NA_character_,
+    disease_groups_altered = "Normal",
+    tissue_groups = "blood",
+    offset = 0
+  )
+}
+
+build_newdata_grid <- function(
+  fit,
+  newdata,
+  marginalize_over = c("sex", "age_decade", "ethnicity_groups", "assay_groups_altered"),
+  required = c("tissue_groups", "offset", "disease_groups_altered"),
+  new_level_cols = "dataset_id_altered",
+  new_level_tag = universal_baseline_new_level_tag
+) {
+  stopifnot(NROW(newdata) == 1L)
+  newdata <- tibble::as_tibble(newdata)
+
+  is_blank <- function(v) {
+    length(v) == 0L ||
+      is.na(v[[1L]]) ||
+      (is.character(v[[1L]]) && !nzchar(v[[1L]]))
+  }
+
+  fit_vars <- colnames(fit$data)
+
+  for (col in required) {
+    if (!col %in% fit_vars) next
+    if (!col %in% names(newdata) || is_blank(newdata[[col]])) {
+      stop(sprintf("Required predictor `%s` is missing or empty in newdata.", col))
+    }
+  }
+
+  to_expand <- character(0)
+  for (col in marginalize_over) {
+    if (!col %in% fit_vars) next
+    if (!col %in% names(newdata) || is_blank(newdata[[col]])) {
+      to_expand <- c(to_expand, col)
+    }
+  }
+
+  if (length(to_expand)) {
+    levels_list <- lapply(to_expand, function(col) fit_levels(fit, col))
+    names(levels_list) <- to_expand
+    keep <- vapply(levels_list, length, integer(1L)) > 0L
+    levels_list <- levels_list[keep]
+    to_expand <- names(levels_list)
+  }
+
+  if (length(to_expand)) {
+    grid <- do.call(tidyr::expand_grid, levels_list)
+    rest <- newdata[, setdiff(names(newdata), to_expand), drop = FALSE]
+    out <- dplyr::bind_cols(
+      rest[rep(1L, nrow(grid)), , drop = FALSE],
+      grid
+    )
+  } else {
+    out <- newdata
+  }
+
+  for (col in new_level_cols) {
+    if (col %in% fit_vars) out[[col]] <- new_level_tag
+  }
+
+  tibble::as_tibble(out)
+}
+
+marginalize_draw_matrix <- function(
+  y_mat,
+  nd_grid,
+  method = c("pool", "sample", "mean", "hierarchical"),
+  hierarchical_order = c("age_decade", "assay_groups_altered", "ethnicity_groups", "sex")
+) {
+  method <- match.arg(method)
+  if (is.null(dim(y_mat))) {
+    return(as.numeric(y_mat))
+  }
+  if (ncol(y_mat) <= 1L) {
+    return(as.numeric(y_mat))
+  }
+
+  switch(
+    method,
+    sample = {
+      n <- nrow(y_mat)
+      idx <- sample.int(ncol(y_mat), n, replace = TRUE)
+      y_mat[cbind(seq_len(n), idx)]
+    },
+    mean = rowMeans(y_mat),
+    pool = as.numeric(y_mat),
+    hierarchical = {
+      mat <- y_mat
+      g <- tibble::as_tibble(nd_grid)
+      for (fac in hierarchical_order) {
+        if (!fac %in% names(g)) next
+        if (ncol(mat) <= 1L) break
+        if (dplyr::n_distinct(g[[fac]]) <= 1L) next
+
+        group_cols <- setdiff(names(g), fac)
+        if (!length(group_cols)) {
+          mat <- matrix(rowMeans(mat), nrow = nrow(mat), ncol = 1L)
+          break
+        }
+
+        grp_key <- interaction(g[group_cols], drop = TRUE, lex.order = FALSE)
+        idx_list <- split(seq_len(ncol(mat)), grp_key)
+        mat <- do.call(
+          cbind,
+          lapply(idx_list, function(idx) rowMeans(mat[, idx, drop = FALSE]))
+        )
+        g <- g |>
+          dplyr::mutate(.grp = grp_key) |>
+          dplyr::group_by(.grp) |>
+          dplyr::slice(1L) |>
+          dplyr::ungroup() |>
+          dplyr::select(dplyr::all_of(group_cols))
+      }
+
+      if (ncol(mat) == 1L) as.numeric(mat) else rowMeans(mat)
+    }
+  )
+}
+
+#' Draw from universal healthy null with configurable marginalisation.
+brms_universal_null_draws <- function(
+  fit,
+  newdata = newdata_universal_baseline(),
+  predict_type = c("predict", "epred"),
+  marginalize_method = c("pool", "sample", "mean", "hierarchical"),
+  marginalize_over = c("sex", "age_decade", "ethnicity_groups", "assay_groups_altered"),
+  required = c("tissue_groups", "offset", "disease_groups_altered"),
+  new_level_cols = "dataset_id_altered",
+  new_level_tag = universal_baseline_new_level_tag,
+  hierarchical_order = c("age_decade", "assay_groups_altered", "ethnicity_groups", "sex"),
+  re_formula = NULL,
+  allow_new_levels = TRUE,
+  sample_new_levels = "uncertainty",
+  ndraws = NULL
+) {
+  predict_type <- match.arg(predict_type)
+  marginalize_method <- match.arg(marginalize_method)
+
+  nd_grid <- build_newdata_grid(
+    fit,
+    newdata,
+    marginalize_over = marginalize_over,
+    required = required,
+    new_level_cols = new_level_cols,
+    new_level_tag = new_level_tag
+  )
+
+  pred_fun <- switch(
+    predict_type,
+    predict = brms::posterior_predict,
+    epred = brms::posterior_epred
+  )
+
+  y_mat <- pred_fun(
+    fit,
+    newdata = nd_grid,
+    summary = FALSE,
+    re_formula = re_formula,
+    allow_new_levels = allow_new_levels,
+    sample_new_levels = sample_new_levels,
+    ndraws = ndraws
+  )
+
+  y_rep <- marginalize_draw_matrix(
+    y_mat,
+    nd_grid,
+    method = marginalize_method,
+    hierarchical_order = hierarchical_order
+  )
+
+  list(
+    y_rep = y_rep,
+    n_draws = length(y_rep),
+    n_grid_rows = nrow(nd_grid),
+    predict_type = predict_type,
+    marginalize_method = marginalize_method
+  )
+}
+
+gene_deviation_from_draws <- function(y_rep, obs, alpha = 0.025) {
+  hpd <- if (requireNamespace("HDInterval", quietly = TRUE)) {
+    HDInterval::hdi(y_rep, credMass = 0.95)
+  } else {
+    stats::quantile(
+      y_rep,
+      probs = c(0.025, 0.975),
+      names = FALSE
+    )
+  }
+
+  p_above <- mean(y_rep >= obs)
+  p_below <- mean(y_rep <= obs)
+
+  tibble::tibble(
+    n_draws = length(y_rep),
+    healthy_median = stats::median(y_rep),
+    healthy_mean = mean(y_rep),
+    healthy_sd = stats::sd(y_rep),
+    healthy_hpd_lo = hpd[1],
+    healthy_hpd_hi = hpd[2],
+    healthy_hpd_width = hpd[2] - hpd[1],
+    p_above_healthy = p_above,
+    p_below_healthy = p_below,
+    direction = dplyr::case_when(
+      p_above < alpha ~ "higher_than_healthy",
+      p_below < alpha ~ "lower_than_healthy",
+      TRUE ~ "consistent_with_healthy"
+    )
+  )
+}
+```
+
+------------------------------------------------------------------------
+
+# STING signature biomarkers (21 genes)
+
+```{r}
+#| label: sting-signature
+sting_signature_21 <- tibble::tibble(
+  gene = c(
+    "AC253572.2", "ADRB2", "ANKRD28", "ANXA1", "AQP9", "AZIN1-AS1", "IL1B",
+    "JARID2", "KLF4", "MIR4435-2HG", "OTUD1", "PLAUR", "PTGS2", "PTX3",
+    "SELENOK", "TGIF1", "TREM1", "TSC22D2", "ZBTB43", "ZFP36L2", "ZNF503"
+  )
+) |>
+  dplyr::mutate(
+    .feature = AnnotationDbi::mapIds(
+      org.Hs.eg.db::org.Hs.eg.db,
+      keys = .data$gene,
+      column = "ENSEMBL",
+      keytype = "SYMBOL",
+      multiVals = "first"
+    )
+  )
+
+tibble::tibble(
+  signature_genes = nrow(sting_signature_21),
+  mapped_to_ensembl = sum(!is.na(sting_signature_21$.feature))
+)
+```
+
+------------------------------------------------------------------------
+
+# Data and fits (minimal)
+
+```{r}
+#| label: load-estimates
+sting_estimates_chunk <- readRDS(params$estimates_rds)
+
+tuning_fit_tbl <- sting_estimates_chunk |>
+  dplyr::filter(
+    .data$compression_ok == TRUE,
+    lengths(.data$brms_fit_compressed) > 0L
+  )
+
+if (!nrow(tuning_fit_tbl)) {
+  stop("No compressed biomarker fits in ", params$estimates_rds)
+}
+
+tuning_fit_tbl |>
+  dplyr::select(.feature, gene, compression_ok)
+```
+
+```{r}
+#| label: merge-scale-minimal
+
+model_path <- file.path(
+  params$model_store_root,
+  paste0("V1_", params$target_cell_type)
+)
+
+SAVI_pseudobulk_sobj <- readRDS(params$savi_pseudobulk_rds) |>
+  dplyr::filter(CellType == "17. Disease-associated monocytes")
+
+pseudobulk_sample <- targets::tar_read(
+  pseudobulk_sample,
+  store = file.path(model_path, "_targets")
+)
+
+pseudobulk_sample@assays@data@listData[["counts"]]@seed@seed@seed@filepath <-
+  params$pseudobulk_h5ad
+
+ref_sample <- pseudobulk_sample |>
+  dplyr::filter(offset == 0)
+
+SummarizedExperiment::colData(ref_sample)$sample_role <- "reference"
+
+counts_sym <- as.matrix(
+  tryCatch(
+    SeuratObject::LayerData(SAVI_pseudobulk_sobj, assay = "RNA", layer = "counts"),
+    error = function(e) {
+      Seurat::GetAssayData(SAVI_pseudobulk_sobj, assay = "RNA", slot = "counts")
+    }
+  )
+)
+
+sym <- rownames(counts_sym)
+ensg <- AnnotationDbi::mapIds(
+  org.Hs.eg.db::org.Hs.eg.db,
+  keys = sym,
+  column = "ENSEMBL",
+  keytype = "SYMBOL",
+  multiVals = "first"
+)
+keep <- !is.na(ensg) & !duplicated(ensg)
+counts_ens <- counts_sym[keep, , drop = FALSE]
+rownames(counts_ens) <- ensg[keep]
+
+cd_savi <- as.data.frame(SAVI_pseudobulk_sobj@meta.data)
+rownames(cd_savi) <- colnames(counts_ens)
+cd_savi$sample_role <- "savi_pseudobulk"
+cd_savi$offset <- 0L
+
+se_savi <- SummarizedExperiment::SummarizedExperiment(
+  assays = list(counts = counts_ens),
+  colData = S4Vectors::DataFrame(cd_savi, row.names = colnames(counts_ens))
+)
+
+# Union colData columns before bind (SAVI Seurat meta != atlas reference cols).
+merge_summarized_experiments <- function(...) {
+  ses <- list(...)
+  assay_names <- Reduce(intersect, lapply(ses, SummarizedExperiment::assayNames))
+  if (length(assay_names) == 0L) {
+    stop("No shared assays between SummarizedExperiment objects.")
+  }
+
+  genes <- Reduce(intersect, lapply(ses, rownames))
+  if (length(genes) == 0L) {
+    stop("No shared rownames between SummarizedExperiment objects.")
+  }
+
+  ses <- lapply(ses, function(se) se[genes, , drop = FALSE])
+
+  cds <- lapply(ses, function(se) as.data.frame(SummarizedExperiment::colData(se)))
+  all_nms <- Reduce(union, lapply(cds, names))
+  cds <- lapply(cds, function(cd) {
+    missing <- setdiff(all_nms, names(cd))
+    for (nm in missing) {
+      cd[[nm]] <- NA
+    }
+    cd[, all_nms, drop = FALSE]
+  })
+
+  assays <- stats::setNames(
+    lapply(assay_names, function(an) {
+      mats <- lapply(ses, function(se) {
+        base::as.matrix(SummarizedExperiment::assay(se, an))
+      })
+      do.call(base::cbind, mats)
+    }),
+    assay_names
+  )
+
+  SummarizedExperiment::SummarizedExperiment(
+    assays = assays,
+    colData = S4Vectors::DataFrame(
+      do.call(rbind, cds),
+      row.names = unlist(lapply(ses, colnames), use.names = FALSE)
+    ),
+    rowData = SummarizedExperiment::rowData(ses[[1]])
+  )
+}
+
+se_monocytic <- merge_summarized_experiments(se_savi, ref_sample)
+
+ref_sample_name <- se_monocytic |>
+  SummarizedExperiment::colData() |>
+  as.data.frame() |>
+  dplyr::filter(.data$sample_role == "reference") |>
+  tibble::rownames_to_column("sample") |>
+  dplyr::slice(1) |>
+  dplyr::pull(sample)
+
+se_monocytic <- se_monocytic |>
+  tidybulk::scale_abundance(
+    method = "TMMwsp",
+    reference_sample = ref_sample_name
+  ) |>
+  dplyr::mutate(offset = log(1 / multiplier))
+
+sample_annotations <- SummarizedExperiment::colData(se_monocytic) |>
+  as.data.frame() |>
+  tibble::rownames_to_column("sample") |>
+  dplyr::filter(.data$sample_role == "savi_pseudobulk") |>
+  dplyr::select("sample", tidyselect::any_of(c("Sample", "Category"))) |>
+  dplyr::distinct() |>
+  dplyr::filter(.data$Category == "SAVI") |>
+  dplyr::select("sample", tidyselect::any_of(c("Sample", "Category")))
+
+tuning_fit_tbl <- tuning_fit_tbl |>
+  dplyr::filter(.data$.feature %in% rownames(se_monocytic))
+
+biomarker_gene_order <- sting_signature_21$gene |>
+  unique() %>% 
+  .[. %in% tuning_fit_tbl$gene]
+
+biomarker_gene_order <- c(
+  biomarker_gene_order,
+  setdiff(tuning_fit_tbl$gene, biomarker_gene_order)
+)
+
+tuning_fit_tbl <- tuning_fit_tbl |>
+  dplyr::mutate(
+    gene = factor(.data$gene, levels = biomarker_gene_order)
+  ) |>
+  dplyr::arrange(.data$gene) |>
+  dplyr::mutate(gene = as.character(.data$gene))
+
+tibble::tibble(
+  n_genes_tuning = nrow(tuning_fit_tbl),
+  n_methods = nrow(method_grid),
+  n_savi_samples = nrow(sample_annotations),
+  n_savi_gene_tests_per_method = nrow(tuning_fit_tbl) * nrow(sample_annotations)
+)
+```
+
+------------------------------------------------------------------------
+
+# Run method grid
+
+```{r}
+#| label: run-tuning-grid
+
+run_null_for_gene_method <- function(gene_sym, method_row) {
+  chunk <- tuning_fit_tbl |>
+    dplyr::filter(.data$gene == .env$gene_sym) |>
+    dplyr::slice(1)
+
+  fit <- poco::reconstruct_brmsfit(chunk$brms_fit_compressed[[1]])
+
+  baseline <- brms_universal_null_draws(
+    fit,
+    predict_type = method_row$predict_type,
+    marginalize_method = method_row$marginalize_method,
+    hierarchical_order = hierarchical_order,
+    ndraws = params$ndraws
+  )
+
+  tibble::tibble(
+    gene = gene_sym,
+    .feature = chunk$.feature,
+    method_label = method_row$method_label,
+    predict_type = method_row$predict_type,
+    marginalize_method = method_row$marginalize_method,
+    n_grid_rows = baseline$n_grid_rows,
+    draws = list(baseline$y_rep)
+  )
+}
+
+with_progress({
+  p <- progressr::progressor(
+    steps = nrow(tuning_fit_tbl) * nrow(method_grid)
+  )
+
+  tuning_null_store <- purrr::pmap_dfr(
+    tidyr::crossing(
+      gene = tuning_fit_tbl$gene,
+      method_idx = seq_len(nrow(method_grid))
+    ),
+    function(gene, method_idx) {
+      p()
+      run_null_for_gene_method(gene, method_grid[method_idx, ])
+    }
+  )
+})
+
+tuning_null_long <- tuning_null_store |>
+  tidyr::unnest(tidyselect::all_of("draws")) |>
+  dplyr::rename(value = draws) |>
+  dplyr::mutate(
+    method_label = factor(
+      .data$method_label,
+      levels = method_grid$method_label
+    )
+  )
+
+tuning_null_store |>
+  dplyr::distinct(.data$gene, .data$method_label, .data$n_grid_rows) |>
+  dplyr::arrange(.data$gene, .data$method_label)
+```
+
+------------------------------------------------------------------------
+
+# Summary metrics (tail tests vs `counts_scaled`, SAVI donors only)
+
+**`tuning_summary`** compares the **SAVI-group median** per gene to each marginalised null. Per-donor tests are in **`tuning_sample_deviation`**; aggregated SAVI stats in **`tuning_savi_against_baseline`**.
+
+```{r}
+#| label: tuning-summary
+
+tuning_obs <- purrr::pmap_dfr(
+  tuning_fit_tbl[c("gene", ".feature")],
+  function(gene, .feature) {
+    idx <- match(
+      sample_annotations$sample,
+      colnames(se_monocytic)
+    )
+
+    purrr::map_dfr(seq_along(idx), function(i) {
+      obs <- SummarizedExperiment::assay(
+        se_monocytic[.feature, idx[i], drop = FALSE],
+        "counts_scaled"
+      ) |>
+        as.numeric()
+
+      tibble::tibble(
+        gene = gene,
+        sample = sample_annotations$sample[i],
+        observed_scaled = obs
+      )
+    })
+  }
+)
+
+tuning_summary <- purrr::map_dfr(
+  seq_len(nrow(tuning_null_store)),
+  function(i) {
+    row <- tuning_null_store[i, ]
+    obs_savi_med <- tuning_obs |>
+      dplyr::filter(.data$gene == row$gene) |>
+      dplyr::pull(.data$observed_scaled) |>
+      stats::median(na.rm = TRUE)
+
+    gene_deviation_from_draws(row$draws[[1L]], obs = obs_savi_med) |>
+      dplyr::mutate(
+        gene = row$gene,
+        .feature = row$.feature,
+        method_label = row$method_label,
+        predict_type = row$predict_type,
+        marginalize_method = row$marginalize_method,
+        n_grid_rows = row$n_grid_rows,
+        obs_median_savi = obs_savi_med,
+        .before = 1L
+      )
+  }
+) |>
+  dplyr::arrange(.data$gene, .data$healthy_hpd_width)
+
+tuning_summary |>
+  dplyr::count(.data$method_label, .data$direction)
+```
+
+# Narrowest healthy null per gene
+
+For each gene, the row with the smallest **`healthy_hpd_width`** (95% HPD of the marginalised null). Ties are broken by **`method_label`**.
+
+```{r}
+#| label: tuning-narrowest-hpd
+
+tuning_narrowest_hpd <- tuning_summary |>
+  dplyr::group_by(.data$gene) |>
+  dplyr::slice_min(.data$healthy_hpd_width, n = 1, with_ties = FALSE) |>
+  dplyr::ungroup() |>
+  dplyr::transmute(
+    gene,
+    narrowest_method = .data$method_label,
+    predict_type,
+    marginalize_method,
+    healthy_hpd_width,
+    healthy_hpd_lo,
+    healthy_hpd_hi,
+    n_draws,
+    n_grid_rows,
+    obs_median_savi,
+    p_above_healthy,
+    p_below_healthy,
+    direction
+  ) |>
+  dplyr::arrange(.data$gene)
+
+tuning_narrowest_hpd
+```
+
+```{r}
+#| label: tuning-narrowest-hpd-counts
+tuning_narrowest_hpd |>
+  dplyr::count(
+    .data$narrowest_method,
+    .data$predict_type,
+    .data$marginalize_method,
+    name = "n_genes"
+  ) |>
+  dplyr::arrange(dplyr::desc(.data$n_genes), .data$narrowest_method)
+```
+
+```{r}
+#| label: tuning-summary-wide
+
+make_tuning_summary_wide <- function(df) {
+  df |>
+    dplyr::select(
+      gene,
+      obs_median_savi,
+      method_label,
+      n_draws,
+      n_grid_rows,
+      healthy_hpd_width,
+      p_above_healthy,
+      p_below_healthy,
+      direction
+    ) |>
+    tidyr::pivot_wider(
+      id_cols = c(gene, obs_median_savi),
+      names_from = method_label,
+      values_from = c(
+        healthy_hpd_width,
+        p_above_healthy,
+        p_below_healthy,
+        direction
+      ),
+      names_sep = " | "
+    )
+}
+
+make_tuning_summary_wide(tuning_summary)
+```
+
+```{r}
+#| label: tuning-sample-deviation
+
+tuning_sample_deviation <- purrr::map_dfr(
+  seq_len(nrow(tuning_null_store)),
+  function(i) {
+    row <- tuning_null_store[i, ]
+    obs_gene <- tuning_obs |>
+      dplyr::filter(.data$gene == row$gene)
+
+    purrr::map_dfr(
+      seq_len(nrow(obs_gene)),
+      function(j) {
+        obs_row <- obs_gene[j, ]
+        gene_deviation_from_draws(
+          row$draws[[1L]],
+          obs = obs_row$observed_scaled
+        ) |>
+          dplyr::mutate(
+            gene = row$gene,
+            .feature = row$.feature,
+            sample = obs_row$sample,
+            observed_scaled = obs_row$observed_scaled,
+            method_label = row$method_label,
+            predict_type = row$predict_type,
+            marginalize_method = row$marginalize_method,
+            n_grid_rows = row$n_grid_rows,
+            .before = 1L
+          )
+      }
+    )
+  }
+)
+
+tuning_sample_deviation |>
+  dplyr::count(.data$method_label, .data$direction)
+```
+
+```{r}
+#| label: tuning-savi-against-baseline
+
+# Per SAVI donor × gene vs universal marginalised null.
+tuning_savi_deviation <- tuning_sample_deviation
+
+tuning_savi_against_baseline <- tuning_savi_deviation |>
+  dplyr::group_by(
+    .data$method_label,
+    .data$predict_type,
+    .data$marginalize_method
+  ) |>
+  dplyr::summarise(
+    n_savi_donors = dplyr::n_distinct(.data$sample),
+    n_gene_sample_tests = dplyr::n(),
+    n_higher_than_healthy = sum(
+      .data$direction == "higher_than_healthy",
+      na.rm = TRUE
+    ),
+    n_lower_than_healthy = sum(
+      .data$direction == "lower_than_healthy",
+      na.rm = TRUE
+    ),
+    n_consistent_with_healthy = sum(
+      .data$direction == "consistent_with_healthy",
+      na.rm = TRUE
+    ),
+    pct_higher_than_healthy = 100 * .data$n_higher_than_healthy / .data$n_gene_sample_tests,
+    pct_against_baseline = .data$pct_higher_than_healthy,
+    pct_not_consistent = 100 * (
+      1 - .data$n_consistent_with_healthy / .data$n_gene_sample_tests
+    ),
+    .groups = "drop"
+  ) |>
+  dplyr::arrange(dplyr::desc(.data$pct_against_baseline))
+
+# Donor-level: SAVI samples with at least one biomarker elevated (per method).
+tuning_savi_donor_against <- tuning_savi_deviation |>
+  dplyr::group_by(.data$method_label, .data$sample) |>
+  dplyr::summarise(
+    n_genes_tested = dplyr::n(),
+    n_genes_higher = sum(.data$direction == "higher_than_healthy", na.rm = TRUE),
+    any_higher_than_healthy = .data$n_genes_higher > 0L,
+    majority_higher = .data$n_genes_higher > (.data$n_genes_tested / 2),
+    .groups = "drop"
+  ) |>
+  dplyr::group_by(.data$method_label) |>
+  dplyr::summarise(
+    n_savi_donors = dplyr::n(),
+    n_donors_any_gene_higher = sum(.data$any_higher_than_healthy),
+    pct_donors_any_gene_higher = 100 * .data$n_donors_any_gene_higher / .data$n_savi_donors,
+    n_donors_majority_genes_higher = sum(.data$majority_higher),
+    pct_donors_majority_genes_higher = 100 * .data$n_donors_majority_genes_higher / .data$n_savi_donors,
+    .groups = "drop"
+  ) |>
+  dplyr::arrange(dplyr::desc(.data$pct_donors_any_gene_higher))
+
+tuning_savi_against_baseline
+```
+
+```{r}
+#| label: tuning-savi-against-by-gene
+tuning_savi_deviation |>
+  dplyr::group_by(.data$method_label, .data$gene) |>
+  dplyr::summarise(
+    n_savi_samples = dplyr::n(),
+    n_higher = sum(.data$direction == "higher_than_healthy", na.rm = TRUE),
+    pct_savi_higher = 100 * .data$n_higher / .data$n_savi_samples,
+    .groups = "drop"
+  ) |>
+  dplyr::arrange(.data$method_label, dplyr::desc(.data$pct_savi_higher))
+```
+
+------------------------------------------------------------------------
+
+# Density grid (rows = parameter combos, cols = genes)
+
+```{r}
+#| label: plot-biomarker-density-grid
+#| fig-width: 48
+#| fig-height: 14
+#| fig-align: center
+
+log1p_count_trans <- scales::trans_new(
+  name = "log1p",
+  transform = function(x) log1p(pmax(x, 0)),
+  inverse = function(x) expm1(x),
+  domain = c(0, Inf)
+)
+
+category_cols <- c(SAVI = "#E41A1C")
+
+gene_order <- biomarker_gene_order
+
+tuning_null_plot <- tuning_null_long |>
+  dplyr::filter(.data$gene %in% gene_order) |>
+  dplyr::mutate(
+    gene = factor(.data$gene, levels = gene_order),
+    method_label = factor(.data$method_label, levels = method_grid$method_label)
+  )
+
+tuning_obs_plot <- tuning_obs |>
+  dplyr::filter(.data$gene %in% gene_order) |>
+  dplyr::mutate(gene = factor(.data$gene, levels = gene_order)) |>
+  tidyr::crossing(
+    method_label = factor(method_grid$method_label, levels = method_grid$method_label)
+  )
+
+ggplot2::ggplot() +
+  ggplot2::geom_density(
+    data = tuning_null_plot,
+    ggplot2::aes(x = .data$value),
+    fill = "steelblue",
+    colour = "steelblue",
+    alpha = 0.25,
+    linewidth = 0.6,
+    na.rm = TRUE
+  ) +
+  ggplot2::geom_point(
+    data = tuning_obs_plot,
+    ggplot2::aes(x = .data$observed_scaled, y = 0),
+    colour = category_cols[["SAVI"]],
+    shape = 16,
+    size = 2,
+    alpha = 0.85
+  ) +
+  ggplot2::facet_grid(
+    method_label ~ gene,
+    scales = "free_y"
+  ) +
+  ggplot2::scale_x_continuous(trans = log1p_count_trans) +
+  ggplot2::labs(
+    x = expression(log[1 + p](counts_scaled)),
+    y = "Density",
+    title = "Universal null: density per gene \u00d7 method",
+    subtitle = "Red dots = SAVI donor counts_scaled"
+  ) +
+  ggplot2::theme_bw(base_size = 11) +
+  ggplot2::theme(
+    strip.text.y = ggplot2::element_text(angle = 0, face = "bold", size = 9),
+    strip.text.x = ggplot2::element_text(angle = 0, face = "bold", size = 9, vjust = 0.5, hjust = 0),
+    panel.spacing = ggplot2::unit(0.3, "lines")
+  ) -> plot
+
+print(plot)
+```
+
+------------------------------------------------------------------------
+
+# Random-effect tuning: `dataset_id_altered` handling
+
+Five strategies for the unknown random effect (`dataset_id_altered`), with fixed FE marginalisation (`predict · pool`).
+
+```{r}
+#| label: re-tuning-config
+
+re_known_dataset_id <- "9f222629-9e39-47d0-b83f-e08d610c7479"
+
+re_grid <- tibble::tribble(
+  ~re_label,              ~use_re_formula_na, ~dataset_id_value,                  ~allow_new_levels, ~sample_new_levels,
+  "Known dataset",        FALSE,              re_known_dataset_id,                FALSE,             "uncertainty",
+  "RE removed",           TRUE,               universal_baseline_new_level_tag,   FALSE,             "uncertainty",
+  "New · uncertainty",    FALSE,              universal_baseline_new_level_tag,   TRUE,              "uncertainty",
+  "New · gaussian",       FALSE,              universal_baseline_new_level_tag,   TRUE,              "gaussian",
+  "New · old_levels",     FALSE,              universal_baseline_new_level_tag,   TRUE,              "old_levels"
+)
+
+re_grid
+```
+
+## Run RE grid
+
+```{r}
+#| label: run-re-tuning-grid
+
+run_null_for_gene_re <- function(gene_sym, re_row) {
+  chunk <- tuning_fit_tbl |>
+    dplyr::filter(.data$gene == .env$gene_sym) |>
+    dplyr::slice(1)
+
+  fit <- poco::reconstruct_brmsfit(chunk$brms_fit_compressed[[1]])
+
+  re_formula_val <- if (re_row$use_re_formula_na) NA else NULL
+
+  baseline <- brms_universal_null_draws(
+    fit,
+    predict_type      = "predict",
+    marginalize_method = "pool",
+    hierarchical_order = hierarchical_order,
+    new_level_tag     = re_row$dataset_id_value,
+    re_formula        = re_formula_val,
+    allow_new_levels  = re_row$allow_new_levels,
+    sample_new_levels = re_row$sample_new_levels,
+    ndraws            = params$ndraws
+  )
+
+  tibble::tibble(
+    gene             = gene_sym,
+    .feature         = chunk$.feature,
+    re_label         = re_row$re_label,
+    n_grid_rows      = baseline$n_grid_rows,
+    draws            = list(baseline$y_rep)
+  )
+}
+
+re_label_levels <- re_grid$re_label
+
+with_progress({
+  p <- progressr::progressor(
+    steps = nrow(tuning_fit_tbl) * nrow(re_grid)
+  )
+
+  re_null_store <- purrr::pmap_dfr(
+    tidyr::crossing(
+      gene   = tuning_fit_tbl$gene,
+      re_idx = seq_len(nrow(re_grid))
+    ),
+    function(gene, re_idx) {
+      p()
+      run_null_for_gene_re(gene, re_grid[re_idx, ])
+    }
+  )
+})
+
+re_null_long <- re_null_store |>
+  tidyr::unnest(tidyselect::all_of("draws")) |>
+  dplyr::rename(value = draws) |>
+  dplyr::mutate(
+    re_label = factor(.data$re_label, levels = re_label_levels)
+  )
+
+re_null_store |>
+  dplyr::distinct(.data$gene, .data$re_label, .data$n_grid_rows) |>
+  dplyr::arrange(.data$gene, .data$re_label)
+```
+
+## RE summary metrics
+
+```{r}
+#| label: re-tuning-summary
+
+re_summary <- purrr::map_dfr(
+  seq_len(nrow(re_null_store)),
+  function(i) {
+    row <- re_null_store[i, ]
+    obs_savi_med <- tuning_obs |>
+      dplyr::filter(.data$gene == row$gene) |>
+      dplyr::pull(.data$observed_scaled) |>
+      stats::median(na.rm = TRUE)
+
+    gene_deviation_from_draws(row$draws[[1L]], obs = obs_savi_med) |>
+      dplyr::mutate(
+        gene         = row$gene,
+        .feature     = row$.feature,
+        re_label     = row$re_label,
+        n_grid_rows  = row$n_grid_rows,
+        obs_median_savi = obs_savi_med,
+        .before = 1L
+      )
+  }
+) |>
+  dplyr::arrange(.data$gene, .data$healthy_hpd_width)
+
+re_summary |>
+  dplyr::count(.data$re_label, .data$direction)
+```
+
+```{r}
+#| label: re-sample-deviation
+
+re_sample_deviation <- purrr::map_dfr(
+  seq_len(nrow(re_null_store)),
+  function(i) {
+    row <- re_null_store[i, ]
+    obs_gene <- tuning_obs |>
+      dplyr::filter(.data$gene == row$gene)
+
+    purrr::map_dfr(
+      seq_len(nrow(obs_gene)),
+      function(j) {
+        obs_row <- obs_gene[j, ]
+        gene_deviation_from_draws(
+          row$draws[[1L]],
+          obs = obs_row$observed_scaled
+        ) |>
+          dplyr::mutate(
+            gene            = row$gene,
+            .feature        = row$.feature,
+            sample          = obs_row$sample,
+            observed_scaled = obs_row$observed_scaled,
+            re_label        = row$re_label,
+            n_grid_rows     = row$n_grid_rows,
+            .before = 1L
+          )
+      }
+    )
+  }
+)
+
+re_sample_deviation |>
+  dplyr::count(.data$re_label, .data$direction)
+```
+
+```{r}
+#| label: re-savi-against-baseline
+
+re_savi_against_baseline <- re_sample_deviation |>
+  dplyr::group_by(.data$re_label) |>
+  dplyr::summarise(
+    n_savi_donors              = dplyr::n_distinct(.data$sample),
+    n_gene_sample_tests        = dplyr::n(),
+    n_higher_than_healthy      = sum(.data$direction == "higher_than_healthy", na.rm = TRUE),
+    n_lower_than_healthy       = sum(.data$direction == "lower_than_healthy", na.rm = TRUE),
+    n_consistent_with_healthy  = sum(.data$direction == "consistent_with_healthy", na.rm = TRUE),
+    pct_higher_than_healthy    = 100 * .data$n_higher_than_healthy / .data$n_gene_sample_tests,
+    pct_against_baseline       = .data$pct_higher_than_healthy,
+    pct_not_consistent         = 100 * (1 - .data$n_consistent_with_healthy / .data$n_gene_sample_tests),
+    .groups = "drop"
+  ) |>
+  dplyr::arrange(dplyr::desc(.data$pct_against_baseline))
+
+re_savi_against_baseline
+```
+
+## RE density grid (rows = RE strategy, cols = genes)
+
+```{r}
+#| label: plot-re-density-grid
+#| fig-width: 48
+#| fig-height: 12
+#| fig-align: center
+
+re_null_plot <- re_null_long |>
+  dplyr::filter(.data$gene %in% gene_order) |>
+  dplyr::mutate(
+    gene     = factor(.data$gene, levels = gene_order),
+    re_label = factor(.data$re_label, levels = re_label_levels)
+  )
+
+re_obs_plot <- tuning_obs |>
+  dplyr::filter(.data$gene %in% gene_order) |>
+  dplyr::mutate(gene = factor(.data$gene, levels = gene_order)) |>
+  tidyr::crossing(
+    re_label = factor(re_label_levels, levels = re_label_levels)
+  )
+
+ggplot2::ggplot() +
+  ggplot2::geom_density(
+    data = re_null_plot,
+    ggplot2::aes(x = .data$value),
+    fill   = "steelblue",
+    colour = "steelblue",
+    alpha  = 0.25,
+    linewidth = 0.6,
+    na.rm  = TRUE
+  ) +
+  ggplot2::geom_point(
+    data = re_obs_plot,
+    ggplot2::aes(x = .data$observed_scaled, y = 0),
+    colour = category_cols[["SAVI"]],
+    shape  = 16,
+    size   = 2,
+    alpha  = 0.85
+  ) +
+  ggplot2::facet_grid(
+    re_label ~ gene,
+    scales = "free_y"
+  ) +
+  ggplot2::scale_x_continuous(trans = log1p_count_trans) +
+  ggplot2::labs(
+    x        = expression(log[1 + p](counts_scaled)),
+    y        = "Density",
+    title    = "Random-effect tuning: dataset_id_altered strategy comparison",
+    subtitle = "FE fixed at predict \u00b7 pool.  Red dots = SAVI donor counts_scaled"
+  ) +
+  ggplot2::theme_bw(base_size = 11) +
+  ggplot2::theme(
+    strip.text.y  = ggplot2::element_text(angle = 0, face = "bold", size = 9),
+    strip.text.x  = ggplot2::element_text(angle = 0, face = "bold", size = 9, vjust = 0.5, hjust = 0),
+    panel.spacing = ggplot2::unit(0.3, "lines")
+  ) -> re_plot
+
+print(re_plot)
+```
+
+------------------------------------------------------------------------
+
+# Notes
+
+## Fixed-effect marginalisation methods
+
+| Method | Behaviour |
+|--------|-----------|
+| **`sample`** | One random grid profile per MCMC draw (uniform discrete marginal). |
+| **`mean`** | `rowMeans` over full grid per draw. |
+| **`pool`** | Uniform mixture: all draw × grid values (`as.numeric(y_rep_mat)`; ~`ndraws` × `n_grid_rows` per gene). |
+
+- **`hierarchical`** is available in the function API but not included in the tuning grid.
+- Use **`predict_type = "predict"`** when comparing to observed **`counts_scaled`**.
+- **`epred`** curves are on the mean scale — compare methods to each other, not directly to count points.
+- **`pool`** is the heaviest method (e.g. 400 × 840 ≈ 336k draws per gene); subset genes in `tuning_fit_tbl` if render time or memory is tight.
+
+## Random-effect (`dataset_id_altered`) strategies
+
+| Strategy | `re_formula` | `dataset_id_altered` | `allow_new_levels` | `sample_new_levels` | Behaviour |
+|----------|-------------|---------------------|-------------------|--------------------|----|
+| **Known dataset** | `NULL` | real UUID | `FALSE` | — | Use a real-world dataset intercept to see how wide the baseline is for a known study. |
+| **RE removed** | `NA` | — | — | — | Population-level prediction only; random effects excluded entirely. |
+| **New · uncertainty** | `NULL` | new level | `TRUE` | `"uncertainty"` | Default: sample from existing levels with posterior uncertainty. |
+| **New · gaussian** | `NULL` | new level | `TRUE` | `"gaussian"` | Model-based: a fresh dataset intercept drawn from N(0, sd_dataset_id_altered). |
+| **New · old_levels** | `NULL` | new level | `TRUE` | `"old_levels"` | Reuse existing group-level effects by sampling from observed levels. |
+
+## General
+
+- **Against baseline** (`tuning-savi-against-baseline`): SAVI donors only; `pct_against_baseline` = % of biomarker × donor tests with `direction == higher_than_healthy` (also `pct_donors_any_gene_higher` = % of SAVI donors with ≥1 elevated gene).

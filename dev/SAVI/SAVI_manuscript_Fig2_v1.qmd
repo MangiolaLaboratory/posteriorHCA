@@ -1,0 +1,2770 @@
+---
+title: "posteriorHCA Figure 2 — SAVI manuscript figure (v1)"
+subtitle: "External population-reference audit of a published STING-activation signature"
+date: today
+date-format: "DD MMM YYYY"
+title-block-banner: true
+author:
+  - name: Chen Zhan
+    orcid: 0000-0002-4794-8339
+    email: chen.zhan@adelaide.edu.au
+    affiliation:
+      - id: sgc
+        name: SAiGENCI, The University of Adelaide
+format:
+  html:
+    theme: minty
+    df-print: paged
+    code-line-numbers: true
+    embed-resources: true
+    code-fold: true
+    code-fold-default: true
+    toc: true
+    toc-location: left
+    toc-title: "Contents"
+knitr:
+  opts_chunk:
+    message: false
+    warning: false
+    fig.retina: 2
+editor: source
+abstract: |
+  Fresh v1 manuscript-figure report for the SAVI case (Nature Methods
+  double-column canvas, max 183 mm × 220 mm; no panel titles/subtitles).
+  Panel a freezes the observed cohort design with documented age imputation
+  for GEO non-numeric ages, and regenerates healthy-blood support from the
+  production `V1_monocytic` model frame. Panel b compares observed SAVI
+  composition (CellType → Immune Atlas L3 → paper compartments) to a
+  comprehensive healthy sccomp baseline. Panel c places the 16 covered STING
+  signature genes against a comprehensive healthy log-μ baseline, an *ADRB2*
+  personalised predictive check, and *ADRB2* UMAPs (all donors vs without
+  high-depth `P6_STING_ht`).
+params:
+  case_dir: "/home/a1237163/lab/chen/posteriorHCA/dev/SAVI"
+  fig_dir: "/home/a1237163/lab/chen/posteriorHCA/dev/SAVI/figures"
+  data_dir: "/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/dev/SAVI/data"
+  model_store_root: "/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/HPC_posterior/NEW_CELL_TYPE"
+  target_cell_type: "monocytic"
+  fig_width_mm: 183
+  fig_height_mm: 220
+  panel_a_height_mm: 58
+  savi_seurat_gz: "/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/dev/SAVI/data/GSE226598_SeuratObject_SAVI.rds.gz"
+  sccomp_estimates_rds: "/home/a1237163/lab/Mangiola_ImmuneAtlas/taskforce_shared_folder/sccomp_on_cellNexus_1_0_12/estimates_age_decade___L3___disease_TRUE___immune_only_TRUE.rds"
+  composition_predict_rds: "/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/dev/SAVI/data/SAVI_composition_predict_res_comprehensive_10x3.rds"
+  composition_predict_personalised_rds: "/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/dev/SAVI/data/SAVI_composition_predict_res_personalised_untreated_10x3.rds"
+  panel_b_counts_rds: "/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/dev/SAVI/data/SAVI_panel_b_celltype_counts.rds"
+  panel_b_savi_fit_rds: "/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/dev/SAVI/data/SAVI_panel_b_sccomp_shared15_untreated_control_hmc.rds"
+  panel_b_savi_group_only_fit_rds: "/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/dev/SAVI/data/SAVI_panel_b_sccomp_shared15_untreated_control_group_only_v1.rds"
+  run_sccomp_panel_b: false
+  panel_b_prediction_draws: 4000
+  panel_b_rope_pp: 1
+  panel_b_pair_draws: 20000
+  estimates_rds: "/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/dev/SAVI/data/SAVI_estimates_chunk.rds"
+  panel_c_se_rds: "/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/dev/SAVI/data/SAVI_panel_c_se_monocytic.rds"
+  panel_c_mu_density_rds: "/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/dev/SAVI/data/SAVI_panel_c_comprehensive_mu_density_v1.rds"
+  panel_c_adrb2_personalised_rds: "/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/dev/SAVI/data/SAVI_panel_c_adrb2_personalised_predict_v1.rds"
+  run_panel_c_rebuild: false
+  savi_sc_celltype: "17. Disease-associated monocytes"
+  adrb2_outlier_sample: "P6_STING_ht"
+---
+
+# Scope
+
+**This report (v1).** Build the manuscript multipanel from audited tables.
+**Panels a–c are in progress** (a–b complete; c1–c3 gene-level panels). Helper
+functions and `theme_multipanel` live in this file.
+
+**Colour / mark grammar.**
+
+| Element | Legend (full) | Plot text (short) | Encoding |
+|---|---|---|---|
+| Study healthy control | Control | CTRL | green `#009E73`, circle |
+| Pre-therapy SAVI | Untreated SAVI | Untreated | vermilion `#D55E00`, diamond |
+| Post–JAK-inhibitor SAVI | JAK-inhibitor treated | Treated | purple `#7A5195`, square |
+| Sex | female / male | — | `RColorBrewer` PRGn (`colmap_sex`) |
+| Comprehensive HCA | — | — | charcoal grey |
+| Metadata-conditioned HCA | — | — | teal |
+
+Figure panels follow Nature Methods style: axis labels and legends only
+(no plot titles or subtitles); canvas ≤ 183 mm wide × 220 mm high.
+Continuous **y-axis** tick labels drop the leading zero on decimals
+(`0.1` → `.1`) via `label_drop_leading_zero()`.
+
+------------------------------------------------------------------------
+
+# Setup
+
+```{r}
+#| label: setup
+
+suppressPackageStartupMessages({
+  library(tibble)
+  library(dplyr)
+  library(tidyr)
+  library(stringr)
+  library(ggplot2)
+  library(patchwork)
+  library(targets)
+  library(SummarizedExperiment)
+  library(scales)
+  library(RColorBrewer)
+  library(sccomp)
+  library(edgeR)
+  library(brms)
+  library(forcats)
+  library(Seurat)
+  library(SeuratObject)
+})
+
+options(bitmapType = "cairo")
+dir.create(params$fig_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(params$data_dir, recursive = TRUE, showWarnings = FALSE)
+
+model_path <- file.path(
+  params$model_store_root,
+  paste0("V1_", params$target_cell_type)
+)
+
+mm_to_in <- function(mm) mm / 25.4
+fig_w_in <- mm_to_in(params$fig_width_mm)
+fig_h_in <- mm_to_in(params$fig_height_mm)
+panel_a_h_in <- mm_to_in(params$panel_a_height_mm)
+
+# Arcsine–square-root transform for composition proportions (same as posteriorHCA).
+arcsine_sqrt_trans <- scales::trans_new(
+  "arcsine_sqrt",
+  transform = function(x) asin(sqrt(pmax(pmin(x, 1), 0))),
+  inverse = function(x) sin(x)^2
+)
+
+read_geo_rds_gz <- function(path) {
+  con <- gzcon(gzfile(path))
+  on.exit(close(con), add = TRUE)
+  readRDS(con)
+}
+
+# Figure grammar colours.
+col_ctrl <- "#009E73"
+col_untreated <- "#D55E00"
+col_treated <- "#7A5195"
+col_hca <- "#8C8C8C"
+col_meta <- "#2A9D8F"
+col_dark <- "#3F3F3F"
+col_mid <- "#777777"
+col_light <- "#D9D9D9"
+
+colmap_sex <- setNames(
+  RColorBrewer::brewer.pal(3, "PRGn")[c(1, 3)],
+  c("female", "male")
+)
+
+state_levels <- c("control", "untreated", "treated")
+state_labels <- c(
+  control = "Control",
+  untreated = "Untreated SAVI",
+  treated = "JAK-inhibitor treated"
+)
+state_labels_short <- c(
+  control = "CTRL",
+  untreated = "Untreated",
+  treated = "Treated"
+)
+state_colours <- c(
+  control = col_ctrl,
+  untreated = col_untreated,
+  treated = col_treated
+)
+state_shapes <- c(control = 21, untreated = 23, treated = 22)
+
+theme_multipanel <-
+  theme_bw() +
+  theme(
+    panel.border = element_blank(),
+    axis.line = element_line(linewidth = 0.1),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    legend.position = "bottom",
+    strip.background = element_blank(),
+    axis.title.y = element_text(margin = margin(0, 0, 0, 0), size = 7),
+    axis.title.x = element_text(margin = margin(0, 0, 0, 0), size = 7),
+    panel.spacing.x = unit(0.1, "lines"),
+    axis.text.x = element_text(size = 6),
+    axis.text.y = element_text(size = 6),
+    strip.text.x = element_text(size = 7),
+    strip.text.y = element_text(size = 7),
+    legend.key.size = unit(4, "mm"),
+    legend.title = element_text(size = 7),
+    legend.text = element_text(size = 6),
+    strip.clip = "off",
+    plot.title = element_blank(),
+    plot.subtitle = element_blank(),
+    plot.tag = element_text(size = 8, face = "bold"),
+    axis.line.x = element_line(linewidth = 0.2),
+    axis.line.y = element_line(linewidth = 0.2),
+    axis.ticks.x = element_line(linewidth = 0.2),
+    axis.ticks.y = element_line(linewidth = 0.2),
+    plot.margin = margin(2, 4, 2, 2)
+  )
+
+# Y-axis labels: drop the leading zero on decimals (0.1 -> .1; -0.1 -> -.1).
+label_drop_leading_zero <- function(accuracy = NULL, ...) {
+  function(x) {
+    s <- scales::number(
+      x,
+      accuracy = accuracy,
+      big.mark = "",
+      trim = TRUE,
+      ...
+    )
+    s[!is.na(x) & x == 0] <- "0"
+    sub("^(-?)0\\.", "\\1.", s)
+  }
+}
+
+# Default continuous y scale for plots that do not set labels explicitly.
+options(
+  ggplot2.continuous.y = function() {
+    ggplot2::scale_y_continuous(labels = label_drop_leading_zero())
+  }
+)
+```
+
+------------------------------------------------------------------------
+
+# Panel a — Observed cohort design and HCA training support
+
+**Purpose.** Show what posteriorHCA can condition on: library ages (including
+documented imputations), sequencing batches / chemistry, repeated measures,
+family links, and unique healthy-blood donor age support in the frozen
+`V1_monocytic` frame.
+
+**Age imputation (same rule as the SAVI case-study reports).** GEO lists
+non-numeric ages for three libraries. We fill numeric years so every library
+can sit on the age axis and feed decade-based models:
+
+| Sample(s) | GEO label | Imputed `age_years` | Rationale |
+|-----------|-----------|---------------------|-----------|
+| **C1**, **C2** | Adult | **35** | Mean of adult controls with numeric ages (**C8** 36 y, **C9** 35 y). |
+| **P5_STING** | Ped | **8** | Central paediatric value among other SAVI / control ages in the series. |
+
+All other donors keep GEO-reported ages. `age_imputed = TRUE` only for C1, C2,
+and P5.
+
+## Freeze the 17-library source metadata table
+
+Ages, sex and STING batch from GEO GSE226598; subject / family / treatment
+annotations from de Cevins *et al.* (2023) Fig. 1a. Chemistry: STING1 = 10x 3′
+v2; STING2 / STING3 = 10x 3′ v3.
+
+```{r}
+#| label: panel-a-savi-libraries
+
+savi_libraries <- tibble::tribble(
+  ~library_id,          ~subject_id, ~state,      ~sex,     ~age_years, ~age_imputed, ~sting_batch, ~chemistry,   ~family_role,              ~tx_label,
+  "C7",                 "C7",        "control",   "female",         5,        FALSE, "STING1",     "10x 3′ v2",  NA_character_,             NA_character_,
+  "C8_aunt_P1_STING",   "C8",        "control",   "female",        36,        FALSE, "STING1",     "10x 3′ v2",  "paternal aunt of P1",     NA_character_,
+  "C9_mother_P1_STING", "C9",        "control",   "female",        35,        FALSE, "STING1",     "10x 3′ v2",  "mother of P1",            NA_character_,
+  "P1_STING_ht",        "P1",        "untreated", "female",         4,        FALSE, "STING1",     "10x 3′ v2",  "proband",                 NA_character_,
+  "P1_STING_ht_T",      "P1",        "treated",   "female",         8,        FALSE, "STING1",     "10x 3′ v2",  "proband",                 "R52",
+  "P1_STING_ht_T2",     "P1",        "treated",   "female",         8,        FALSE, "STING1",     "10x 3′ v2",  "proband",                 "T2",
+  "P2_STING_ht",        "P2",        "untreated", "male",          31,        FALSE, "STING1",     "10x 3′ v2",  "uncle of P1",             NA_character_,
+  "P2_STING_ht_T",      "P2",        "treated",   "male",          34,        FALSE, "STING1",     "10x 3′ v2",  "uncle of P1",             "R1",
+  "C10",                "C10",       "control",   "male",          10,        FALSE, "STING2",     "10x 3′ v3",  NA_character_,             NA_character_,
+  "C11",                "C11",       "control",   "male",          16,        FALSE, "STING2",     "10x 3′ v3",  NA_character_,             NA_character_,
+  "P4_STING_ht",        "P4",        "untreated", "male",           7,        FALSE, "STING2",     "10x 3′ v3",  NA_character_,             NA_character_,
+  "P4_STING_ht_T",      "P4",        "treated",   "male",           9,        FALSE, "STING2",     "10x 3′ v3",  NA_character_,             "R13",
+  "P6_STING_ht",        "P6",        "untreated", "male",           8,        FALSE, "STING2",     "10x 3′ v3",  NA_character_,             NA_character_,
+  "P6_STING_ht_T",      "P6",        "treated",   "male",          10,        FALSE, "STING2",     "10x 3′ v3",  NA_character_,             "R13",
+  "C1",                 "C1",        "control",   "male",          35,         TRUE, "STING3",     "10x 3′ v3",  NA_character_,             NA_character_,
+  "C2",                 "C2",        "control",   "male",          35,         TRUE, "STING3",     "10x 3′ v3",  NA_character_,             NA_character_,
+  "P5_STING",           "P5",        "untreated", "male",           8,         TRUE, "STING3",     "10x 3′ v3",  NA_character_,             NA_character_
+) |>
+  dplyr::mutate(
+    state = factor(state, levels = state_levels),
+    sex = factor(sex, levels = c("female", "male")),
+    batch_row = factor(
+      paste0(sting_batch, " · ", dplyr::recode(chemistry, "10x 3′ v2" = "v2", "10x 3′ v3" = "v3")),
+      levels = c("STING1 · v2", "STING2 · v3", "STING3 · v3")
+    ),
+    display_id = dplyr::case_when(
+      subject_id %in% c("C1", "C2") ~ subject_id,
+      subject_id == "P5" ~ "P5",
+      !is.na(tx_label) ~ tx_label,
+      state == "untreated" ~ subject_id,
+      TRUE ~ NA_character_
+    )
+  )
+
+savi_libraries
+```
+
+## Lane offsets and subject connectors
+
+Vertical jitter within a batch row keeps co-located libraries readable. Label
+offsets are hand-tuned for the STING2 7–10 cluster, the P1 R52/T2 stack, and
+imputed C1/C2 at age 35.
+
+```{r}
+#| label: panel-a-lane-offsets
+
+assign_lanes <- function(df, lane_step = 0.32) {
+  df |>
+    dplyr::group_by(batch_row, age_years) |>
+    dplyr::arrange(state, subject_id, library_id, .by_group = TRUE) |>
+    dplyr::mutate(
+      lane = (dplyr::row_number() - (dplyr::n() + 1) / 2) * lane_step,
+      y_plot = as.numeric(batch_row) + lane
+    ) |>
+    dplyr::ungroup()
+}
+
+label_offset_tbl <- tibble::tribble(
+  ~library_id,       ~label_dx, ~label_dy,
+  "P1_STING_ht",           0.0,      0.40,
+  "P1_STING_ht_T",        -2.0,      0.48,
+  "P1_STING_ht_T2",        2.0,     -0.48,
+  "P2_STING_ht",           0.0,      0.40,
+  "P2_STING_ht_T",         0.0,      0.40,
+  "P4_STING_ht",          -0.9,      0.48,
+  "P6_STING_ht",          -0.9,     -0.48,
+  "P4_STING_ht_T",         0.9,      0.48,
+  "P6_STING_ht_T",         0.9,     -0.48,
+  "P5_STING",              0.0,      0.40,
+  "C1",                   -1.2,      0.40,
+  "C2",                    1.2,     -0.40
+)
+
+savi_plot <- savi_libraries |>
+  assign_lanes() |>
+  dplyr::left_join(label_offset_tbl, by = "library_id") |>
+  dplyr::mutate(
+    label_dx = dplyr::coalesce(label_dx, 0),
+    label_dy = dplyr::coalesce(label_dy, 0.40)
+  )
+
+savi_connectors <- savi_plot |>
+  dplyr::group_by(subject_id) |>
+  dplyr::filter(dplyr::n() > 1L) |>
+  dplyr::arrange(age_years, state, library_id, .by_group = TRUE) |>
+  dplyr::ungroup()
+```
+
+## Regenerate frozen `V1_monocytic` healthy-blood support
+
+No-refit audit from the production `pseudobulk_sample` target: healthy blood
+(`tissue_groups == "blood"`, `disease_groups___altered == "Normal"`), then
+deduplicate by `donor_id`.
+
+```{r}
+#| label: panel-a-hca-support
+
+pseudobulk_sample <- targets::tar_read(
+  pseudobulk_sample,
+  store = file.path(model_path, "_targets")
+)
+
+hca_healthy_blood <- SummarizedExperiment::colData(pseudobulk_sample) |>
+  as.data.frame() |>
+  tibble::as_tibble() |>
+  dplyr::filter(
+    .data$tissue_groups == "blood",
+    as.character(.data$disease_groups___altered) == "Normal"
+  ) |>
+  dplyr::mutate(
+    age_years = as.numeric(.data$age_years),
+    sex = as.character(.data$sex),
+    assay_groups_altered = as.character(.data$assay_groups___altered),
+    dataset_id_altered = as.character(.data$dataset_id___altered)
+  )
+
+hca_donors <- hca_healthy_blood |>
+  dplyr::group_by(.data$donor_id) |>
+  dplyr::summarise(
+    sex = dplyr::first(stats::na.omit(.data$sex)),
+    age_years = stats::median(.data$age_years, na.rm = TRUE),
+    n_samples = dplyr::n(),
+    .groups = "drop"
+  ) |>
+  dplyr::mutate(sex = factor(.data$sex, levels = c("female", "male")))
+
+hca_support_summary <- tibble::tibble(
+  n_donors = nrow(hca_donors),
+  n_samples = nrow(hca_healthy_blood),
+  n_datasets = dplyr::n_distinct(hca_healthy_blood$dataset_id_altered),
+  n_assay_groups = dplyr::n_distinct(hca_healthy_blood$assay_groups_altered),
+  n_samples_10x3 = sum(
+    hca_healthy_blood$assay_groups_altered == "10x Genomics 3",
+    na.rm = TRUE
+  ),
+  age_min = min(hca_donors$age_years, na.rm = TRUE),
+  age_max = max(hca_donors$age_years, na.rm = TRUE)
+)
+
+overlap_hits <- hca_healthy_blood |>
+  dplyr::mutate(
+    haystack = paste(
+      dplyr::coalesce(as.character(.data$sample_id), ""),
+      dplyr::coalesce(as.character(.data$dataset_id), ""),
+      dplyr::coalesce(as.character(.data$title), ""),
+      dplyr::coalesce(as.character(.data$citation), ""),
+      dplyr::coalesce(as.character(.data$url), ""),
+      sep = " "
+    )
+  ) |>
+  dplyr::filter(
+    stringr::str_detect(
+      .data$haystack,
+      stringr::regex("GSE226598|GSM70799|de Cevins|SAVI", ignore_case = TRUE)
+    )
+  )
+
+overlap_status <- if (nrow(overlap_hits) == 0L) {
+  "absent (no GSE226598 / SAVI string match)"
+} else {
+  sprintf("observed (%d rows matched)", nrow(overlap_hits))
+}
+
+hca_support_summary
+```
+
+Age support for each SAVI library relative to observed HCA donor ages:
+
+```{r}
+#| label: panel-a-support-flags
+
+age_support <- range(hca_donors$age_years, na.rm = TRUE)
+
+savi_query_support <- savi_libraries |>
+  dplyr::mutate(
+    support_flag = dplyr::if_else(
+      age_years >= age_support[1] & age_years <= age_support[2],
+      "observed",
+      "outside support"
+    ),
+    assay_support = dplyr::if_else(
+      hca_support_summary$n_samples_10x3 > 0L,
+      "observed (harmonised 10x Genomics 3)",
+      "outside support"
+    )
+  )
+
+savi_query_support |>
+  dplyr::count(age_imputed, support_flag, assay_support)
+```
+
+## Draw panel A
+
+```{r}
+#| label: panel-a-helpers
+
+plot_panel_a_collections <- function(plot_df, connector_df) {
+  y_labs <- levels(plot_df$batch_row)
+
+  ggplot2::ggplot() +
+    ggplot2::geom_hline(
+      yintercept = seq_along(y_labs),
+      colour = col_light,
+      linewidth = 0.25
+    ) +
+    ggplot2::geom_path(
+      data = connector_df,
+      ggplot2::aes(x = age_years, y = y_plot, group = subject_id),
+      colour = col_mid,
+      linewidth = 0.35,
+      alpha = 0.85
+    ) +
+    ggplot2::geom_point(
+      data = plot_df,
+      ggplot2::aes(
+        x = age_years,
+        y = y_plot,
+        shape = state,
+        colour = state,
+        fill = sex
+      ),
+      size = 1.7,
+      stroke = 0.45
+    ) +
+    ggplot2::geom_segment(
+      data = plot_df |> dplyr::filter(!is.na(display_id)),
+      ggplot2::aes(
+        x = age_years,
+        xend = age_years + label_dx,
+        y = y_plot,
+        yend = y_plot + label_dy
+      ),
+      colour = col_mid,
+      linewidth = 0.2,
+      alpha = 0.7
+    ) +
+    ggplot2::geom_text(
+      data = plot_df |> dplyr::filter(!is.na(display_id)),
+      ggplot2::aes(
+        x = age_years + label_dx,
+        y = y_plot + label_dy,
+        label = display_id
+      ),
+      size = 2.5,
+      colour = col_dark,
+      vjust = 0.5,
+      hjust = 0.5
+    ) +
+    ggplot2::scale_shape_manual(
+      values = state_shapes,
+      labels = state_labels,
+      name = NULL,
+      guide = ggplot2::guide_legend(order = 1, override.aes = list(fill = "white"))
+    ) +
+    ggplot2::scale_colour_manual(
+      values = state_colours,
+      labels = state_labels,
+      name = NULL,
+      guide = ggplot2::guide_legend(order = 1)
+    ) +
+    ggplot2::scale_fill_manual(
+      values = colmap_sex,
+      breaks = c("female", "male"),
+      labels = c("female", "male"),
+      name = NULL,
+      guide = ggplot2::guide_legend(
+        order = 2,
+        override.aes = list(shape = 21, colour = col_dark)
+      )
+    ) +
+    ggplot2::scale_y_continuous(
+      breaks = seq_along(y_labs),
+      labels = y_labs,
+      limits = c(0.25, length(y_labs) + 0.75)
+    ) +
+    ggplot2::scale_x_continuous(
+      limits = c(0, 40),
+      breaks = seq(0, 40, by = 10),
+      expand = ggplot2::expansion(mult = c(0.01, 0.02))
+    ) +
+    ggplot2::coord_cartesian(clip = "off") +
+    ggplot2::labs(x = "Age at collection (years)", y = NULL) +
+    theme_multipanel +
+    ggplot2::theme(
+      legend.position = "bottom",
+      legend.box = "horizontal",
+      legend.margin = margin(0, 0, 0, 0),
+      axis.line.y = element_blank(),
+      axis.ticks.y = element_blank()
+    )
+}
+
+plot_panel_a_hca_continuous <- function(donors, savi_marks) {
+  brks <- seq(0, 90, by = 10)
+
+  hist_counts <- donors |>
+    dplyr::mutate(
+      bin_i = pmin(
+        findInterval(.data$age_years, brks, all.inside = TRUE),
+        length(brks) - 1L
+      )
+    ) |>
+    dplyr::count(bin_i, sex, name = "n") |>
+    tidyr::complete(
+      bin_i = seq_len(length(brks) - 1L),
+      sex = factor(c("female", "male"), levels = c("female", "male")),
+      fill = list(n = 0L)
+    ) |>
+    dplyr::left_join(
+      tibble::tibble(
+        bin_i = seq_len(length(brks) - 1L),
+        xmid = (brks[-length(brks)] + brks[-1]) / 2
+      ),
+      by = "bin_i"
+    ) |>
+    dplyr::mutate(sex = factor(sex, levels = c("male", "female")))
+
+  age_marks <- savi_marks |>
+    dplyr::distinct(age_years, sex) |>
+    dplyr::mutate(sex = factor(sex, levels = c("female", "male")))
+
+  ggplot2::ggplot(hist_counts, ggplot2::aes(x = xmid, y = n, fill = sex)) +
+    ggplot2::geom_col(width = 9.2, colour = NA) +
+    ggplot2::geom_vline(
+      data = age_marks,
+      ggplot2::aes(xintercept = age_years, colour = sex),
+      linewidth = 0.35,
+      alpha = 0.95
+    ) +
+    ggplot2::scale_fill_manual(
+      values = colmap_sex,
+      breaks = c("female", "male"),
+      labels = c("female", "male"),
+      name = NULL
+    ) +
+    ggplot2::scale_colour_manual(
+      values = colmap_sex,
+      breaks = c("female", "male"),
+      guide = "none"
+    ) +
+    ggplot2::scale_x_continuous(
+      limits = c(0, 90),
+      breaks = c(0, 30, 60, 90),
+      expand = c(0, 0)
+    ) +
+    ggplot2::scale_y_continuous(
+      expand = ggplot2::expansion(mult = c(0, 0.08)),
+      labels = label_drop_leading_zero()
+    ) +
+    ggplot2::labs(x = "Unique donor age (years)", y = NULL) +
+    theme_multipanel +
+    ggplot2::theme(
+      legend.position = "bottom",
+      legend.margin = margin(0, 0, 0, 0)
+    )
+}
+```
+
+```{r}
+#| label: panel-a-draw
+#| fig-width: 7.2
+#| fig-height: 2.3
+#| fig-cap: "Figure 2a. Observed SAVI collections (left; imputed ages for C1/C2/P5) and frozen V1_monocytic healthy-blood donor-age support (right)."
+
+savi_age_marks <- savi_plot |>
+  dplyr::distinct(age_years, sex)
+
+p_a_left <- plot_panel_a_collections(savi_plot, savi_connectors)
+p_a_right <- plot_panel_a_hca_continuous(hca_donors, savi_age_marks)
+
+panel_a <- (p_a_left | p_a_right) +
+  patchwork::plot_layout(widths = c(1.35, 1))
+
+panel_a
+```
+
+```{r}
+#| label: panel-a-audit-text
+
+cat(
+  sprintf(
+    paste(
+      "Panel a: %d libraries / %d subjects (%d age-imputed: C1, C2, P5);",
+      "HCA healthy blood = %d donors / %d samples / %d datasets;",
+      "%d samples in harmonised `10x Genomics 3`;",
+      "donor age range %.1f–%.1f years;",
+      "training-overlap status: %s;",
+      "SAVI ages in HCA support: %d observed, %d outside.\n"
+    ),
+    nrow(savi_libraries),
+    dplyr::n_distinct(savi_libraries$subject_id),
+    sum(savi_libraries$age_imputed),
+    hca_support_summary$n_donors,
+    hca_support_summary$n_samples,
+    hca_support_summary$n_datasets,
+    hca_support_summary$n_samples_10x3,
+    hca_support_summary$age_min,
+    hca_support_summary$age_max,
+    overlap_status,
+    sum(savi_query_support$support_flag == "observed"),
+    sum(savi_query_support$support_flag == "outside support")
+  )
+)
+```
+
+------------------------------------------------------------------------
+
+# Panel b — Composition vs comprehensive healthy baseline
+
+**Purpose.** Recover the paper’s Figure 1E composition story on a shared L3
+vocabulary, and place observed cohort proportions against a comprehensive
+healthy blood baseline from the Immune Atlas sccomp fit.
+
+**Approach.**
+
+1. Map the 23 GEO `CellType` labels and 26 HCA `L3` labels onto the same
+   **15-part** composition (finest defensible shared vocabulary from the Fig. 2
+   manuscript): seven paper T/NK compartments, seven matched B/myeloid/DC
+   compartments, and `residual`.
+2. Fit the 12 independent untreated/control subjects with `sccomp` using
+   `formula_composition = ~ group + sequencing_batch`; treated repeated
+   libraries are excluded from this disease-composition estimand.
+3. Standardise both SAVI groups equally over STING1–STING3. Retain a matched
+   `~ group` fit as a no-batch sensitivity, not the primary analysis.
+4. Predict comprehensive and personalised healthy nulls from the atlas fit
+   (Normal blood, assay `10x Genomics 3`; other covariates marginalised;
+   personalised fills untreated age×sex only).
+5. Display the seven paper compartments in plots b1–b2.
+
+## Harmonise SAVI CellType and HCA L3 → 15 shared compartments
+
+Same finest shared composition as the Fig. 2 manuscript report: seven paper
+T/NK compartments for display/testing, seven matched B/myeloid/DC compartments
+kept separate in the likelihood, and `residual` only for unmatched labels.
+
+```{r}
+#| label: panel-b-harmonisation
+
+display_compartments <- c(
+  "Naive CD4 T",
+  "Eff./memory CD4",
+  "Naive CD8 T",
+  "Eff./memory CD8",
+  "NK",
+  "MAIT",
+  "gamma-delta T"
+)
+
+compartment_levels <- c(
+  display_compartments,
+  "Naive/transitional B",
+  "Memory B",
+  "Plasma cells",
+  "Classical monocytes",
+  "Non-classical monocytes",
+  "cDC",
+  "pDC",
+  "residual"
+)
+
+# Alias used by plot helpers / contrasts (paper Figure 1E family).
+paper_compartment_levels <- display_compartments
+
+celltype_to_compartment <- tibble::tribble(
+  ~cell_type,              ~compartment,
+  "0. Naive CD4",          "Naive CD4 T",
+  "3. CM CD4",             "Eff./memory CD4",
+  "4. EM CD4",             "Eff./memory CD4",
+  "8. TE CD4",             "Eff./memory CD4",
+  "9. Tregs and TE CD4",   "Eff./memory CD4",
+  "2. Naive CD8",          "Naive CD8 T",
+  "14. CM CD8",            "Eff./memory CD8",
+  "15. EM CD8",            "Eff./memory CD8",
+  "7. TE CD8",             "Eff./memory CD8",
+  "10. NK",                "NK",
+  "26. NK CD56bright",     "NK",
+  "22. MAIT",              "MAIT",
+  "16. gd T cells",        "gamma-delta T",
+  "1. Naive B",            "Naive/transitional B",
+  "6. Transitionnal B",    "Naive/transitional B",
+  "13. Memory B",          "Memory B",
+  "25. Plasmablasts",      "Plasma cells",
+  "5. Classical monocytes", "Classical monocytes",
+  "12. Non-classical monocytes", "Non-classical monocytes",
+  "20. cDCs",              "cDC",
+  "27. pDCs",              "pDC",
+  "11. CD3+ B cells",      "residual",
+  "17. Disease-associated monocytes", "residual"
+)
+
+l3_to_compartment <- tibble::tribble(
+  ~L3,                ~compartment,
+  "b memory",         "Memory B",
+  "b naive",          "Naive/transitional B",
+  "cd14 mono",        "Classical monocytes",
+  "cd16 mono",        "Non-classical monocytes",
+  "cdc",              "cDC",
+  "pdc",              "pDC",
+  "plasma",           "Plasma cells",
+  "cd4 naive",        "Naive CD4 T",
+  "cd4 tcm",          "Eff./memory CD4",
+  "cd4 fh em",        "Eff./memory CD4",
+  "cd4 th1 em",       "Eff./memory CD4",
+  "cd4 th17 em",      "Eff./memory CD4",
+  "cd4 th2 em",       "Eff./memory CD4",
+  "cd4 th1/th17 em",  "Eff./memory CD4",
+  "treg",             "Eff./memory CD4",
+  "cd8 naive",        "Naive CD8 T",
+  "cd8 tcm",          "Eff./memory CD8",
+  "cd8 tem",          "Eff./memory CD8",
+  "nk",               "NK",
+  "mait",             "MAIT",
+  "tgd",              "gamma-delta T",
+  "granulocyte",      "residual",
+  "ilc",              "residual",
+  "macrophage",       "residual",
+  "mast",             "residual",
+  "nkt",              "residual"
+)
+
+source_direction <- tibble::tibble(
+  compartment = factor(display_compartments, levels = display_compartments),
+  source_arrow = c("+", "-", "+", "-", "-", "-", "-")
+)
+
+stopifnot(nrow(celltype_to_compartment) == 23L)
+stopifnot(nrow(l3_to_compartment) == 26L)
+stopifnot(!anyDuplicated(celltype_to_compartment$cell_type))
+stopifnot(!anyDuplicated(l3_to_compartment$L3))
+
+celltype_to_compartment
+l3_to_compartment
+```
+
+## SAVI cell-type counts and proportions
+
+```{r}
+#| label: panel-b-savi-counts
+
+if (file.exists(params$panel_b_counts_rds)) {
+  panel_b_celltype_counts <- readRDS(params$panel_b_counts_rds)
+} else {
+  seurat_savi <- read_geo_rds_gz(params$savi_seurat_gz)
+  md <- seurat_savi@meta.data
+  rm(seurat_savi)
+  gc()
+
+  panel_b_celltype_counts <- md |>
+    dplyr::transmute(
+      sample_id = as.character(.data$Sample),
+      Category = as.character(.data$Category),
+      cell_type = as.character(.data$CellType)
+    ) |>
+    dplyr::count(.data$sample_id, .data$Category, .data$cell_type, name = "n_cells")
+
+  saveRDS(panel_b_celltype_counts, params$panel_b_counts_rds, compress = "xz")
+}
+
+panel_b_sample_meta <- savi_libraries |>
+  dplyr::transmute(
+    sample_id = library_id,
+    subject_id,
+    group = dplyr::recode(
+      as.character(state),
+      control = "control",
+      untreated = "untreated",
+      treated = "treated"
+    ),
+    sequencing_batch = sting_batch,
+    sex,
+    age_years,
+    age_imputed
+  ) |>
+  dplyr::mutate(
+    group = factor(group, levels = c("control", "untreated", "treated")),
+    sequencing_batch = factor(
+      sequencing_batch,
+      levels = c("STING1", "STING2", "STING3")
+    )
+  )
+
+panel_b_counts_mapped <- panel_b_celltype_counts |>
+  dplyr::left_join(celltype_to_compartment, by = "cell_type") |>
+  dplyr::inner_join(panel_b_sample_meta, by = "sample_id")
+
+stopifnot(!anyNA(panel_b_counts_mapped$compartment))
+stopifnot(setequal(
+  unique(panel_b_celltype_counts$cell_type),
+  celltype_to_compartment$cell_type
+))
+
+sample_totals <- panel_b_celltype_counts |>
+  dplyr::group_by(.data$sample_id) |>
+  dplyr::summarise(n_total = sum(.data$n_cells), .groups = "drop")
+
+# Observed proportions for the seven paper compartments (plot b1).
+panel_b_prop_paper <- panel_b_counts_mapped |>
+  dplyr::filter(.data$compartment %in% display_compartments) |>
+  dplyr::group_by(.data$sample_id, .data$group, .data$compartment) |>
+  dplyr::summarise(n_cells = sum(.data$n_cells), .groups = "drop") |>
+  tidyr::complete(
+    tidyr::nesting(sample_id, group),
+    compartment = display_compartments,
+    fill = list(n_cells = 0L)
+  ) |>
+  dplyr::left_join(sample_totals, by = "sample_id") |>
+  dplyr::mutate(
+    proportion = .data$n_cells / .data$n_total,
+    paper_compartment = factor(.data$compartment, levels = display_compartments),
+    state = factor(as.character(.data$group), levels = state_levels)
+  )
+
+panel_b_prop_paper |>
+  dplyr::group_by(.data$state, .data$paper_compartment) |>
+  dplyr::summarise(
+    n_samples = dplyr::n(),
+    mean_prop = mean(.data$proportion),
+    .groups = "drop"
+  )
+```
+
+## SAVI sccomp independent-subject fit (`~ group + sequencing_batch`)
+
+The primary fit uses the full **15-part** closed count composition and the 12
+independent untreated/control subjects. The batch term prevents a STING-lane
+difference from being attributed to disease. The matched `~ group` model below
+is retained only as a formula sensitivity.
+
+```{r}
+#| label: panel-b-sccomp-input
+
+panel_b_sccomp_counts <- panel_b_counts_mapped |>
+  dplyr::group_by(
+    .data$sample_id, .data$subject_id, .data$group,
+    .data$sequencing_batch, .data$compartment
+  ) |>
+  dplyr::summarise(n_cells = sum(.data$n_cells), .groups = "drop") |>
+  tidyr::complete(
+    tidyr::nesting(sample_id, subject_id, group, sequencing_batch),
+    compartment = compartment_levels,
+    fill = list(n_cells = 0L)
+  ) |>
+  dplyr::mutate(
+    group = factor(
+      as.character(.data$group),
+      levels = c("control", "untreated", "treated")
+    ),
+    sequencing_batch = factor(
+      as.character(.data$sequencing_batch),
+      levels = c("STING1", "STING2", "STING3")
+    ),
+    compartment = factor(.data$compartment, levels = compartment_levels)
+  )
+
+panel_b_raw_total_check <- panel_b_sccomp_counts |>
+  dplyr::group_by(.data$sample_id) |>
+  dplyr::summarise(aggregated_n_cells = sum(.data$n_cells), .groups = "drop") |>
+  dplyr::left_join(sample_totals, by = "sample_id")
+
+stopifnot(nrow(panel_b_raw_total_check) == 17L)
+stopifnot(all(
+  panel_b_raw_total_check$aggregated_n_cells == panel_b_raw_total_check$n_total
+))
+
+# Panel B2 tests untreated versus control. Repeated treated libraries are not
+# independent subjects and do not contribute to this estimand.
+panel_b_analysis_counts <- panel_b_sccomp_counts |>
+  dplyr::filter(.data$group %in% c("control", "untreated")) |>
+  dplyr::mutate(
+    group = factor(as.character(.data$group), levels = c("control", "untreated"))
+  ) |>
+  dplyr::select(
+    "sample_id", "subject_id", "group", "sequencing_batch",
+    "compartment", "n_cells"
+  )
+
+stopifnot(dplyr::n_distinct(panel_b_analysis_counts$sample_id) == 12L)
+stopifnot(dplyr::n_distinct(panel_b_analysis_counts$subject_id) == 12L)
+
+panel_b_analysis_counts |>
+  dplyr::group_by(.data$sample_id, .data$group) |>
+  dplyr::summarise(
+    n_cells = sum(.data$n_cells),
+    n_compartments = dplyr::n(),
+    .groups = "drop"
+  )
+```
+
+```{r}
+#| label: panel-b-sccomp-fit
+
+panel_b_savi_fit <- NULL
+if (file.exists(params$panel_b_savi_fit_rds) && !isTRUE(params$run_sccomp_panel_b)) {
+  panel_b_candidate <- readRDS(params$panel_b_savi_fit_rds)
+  panel_b_terms <- attr(
+    stats::terms(attr(panel_b_candidate, "formula_composition")),
+    "term.labels"
+  )
+  if (setequal(panel_b_terms, c("group", "sequencing_batch")) &&
+      nrow(attr(panel_b_candidate, "model_input")$X) == 12L) {
+    panel_b_savi_fit <- panel_b_candidate
+  } else {
+    message("Ignoring incompatible Panel-B primary sccomp cache.")
+  }
+}
+
+if (is.null(panel_b_savi_fit)) {
+  panel_b_savi_fit <- sccomp::sccomp_estimate(
+    panel_b_analysis_counts,
+    formula_composition = ~ group + sequencing_batch,
+    formula_variability = ~ 1,
+    sample = "sample_id",
+    cell_group = "compartment",
+    abundance = "n_cells",
+    cores = min(6L, max(1L, parallel::detectCores() - 2L)),
+    inference_method = "hmc",
+    verbose = TRUE
+  )
+  saveRDS(panel_b_savi_fit, params$panel_b_savi_fit_rds, compress = "xz")
+}
+
+stopifnot(nrow(attr(panel_b_savi_fit, "model_input")$X) == 12L)
+panel_b_savi_fit
+```
+
+### Standardise primary SAVI predictions over sequencing batch
+
+```{r}
+#| label: panel-b-savi-predict
+
+panel_b_savi_newdata <- tidyr::expand_grid(
+  group = factor(
+    c("control", "untreated"),
+    levels = c("control", "untreated")
+  ),
+  sequencing_batch = factor(
+    c("STING1", "STING2", "STING3"),
+    levels = c("STING1", "STING2", "STING3")
+  )
+) |>
+  dplyr::mutate(
+    sample_id = paste(.data$group, .data$sequencing_batch, sep = "__"),
+    target_weight = 1 / 3
+  )
+
+# sccomp's posterior-row subsampling uses R's global RNG in addition to the
+# generated-quantities seed, so set both for render-to-render reproducibility.
+set.seed(20260808L)
+panel_b_savi_pred_draws <- sccomp::sccomp_predict(
+  panel_b_savi_fit,
+  new_data = panel_b_savi_newdata,
+  number_of_draws = as.integer(params$panel_b_prediction_draws),
+  mcmc_seed = 20260808L,
+  summary_instead_of_draws = FALSE
+)
+
+# Verify closure before response-scale standardisation.
+panel_b_savi_prediction_sum_check <- panel_b_savi_pred_draws |>
+  dplyr::group_by(.data$.draw, .data$sample_id) |>
+  dplyr::summarise(total = sum(.data$proportion), .groups = "drop")
+
+stopifnot(max(abs(panel_b_savi_prediction_sum_check$total - 1)) < 1e-5)
+
+panel_b_savi_group_draws <- panel_b_savi_pred_draws |>
+  dplyr::group_by(.data$.draw, .data$group, .data$compartment) |>
+  dplyr::summarise(
+    proportion = stats::weighted.mean(.data$proportion, .data$target_weight),
+    .groups = "drop"
+  ) |>
+  dplyr::mutate(
+    paper_compartment = factor(
+      as.character(.data$compartment),
+      levels = display_compartments
+    ),
+    group = factor(as.character(.data$group), levels = c("control", "untreated"))
+  )
+
+panel_b_savi_group_sum_check <- panel_b_savi_group_draws |>
+  dplyr::group_by(.data$.draw, .data$group) |>
+  dplyr::summarise(total = sum(.data$proportion), .groups = "drop")
+
+stopifnot(max(abs(panel_b_savi_group_sum_check$total - 1)) < 1e-5)
+
+panel_b_savi_group_summary <- panel_b_savi_group_draws |>
+  dplyr::group_by(.data$group, .data$paper_compartment) |>
+  dplyr::summarise(
+    median_proportion = stats::median(.data$proportion),
+    hpd_lo = stats::quantile(.data$proportion, 0.025),
+    hpd_hi = stats::quantile(.data$proportion, 0.975),
+    .groups = "drop"
+  )
+
+panel_b_savi_group_summary
+```
+
+### Matched no-batch formula sensitivity
+
+```{r}
+#| label: panel-b-group-only-sensitivity-fit
+
+panel_b_group_only_fit <- NULL
+if (file.exists(params$panel_b_savi_group_only_fit_rds) &&
+    !isTRUE(params$run_sccomp_panel_b)) {
+  panel_b_group_only_candidate <- readRDS(params$panel_b_savi_group_only_fit_rds)
+  panel_b_group_only_terms <- attr(
+    stats::terms(attr(panel_b_group_only_candidate, "formula_composition")),
+    "term.labels"
+  )
+  if (identical(panel_b_group_only_terms, "group") &&
+      nrow(attr(panel_b_group_only_candidate, "model_input")$X) == 12L) {
+    panel_b_group_only_fit <- panel_b_group_only_candidate
+  } else {
+    message("Ignoring incompatible Panel-B group-only sensitivity cache.")
+  }
+}
+
+if (is.null(panel_b_group_only_fit)) {
+  panel_b_group_only_fit <- sccomp::sccomp_estimate(
+    panel_b_analysis_counts,
+    formula_composition = ~ group,
+    formula_variability = ~ 1,
+    sample = "sample_id",
+    cell_group = "compartment",
+    abundance = "n_cells",
+    cores = min(6L, max(1L, parallel::detectCores() - 2L)),
+    inference_method = "hmc",
+    verbose = TRUE
+  )
+  saveRDS(
+    panel_b_group_only_fit,
+    params$panel_b_savi_group_only_fit_rds,
+    compress = "xz"
+  )
+}
+
+panel_b_group_only_newdata <- tibble::tibble(
+  group = factor(
+    c("control", "untreated"),
+    levels = c("control", "untreated")
+  ),
+  sample_id = paste0("group_only__", c("control", "untreated"))
+)
+
+set.seed(20260811L)
+panel_b_group_only_pred <- sccomp::sccomp_predict(
+  panel_b_group_only_fit,
+  new_data = panel_b_group_only_newdata,
+  number_of_draws = as.integer(params$panel_b_prediction_draws),
+  mcmc_seed = 20260811L,
+  summary_instead_of_draws = FALSE
+)
+
+panel_b_group_only_draws <- panel_b_group_only_pred |>
+  dplyr::mutate(
+    group = factor(as.character(.data$group), levels = c("control", "untreated")),
+    paper_compartment = factor(
+      as.character(.data$compartment),
+      levels = display_compartments
+    )
+  )
+
+panel_b_group_only_sum_check <- panel_b_group_only_draws |>
+  dplyr::group_by(.data$.draw, .data$group) |>
+  dplyr::summarise(total = sum(.data$proportion), .groups = "drop")
+
+stopifnot(max(abs(panel_b_group_only_sum_check$total - 1)) < 1e-5)
+```
+
+## Healthy HCA baselines (`sccomp_predict`)
+
+Both baselines use the same marginalised atlas predict: Normal blood, assay
+fixed to **`10x Genomics 3`**, ethnicity and dataset left as the sccomp average
+effect (`NA`).
+
+- **Comprehensive:** sex and age also `NA` (one population null).
+- **Personalised:** sex and age set to each untreated SAVI subject, then
+  equal-averaged within each posterior draw.
+
+```{r}
+#| label: panel-b-hca-predict
+
+aggregate_hca_to_paper <- function(predict_tbl) {
+  predict_tbl |>
+    dplyr::inner_join(l3_to_compartment, by = c("cell_type" = "L3")) |>
+    dplyr::group_by(.data$sample_id, .data$compartment, .data$.draw) |>
+    dplyr::summarise(proportion = sum(.data$proportion), .groups = "drop")
+}
+
+# --- Comprehensive (sex/age marginalised) ---
+if (file.exists(params$composition_predict_rds)) {
+  predict_res <- readRDS(params$composition_predict_rds)
+} else {
+  sccomp_est <- readRDS(params$sccomp_estimates_rds)
+  set.seed(20260809L)
+  predict_res <- sccomp_est |>
+    sccomp::sccomp_predict(
+      formula_composition = NULL,
+      new_data = tibble::tibble(
+        assay_groups___altered = "10x Genomics 3",
+        disease_groups___altered = "Normal",
+        tissue_groups = "blood",
+        ethnicity_groups_imputed = NA_character_,
+        age_decade = NA_character_,
+        sex = NA_character_,
+        dataset_id___altered = NA_character_,
+        sample_id = "comprehensive_baseline"
+      ),
+      number_of_draws = as.integer(params$panel_b_prediction_draws),
+      mcmc_seed = 20260809L,
+      summary_instead_of_draws = FALSE
+    ) |>
+    dplyr::rename(cell_type = L3) |>
+    dplyr::select("sample_id", "cell_type", "proportion", ".draw")
+  saveRDS(predict_res, params$composition_predict_rds, compress = "xz")
+}
+
+healthy_draws_paper <- aggregate_hca_to_paper(predict_res) |>
+  dplyr::filter(.data$compartment %in% display_compartments) |>
+  dplyr::transmute(
+    .draw,
+    paper_compartment = factor(.data$compartment, levels = display_compartments),
+    proportion,
+    reference_target = "comprehensive_hca"
+  )
+
+# --- Personalised (untreated age × sex; other covariates still marginalised) ---
+panel_b_personalised_meta <- savi_libraries |>
+  dplyr::filter(as.character(.data$state) == "untreated") |>
+  dplyr::transmute(
+    assay_groups___altered = "10x Genomics 3",
+    disease_groups___altered = "Normal",
+    tissue_groups = "blood",
+    ethnicity_groups_imputed = NA_character_,
+    age_decade = as.character(ceiling(.data$age_years / 10)),
+    sex = as.character(.data$sex),
+    dataset_id___altered = NA_character_,
+    sample_id = paste0("personalised_", .data$subject_id),
+    target_weight = 1 / dplyr::n()
+  )
+
+if (file.exists(params$composition_predict_personalised_rds)) {
+  predict_res_personalised <- readRDS(params$composition_predict_personalised_rds)
+} else {
+  if (!exists("sccomp_est", inherits = FALSE)) {
+    sccomp_est <- readRDS(params$sccomp_estimates_rds)
+  }
+  set.seed(20260811L)
+  predict_res_personalised <- sccomp_est |>
+    sccomp::sccomp_predict(
+      formula_composition = NULL,
+      new_data = panel_b_personalised_meta |>
+        dplyr::select(-"target_weight"),
+      number_of_draws = as.integer(params$panel_b_prediction_draws),
+      mcmc_seed = 20260811L,
+      summary_instead_of_draws = FALSE
+    ) |>
+    dplyr::rename(cell_type = L3) |>
+    dplyr::select("sample_id", "cell_type", "proportion", ".draw")
+  saveRDS(
+    predict_res_personalised,
+    params$composition_predict_personalised_rds,
+    compress = "xz"
+  )
+}
+
+# Equal-average personalised subjects within each draw on the paper scale.
+personalised_draws_paper <- aggregate_hca_to_paper(predict_res_personalised) |>
+  dplyr::filter(.data$compartment %in% display_compartments) |>
+  dplyr::left_join(
+    panel_b_personalised_meta |> dplyr::select("sample_id", "target_weight"),
+    by = "sample_id"
+  ) |>
+  dplyr::group_by(.data$compartment, .data$.draw) |>
+  dplyr::summarise(
+    proportion = stats::weighted.mean(.data$proportion, .data$target_weight),
+    .groups = "drop"
+  ) |>
+  dplyr::transmute(
+    .draw,
+    paper_compartment = factor(.data$compartment, levels = display_compartments),
+    proportion,
+    reference_target = "personalised_hca"
+  )
+
+hca_draws_paper <- dplyr::bind_rows(healthy_draws_paper, personalised_draws_paper)
+
+healthy_baseline_paper <- healthy_draws_paper |>
+  dplyr::group_by(.data$paper_compartment) |>
+  dplyr::summarise(
+    median_proportion = stats::median(.data$proportion),
+    hpd_lo = stats::quantile(.data$proportion, 0.025),
+    hpd_hi = stats::quantile(.data$proportion, 0.975),
+    .groups = "drop"
+  )
+
+healthy_baseline_paper
+```
+
+## Plot b1 — Paper compartments vs healthy band
+
+Three cohort boxplots with jitter; grey band = comprehensive healthy 95%
+interval; dashed line = healthy median. Y-axis uses the arcsine–square-root
+transform.
+
+```{r}
+#| label: panel-b-helpers
+
+summarise_panel_b_pp_test <- function(draws, rope_pp) {
+  draws |>
+    dplyr::filter(.data$compartment %in% display_compartments) |>
+    dplyr::group_by(.data$contrast, .data$compartment) |>
+    dplyr::summarise(
+      estimate = stats::median(.data$delta_pp),
+      .lower = unname(stats::quantile(.data$delta_pp, 0.025)),
+      .upper = unname(stats::quantile(.data$delta_pp, 0.975)),
+      p_increase = mean(.data$delta_pp > rope_pp),
+      p_decrease = mean(.data$delta_pp < -rope_pp),
+      .groups = "drop"
+    ) |>
+    dplyr::mutate(
+      pp_pH0 = 1 - pmax(.data$p_increase, .data$p_decrease),
+      posterior_direction = dplyr::if_else(
+        .data$p_increase >= .data$p_decrease,
+        "increase",
+        "decrease"
+      )
+    ) |>
+    dplyr::group_by(.data$contrast) |>
+    dplyr::arrange(.data$pp_pH0, .by_group = TRUE) |>
+    dplyr::mutate(
+      pp_FDR = cummean(.data$pp_pH0),
+      discovery = .data$pp_FDR <= 0.05
+    ) |>
+    dplyr::ungroup()
+}
+
+plot_panel_b1_composition <- function(obs_df, healthy_df) {
+  ggplot2::ggplot(
+    obs_df,
+    ggplot2::aes(x = state, y = proportion, fill = state)
+  ) +
+    ggplot2::geom_rect(
+      data = healthy_df,
+      ggplot2::aes(xmin = -Inf, xmax = Inf, ymin = hpd_lo, ymax = hpd_hi),
+      fill = col_hca,
+      alpha = 0.25,
+      colour = NA,
+      inherit.aes = FALSE
+    ) +
+    ggplot2::geom_hline(
+      data = healthy_df,
+      ggplot2::aes(yintercept = median_proportion),
+      colour = col_dark,
+      linewidth = 0.45,
+      linetype = "dashed",
+      inherit.aes = FALSE
+    ) +
+    ggplot2::geom_boxplot(
+      outlier.shape = NA,
+      alpha = 0.75,
+      colour = col_dark,
+      linewidth = 0.35
+    ) +
+    ggplot2::geom_jitter(
+      ggplot2::aes(colour = state, shape = state),
+      width = 0.12,
+      size = 1.7,
+      stroke = 0.45,
+      fill = "white",
+      alpha = 0.95
+    ) +
+    ggplot2::facet_wrap(~paper_compartment, scales = "free_y", ncol = 4) +
+    ggplot2::scale_fill_manual(
+      values = state_colours,
+      labels = state_labels,
+      name = NULL
+    ) +
+    ggplot2::scale_colour_manual(
+      values = state_colours,
+      labels = state_labels,
+      name = NULL
+    ) +
+    ggplot2::scale_shape_manual(
+      values = state_shapes,
+      labels = state_labels,
+      name = NULL
+    ) +
+    ggplot2::scale_x_discrete(labels = state_labels_short) +
+    ggplot2::scale_y_continuous(
+      trans = arcsine_sqrt_trans,
+      labels = label_drop_leading_zero(accuracy = 0.01)
+    ) +
+    ggplot2::labs(x = NULL, y = "Proportion (arcsin√ scale)") +
+    theme_multipanel +
+    ggplot2::theme(legend.position = "bottom")
+}
+
+plot_panel_b2_effects <- function(effects_df) {
+  y_labels <- effects_df |>
+    dplyr::distinct(.data$compartment, .data$source_arrow) |>
+    dplyr::mutate(
+      y_lab = paste(.data$source_arrow, as.character(.data$compartment))
+    ) |>
+    dplyr::arrange(.data$compartment)
+
+  lab_map <- setNames(y_labels$y_lab, as.character(y_labels$compartment))
+
+  contrast_breaks <- c(
+    "untreated - study control",
+    "untreated - comprehensive HCA",
+    "untreated - personalised HCA"
+  )
+  contrast_labels <- c(
+    "vs study control",
+    "vs comprehensive HCA",
+    "vs personalised HCA"
+  )
+  contrast_colours <- c(
+    "untreated - study control" = col_ctrl,
+    "untreated - comprehensive HCA" = col_hca,
+    "untreated - personalised HCA" = col_meta
+  )
+  contrast_fills <- c(
+    "untreated - study control" = "white",
+    "untreated - comprehensive HCA" = col_hca,
+    "untreated - personalised HCA" = col_meta
+  )
+  contrast_shapes <- c(
+    "untreated - study control" = 21,
+    "untreated - comprehensive HCA" = 23,
+    "untreated - personalised HCA" = 24
+  )
+  # Tight dodge so the three series sit on one compartment row.
+  contrast_dodge <- ggplot2::position_dodge(width = 0.55)
+
+  ggplot2::ggplot(
+    effects_df,
+    ggplot2::aes(
+      y = .data$compartment,
+      x = .data$estimate,
+      colour = .data$contrast,
+      fill = .data$contrast,
+      shape = .data$contrast,
+      group = .data$contrast
+    )
+  ) +
+    ggplot2::geom_vline(
+      xintercept = 0,
+      colour = col_mid,
+      linetype = "22",
+      linewidth = 0.35
+    ) +
+    ggplot2::geom_linerange(
+      ggplot2::aes(xmin = .data$.lower, xmax = .data$.upper),
+      linewidth = 0.55,
+      position = contrast_dodge
+    ) +
+    ggplot2::geom_point(
+      ggplot2::aes(size = .data$discovery),
+      stroke = 0.6,
+      position = contrast_dodge
+    ) +
+    ggplot2::scale_colour_manual(
+      values = contrast_colours,
+      breaks = contrast_breaks,
+      labels = contrast_labels,
+      name = NULL
+    ) +
+    ggplot2::scale_fill_manual(
+      values = contrast_fills,
+      breaks = contrast_breaks,
+      labels = contrast_labels,
+      name = NULL
+    ) +
+    ggplot2::scale_shape_manual(
+      values = contrast_shapes,
+      breaks = contrast_breaks,
+      labels = contrast_labels,
+      name = NULL
+    ) +
+    ggplot2::scale_size_manual(
+      values = c(`FALSE` = 2.0, `TRUE` = 2.8),
+      guide = "none"
+    ) +
+    ggplot2::scale_y_discrete(
+      limits = rev(display_compartments),
+      labels = lab_map
+    ) +
+    ggplot2::scale_x_continuous(
+      breaks = c(-30, -20, -10, 0, 10, 20),
+      limits = c(-30, 20),
+      expand = ggplot2::expansion(mult = 0.03)
+    ) +
+    ggplot2::coord_cartesian(clip = "off") +
+    ggplot2::labs(
+      x = "Composition difference (percentage points)",
+      y = NULL
+    ) +
+    theme_multipanel +
+    ggplot2::theme(
+      legend.position = "bottom",
+      legend.direction = "horizontal",
+      legend.box = "horizontal",
+      legend.margin = margin(0, 0, 0, 0),
+      legend.spacing.x = grid::unit(0, "mm"),
+      plot.margin = margin(0, 0, 0, 0)
+    ) +
+    ggplot2::guides(
+      colour = ggplot2::guide_legend(override.aes = list(size = 2.4)),
+      fill = ggplot2::guide_legend(override.aes = list(size = 2.4)),
+      shape = ggplot2::guide_legend(override.aes = list(size = 2.4))
+    )
+}
+```
+
+```{r}
+#| label: panel-b1-draw
+#| fig-width: 7.2
+#| fig-height: 4.2
+#| fig-cap: "Figure 2b1. Observed SAVI paper-compartment proportions by cohort versus the comprehensive healthy sccomp baseline. Grey band = healthy 95% interval; dashed line = healthy median. Y-axis arcsine–square-root transformed."
+
+panel_b1 <- plot_panel_b1_composition(panel_b_prop_paper, healthy_baseline_paper)
+panel_b1
+```
+
+## Plot b2 — Composition differences
+
+Forest plot: untreated SAVI versus study controls, comprehensive HCA, and
+personalised HCA (untreated age×sex; assay / ethnicity / dataset still
+marginalised as in the comprehensive null). Contrasts are percentage-point
+differences with a `r params$panel_b_rope_pp`-pp ROPE and Bayesian FDR across
+the seven paper compartments.
+
+```{r}
+#| label: panel-b2-contrasts
+
+# Untreated − control (same SAVI posterior draws).
+panel_b_uc_draws <- panel_b_savi_group_draws |>
+  dplyr::filter(.data$compartment %in% display_compartments) |>
+  dplyr::select(".draw", "group", compartment = "paper_compartment", "proportion") |>
+  tidyr::pivot_wider(names_from = "group", values_from = "proportion") |>
+  dplyr::mutate(
+    delta_pp = 100 * (.data$untreated - .data$control),
+    contrast = "untreated - study control"
+  ) |>
+  dplyr::select(".draw", "compartment", "delta_pp", "contrast")
+
+panel_b_uc <- summarise_panel_b_pp_test(
+  panel_b_uc_draws,
+  rope_pp = params$panel_b_rope_pp
+)
+
+# Untreated − HCA references (independent cross-model pairs).
+untreated_draws <- panel_b_savi_group_draws |>
+  dplyr::filter(
+    .data$group == "untreated",
+    .data$compartment %in% display_compartments
+  ) |>
+  dplyr::transmute(
+    .draw = .data$.draw,
+    compartment = .data$paper_compartment,
+    case_proportion = .data$proportion
+  )
+
+set.seed(20260810L)
+panel_b_cross_fit_pairs <- tibble::tibble(
+  .pair = seq_len(as.integer(params$panel_b_pair_draws)),
+  .draw_savi = sample(
+    unique(untreated_draws$.draw),
+    as.integer(params$panel_b_pair_draws),
+    replace = TRUE
+  ),
+  .draw_hca = sample(
+    unique(healthy_draws_paper$.draw),
+    as.integer(params$panel_b_pair_draws),
+    replace = TRUE
+  )
+)
+
+panel_b_uh_draws <- panel_b_cross_fit_pairs |>
+  dplyr::left_join(
+    untreated_draws,
+    by = c(".draw_savi" = ".draw"),
+    relationship = "many-to-many"
+  ) |>
+  dplyr::left_join(
+    hca_draws_paper |>
+      dplyr::transmute(
+        .draw,
+        compartment = .data$paper_compartment,
+        hca_proportion = .data$proportion,
+        reference_target
+      ),
+    by = c(".draw_hca" = ".draw", "compartment"),
+    relationship = "many-to-many"
+  ) |>
+  dplyr::mutate(
+    delta_pp = 100 * (.data$case_proportion - .data$hca_proportion),
+    contrast = dplyr::recode(
+      .data$reference_target,
+      comprehensive_hca = "untreated - comprehensive HCA",
+      personalised_hca = "untreated - personalised HCA"
+    )
+  )
+
+panel_b_uh <- summarise_panel_b_pp_test(
+  panel_b_uh_draws,
+  rope_pp = params$panel_b_rope_pp
+)
+
+panel_b2_effects <- dplyr::bind_rows(panel_b_uc, panel_b_uh) |>
+  dplyr::mutate(
+    compartment = factor(
+      as.character(.data$compartment),
+      levels = display_compartments
+    ),
+    contrast = factor(
+      .data$contrast,
+      levels = c(
+        "untreated - study control",
+        "untreated - comprehensive HCA",
+        "untreated - personalised HCA"
+      )
+    )
+  ) |>
+  dplyr::left_join(source_direction, by = "compartment")
+
+panel_b2_effects |>
+  dplyr::arrange(.data$compartment, .data$contrast)
+```
+
+### Formula sensitivity: remove sequencing batch
+
+This sensitivity uses the same 12 subjects, 15-part harmonisation, HCA draws,
+ROPE and draw-pairing rule. Consequently, any difference below is attributable
+to the SAVI composition formula rather than to a changed sample set or atlas
+reference.
+
+```{r}
+#| label: panel-b2-formula-sensitivity
+
+panel_b_group_only_uc_draws <- panel_b_group_only_draws |>
+  dplyr::filter(.data$compartment %in% display_compartments) |>
+  dplyr::select(".draw", "group", "compartment", "proportion") |>
+  tidyr::pivot_wider(names_from = "group", values_from = "proportion") |>
+  dplyr::mutate(
+    delta_pp = 100 * (.data$untreated - .data$control),
+    contrast = "untreated - study control"
+  ) |>
+  dplyr::select(".draw", "compartment", "delta_pp", "contrast")
+
+panel_b_group_only_uc <- summarise_panel_b_pp_test(
+  panel_b_group_only_uc_draws,
+  rope_pp = params$panel_b_rope_pp
+)
+
+panel_b_group_only_untreated <- panel_b_group_only_draws |>
+  dplyr::filter(
+    .data$group == "untreated",
+    .data$compartment %in% display_compartments
+  ) |>
+  dplyr::transmute(
+    .draw = .data$.draw,
+    compartment = .data$compartment,
+    case_proportion = .data$proportion
+  )
+
+set.seed(20260812L)
+panel_b_group_only_pairs <- tibble::tibble(
+  .pair = seq_len(as.integer(params$panel_b_pair_draws)),
+  .draw_savi = sample(
+    unique(panel_b_group_only_untreated$.draw),
+    as.integer(params$panel_b_pair_draws),
+    replace = TRUE
+  ),
+  .draw_hca = sample(
+    unique(healthy_draws_paper$.draw),
+    as.integer(params$panel_b_pair_draws),
+    replace = TRUE
+  )
+)
+
+panel_b_group_only_uh_draws <- panel_b_group_only_pairs |>
+  dplyr::left_join(
+    panel_b_group_only_untreated,
+    by = c(".draw_savi" = ".draw"),
+    relationship = "many-to-many"
+  ) |>
+  dplyr::left_join(
+    healthy_draws_paper |>
+      dplyr::transmute(
+        .draw = .data$.draw,
+        compartment = as.character(.data$paper_compartment),
+        hca_proportion = .data$proportion
+      ),
+    by = c(".draw_hca" = ".draw", "compartment"),
+    relationship = "many-to-many"
+  ) |>
+  dplyr::mutate(
+    delta_pp = 100 * (.data$case_proportion - .data$hca_proportion),
+    contrast = "untreated - comprehensive HCA"
+  )
+
+panel_b_group_only_uh <- summarise_panel_b_pp_test(
+  panel_b_group_only_uh_draws,
+  rope_pp = params$panel_b_rope_pp
+)
+
+panel_b_formula_sensitivity <- dplyr::bind_rows(
+  panel_b2_effects |>
+    dplyr::filter(.data$contrast %in% c(
+      "untreated - study control",
+      "untreated - comprehensive HCA"
+    )) |>
+    dplyr::transmute(
+      contrast = as.character(.data$contrast),
+      compartment = as.character(.data$compartment),
+      model = "primary",
+      estimate,
+      discovery
+    ),
+  dplyr::bind_rows(panel_b_group_only_uc, panel_b_group_only_uh) |>
+    dplyr::transmute(
+      contrast = as.character(.data$contrast),
+      compartment = as.character(.data$compartment),
+      model = "no_batch",
+      estimate,
+      discovery
+    )
+) |>
+  tidyr::pivot_wider(
+    names_from = "model",
+    values_from = c("estimate", "discovery")
+  ) |>
+  dplyr::mutate(
+    estimate_shift_pp = .data$estimate_no_batch - .data$estimate_primary,
+    direction_changed = sign(.data$estimate_primary) != sign(.data$estimate_no_batch),
+    discovery_changed = .data$discovery_primary != .data$discovery_no_batch
+  ) |>
+  dplyr::arrange(.data$contrast, match(.data$compartment, display_compartments))
+
+panel_b_formula_sensitivity |>
+  dplyr::select(
+    contrast,
+    compartment,
+    primary_pp = .data$estimate_primary,
+    no_batch_pp = .data$estimate_no_batch,
+    estimate_shift_pp,
+    direction_changed,
+    discovery_changed
+  ) |>
+  knitr::kable(
+    digits = 2,
+    caption = paste(
+      "Sequencing-batch formula sensitivity using an identical 12-subject",
+      "analysis set and HCA reference."
+    )
+  )
+```
+
+```{r}
+#| label: panel-b2-formula-sensitivity-conclusion
+#| results: asis
+
+panel_b_formula_max_shift <- panel_b_formula_sensitivity |>
+  dplyr::slice_max(abs(.data$estimate_shift_pp), n = 1, with_ties = FALSE)
+
+panel_b_formula_discovery_changes <- panel_b_formula_sensitivity |>
+  dplyr::filter(.data$discovery_changed)
+
+cat(sprintf(
+  paste0(
+    "**Formula-sensitivity conclusion.** Removing sequencing batch changed no ",
+    "effect direction, but shifted the largest posterior median by %.2f percentage ",
+    "points (%s; %s) and changed %d discovery decision%s. Therefore the ",
+    "batch-adjusted model remains primary.\n\n"
+  ),
+  abs(panel_b_formula_max_shift$estimate_shift_pp),
+  panel_b_formula_max_shift$compartment,
+  panel_b_formula_max_shift$contrast,
+  nrow(panel_b_formula_discovery_changes),
+  ifelse(nrow(panel_b_formula_discovery_changes) == 1L, "", "s")
+))
+```
+
+```{r}
+#| label: panel-b2-draw
+#| fig-width: 6.2
+#| fig-height: 4.8
+#| fig-cap: "Figure 2b2. Posterior mean-composition differences. Green open circles: untreated − study control. Grey diamonds: untreated − comprehensive HCA. Teal triangles: untreated − personalised HCA. Larger symbols meet Bayesian FDR ≤ 0.05 for a 1-percentage-point ROPE."
+
+panel_b2 <- plot_panel_b2_effects(panel_b2_effects)
+panel_b2
+```
+
+```{r}
+#| label: panel-b-audit-text
+
+cat(
+  sprintf(
+    paste(
+      "Panel b: %d observed libraries; primary sccomp uses %d independent",
+      "untreated/control subjects with ~ group + sequencing_batch on %d shared compartments;",
+      "%d paper compartments shown;",
+      "HCA baselines = comprehensive + personalised (%d L3 types × %d draws);",
+      "b2 contrasts use %.2f-pp ROPE and %d cross-model pairs.\n"
+    ),
+    dplyr::n_distinct(panel_b_prop_paper$sample_id),
+    dplyr::n_distinct(panel_b_analysis_counts$subject_id),
+    length(compartment_levels),
+    length(display_compartments),
+    dplyr::n_distinct(predict_res$cell_type),
+    dplyr::n_distinct(predict_res$.draw),
+    params$panel_b_rope_pp,
+    nrow(panel_b_cross_fit_pairs)
+  )
+)
+```
+
+------------------------------------------------------------------------
+
+# Panel c — Gene-level abundance vs healthy baselines
+
+Gene panels place STING-signature counts against healthy HCA nulls. **C1**
+uses a comprehensive (population) log-μ baseline for all 16 covered genes.
+**C2** audits *ADRB2* with a personalised predictive-count null at offset 0.
+**C3** shows single-cell *ADRB2* on UMAP (all donors, then without the
+high-depth untreated library `P6_STING_ht`).
+
+```{r}
+#| label: panel-c-setup
+
+panel_c_gene_order <- c(
+  "ADRB2", "PTGS2", "AQP9", "OTUD1", "PTX3", "TGIF1", "TSC22D2", "ZBTB43",
+  "ZFP36L2", "JARID2", "KLF4", "TREM1", "ANKRD28", "ANXA1", "PLAUR", "IL1B"
+)
+
+panel_c_category_to_state <- c(
+  CTRL = "control",
+  SAVI = "untreated",
+  SAVI_treated = "treated"
+)
+
+fit_levels <- function(fit, var) {
+  d <- fit$data
+  if (is.null(d) || !var %in% names(d)) {
+    return(character(0))
+  }
+  v <- d[[var]]
+  lv <- if (is.factor(v)) levels(v) else sort(unique(as.character(v)))
+  lv[!is.na(lv) & nzchar(lv)]
+}
+
+build_newdata_grid <- function(
+  fit,
+  newdata,
+  marginalize_over = c("sex", "age_decade", "ethnicity_groups"),
+  required = c(
+    "tissue_groups", "offset", "disease_groups_altered", "assay_groups_altered"
+  ),
+  new_level_cols = "dataset_id_altered",
+  new_level_tag = "__comprehensive_baseline__"
+) {
+  stopifnot(NROW(newdata) == 1L)
+  newdata <- tibble::as_tibble(newdata)
+
+  is_blank <- function(v) {
+    length(v) == 0L ||
+      is.na(v[[1L]]) ||
+      (is.character(v[[1L]]) && !nzchar(v[[1L]]))
+  }
+
+  fit_vars <- colnames(fit$data)
+  for (col in required) {
+    if (!col %in% fit_vars) next
+    if (!col %in% names(newdata) || is_blank(newdata[[col]])) {
+      stop(sprintf("Required predictor `%s` is missing or empty.", col))
+    }
+  }
+
+  to_expand <- character(0)
+  for (col in marginalize_over) {
+    if (!col %in% fit_vars) next
+    if (!col %in% names(newdata) || is_blank(newdata[[col]])) {
+      to_expand <- c(to_expand, col)
+    }
+  }
+
+  if (length(to_expand)) {
+    levels_list <- lapply(to_expand, function(col) fit_levels(fit, col))
+    names(levels_list) <- to_expand
+    keep <- vapply(levels_list, length, integer(1L)) > 0L
+    levels_list <- levels_list[keep]
+    to_expand <- names(levels_list)
+  }
+
+  if (length(to_expand)) {
+    grid <- do.call(tidyr::expand_grid, levels_list)
+    rest <- newdata[, setdiff(names(newdata), to_expand), drop = FALSE]
+    out <- dplyr::bind_cols(
+      rest[rep(1L, nrow(grid)), , drop = FALSE],
+      grid
+    )
+  } else {
+    out <- newdata
+  }
+
+  for (col in new_level_cols) {
+    if (col %in% fit_vars) out[[col]] <- new_level_tag
+  }
+  out
+}
+
+newdata_comprehensive_gene <- function() {
+  tibble::tibble(
+    age_decade = NA_character_,
+    sex = NA_character_,
+    ethnicity_groups = NA_character_,
+    assay_groups_altered = "10x Genomics 3",
+    disease_groups_altered = "Normal",
+    tissue_groups = "blood",
+    offset = 0
+  )
+}
+
+brms_comprehensive_mu_grand_mean_draws <- function(fit, ndraws = NULL) {
+  nd_grid <- build_newdata_grid(fit, newdata_comprehensive_gene())
+  log_mu_mat <- brms::posterior_linpred(
+    fit,
+    newdata = nd_grid,
+    transform = FALSE,
+    re_formula = NULL,
+    allow_new_levels = TRUE,
+    sample_new_levels = "gaussian",
+    ndraws = ndraws
+  )
+  grand_mean_draws <- as.numeric(rowMeans(log_mu_mat))
+  list(
+    grand_mean_draws = grand_mean_draws,
+    mean_grand_mean = mean(grand_mean_draws),
+    sd_grand_mean = stats::sd(grand_mean_draws),
+    n_grand = length(grand_mean_draws),
+    n_grid_rows = nrow(nd_grid)
+  )
+}
+
+# Welch t-test from (mean, SE, n) summaries on the log(μ) scale.
+# Same definition as SAVI_case_study_universal_baseline.qmd.
+welch_t_from_mean_se <- function(mean1, se1, n1, mean2, se2, n2) {
+  n1 <- max(n1, 2L)
+  n2 <- max(n2, 2L)
+  sd1 <- se1 * sqrt(n1)
+  sd2 <- se2 * sqrt(n2)
+  se_diff <- sqrt(se1^2 + se2^2)
+  t_stat <- (mean1 - mean2) / se_diff
+  df <- (sd1^2 / n1 + sd2^2 / n2)^2 /
+    ((sd1^2 / n1)^2 / (n1 - 1) + (sd2^2 / n2)^2 / (n2 - 1))
+  p_value <- 2 * stats::pt(abs(t_stat), df = df, lower.tail = FALSE)
+  list(t = t_stat, df = df, p_value = p_value)
+}
+
+edger_log_mu_cohort <- function(
+  feature_id,
+  cohort,
+  fit,
+  nb_dispersion,
+  counts,
+  offset_vec
+) {
+  gi <- match(feature_id, rownames(fit))
+  if (is.na(gi) || !cohort %in% colnames(fit$coefficients)) {
+    return(list(
+      log_mu = NA_real_,
+      se = NA_real_,
+      df = NA_real_,
+      n = 0L
+    ))
+  }
+
+  disp <- nb_dispersion[gi]
+  j <- which(fit$samples$group == cohort)
+  if (!length(j)) {
+    return(list(
+      log_mu = NA_real_,
+      se = NA_real_,
+      df = NA_real_,
+      n = 0L
+    ))
+  }
+
+  log_mu <- edgeR::mglmOneGroup(
+    matrix(counts[gi, j], nrow = 1),
+    dispersion = disp,
+    offset = offset_vec[j]
+  )
+  mu_all <- fit$fitted.values[gi, ]
+  W <- mu_all / (1 + disp * mu_all)
+  cov_un <- solve(t(fit$design) %*% (W * fit$design))
+  se <- sqrt(fit$s2.post[gi] * cov_un[cohort, cohort])
+
+  list(
+    log_mu = unname(log_mu),
+    se = unname(se),
+    df = unname(fit$df.residual.adj[gi]),
+    n = length(j)
+  )
+}
+
+summarise_healthy_grand_mean_draws <- function(draws) {
+  draws |>
+    dplyr::group_by(.data$gene) |>
+    dplyr::summarise(
+      healthy_mean = mean(.data$log_mu),
+      healthy_sd = stats::sd(.data$log_mu),
+      healthy_n = dplyr::n(),
+      .groups = "drop"
+    )
+}
+
+welch_p_cohort_vs_healthy <- function(
+  cohort_log_mu,
+  cohort_se,
+  cohort_df,
+  healthy_mean,
+  healthy_sd,
+  healthy_n
+) {
+  welch_t_from_mean_se(
+    mean1 = healthy_mean,
+    se1 = healthy_sd,
+    n1 = healthy_n,
+    mean2 = cohort_log_mu,
+    se2 = cohort_se,
+    n2 = cohort_df + 1
+  )$p_value
+}
+
+format_welch_p_label <- function(p) {
+  # Match y-axis style: drop the leading zero before the decimal (0.05 → .05).
+  drop0 <- function(x) sub("^(-?)0\\.", "\\1.", x)
+  dplyr::case_when(
+    is.na(p) ~ NA_character_,
+    p < 0.001 ~ "p<.001",
+    p < 0.01 ~ paste0("p=", drop0(sprintf("%.3f", p))),
+    TRUE ~ paste0("p=", drop0(sprintf("%.2f", p)))
+  )
+}
+
+compute_panel_c1_welch <- function(draws, cohort_lines) {
+  healthy_by_gene <- summarise_healthy_grand_mean_draws(draws)
+
+  out <- cohort_lines |>
+    dplyr::left_join(healthy_by_gene, by = "gene")
+
+  out$welch_p <- mapply(
+    welch_p_cohort_vs_healthy,
+    out$cohort_log_mu,
+    out$cohort_se,
+    out$cohort_df,
+    out$healthy_mean,
+    out$healthy_sd,
+    out$healthy_n
+  )
+
+  out$p_label <- format_welch_p_label(out$welch_p)
+  out
+}
+```
+
+## C1. Comprehensive log μ density (16 genes)
+
+**Purpose.** For the 16 covered STING-signature genes, show the healthy
+comprehensive posterior of log(μ) at offset 0 (grey density) against cohort
+NB MLE log(μ) for study control, untreated SAVI, and JAK-inhibitor–treated
+SAVI (coloured vertical lines). Layout matches the case-study density grid
+(`SAVI_case_study_universal_baseline.qmd`), as a **4 × 4** facet panel.
+
+**Estimand (aligned with Panel b comprehensive null).**
+
+- Fixed: `tissue = blood`, `disease = Normal`, `assay = 10x Genomics 3`,
+  `offset = 0`
+- Marginalised (equal average of fitted levels): sex, age decade, ethnicity
+- Dataset: unseen study level (`allow_new_levels`, Gaussian new levels)
+- Quantity: per-draw mean of `posterior_linpred(..., transform = FALSE)` over
+  the covariate grid (grand-mean log μ), not ZINB expected counts
+
+Cohort lines use edgeR `mglmOneGroup` on monocytic pseudobulk counts at the
+observed library offsets (same as the universal-baseline case study). Welch
+$p$-values compare each cohort NB MLE log(μ) to the comprehensive healthy
+grand-mean posterior (`welch_t_from_mean_se` in
+`SAVI_case_study_universal_baseline.qmd`).
+
+```{r}
+#| label: panel-c-mu-density-data
+
+rebuild_panel_c_mu <- isTRUE(params$run_panel_c_rebuild) ||
+  !file.exists(params$panel_c_mu_density_rds)
+
+if (!rebuild_panel_c_mu) {
+  panel_c_mu_cache <- readRDS(params$panel_c_mu_density_rds)
+  ok_cache <- is.list(panel_c_mu_cache) &&
+    all(c("draws", "cohort_log_mu", "gene_order") %in% names(panel_c_mu_cache)) &&
+    identical(as.character(panel_c_mu_cache$gene_order), panel_c_gene_order) &&
+    "cohort_se" %in% names(panel_c_mu_cache$cohort_log_mu)
+  if (!ok_cache) {
+    message("Ignoring stale Panel-c mu-density cache.")
+    rebuild_panel_c_mu <- TRUE
+  } else {
+    panel_c_mu_draws <- panel_c_mu_cache$draws
+    panel_c_cohort_log_mu <- panel_c_mu_cache$cohort_log_mu
+    panel_c_n_grid_rows <- panel_c_mu_cache$n_grid_rows
+    message(
+      "Loaded Panel-c comprehensive mu density: ",
+      nrow(panel_c_mu_draws), " draws; ",
+      nrow(panel_c_cohort_log_mu), " cohort lines"
+    )
+  }
+}
+
+if (rebuild_panel_c_mu) {
+  se_cache <- readRDS(params$panel_c_se_rds)
+  se_monocytic_panel_c <- se_cache$se_monocytic
+  panel_c_estimates <- readRDS(params$estimates_rds)
+  stopifnot(all(panel_c_gene_order %in% panel_c_estimates$gene))
+
+  counts_mu <- SummarizedExperiment::assay(se_monocytic_panel_c, "counts")
+  meta_mu <- SummarizedExperiment::colData(se_monocytic_panel_c) |>
+    as.data.frame()
+  offset_vec_mu <- if ("offset" %in% names(meta_mu)) {
+    meta_mu$offset
+  } else {
+    log(1 / meta_mu$multiplier)
+  }
+  group_mu <- as.character(meta_mu$Category)
+  group_mu[is.na(group_mu)] <- "reference"
+  meta_mu$group <- factor(group_mu) |> forcats::fct_relevel("reference")
+
+  dge_mu <- edgeR::DGEList(
+    counts = counts_mu,
+    samples = meta_mu,
+    genes = as.data.frame(SummarizedExperiment::rowData(se_monocytic_panel_c))
+  )
+  dge_mu$offset <- matrix(
+    offset_vec_mu, nrow = nrow(dge_mu), ncol = ncol(dge_mu), byrow = TRUE
+  )
+  design_mu <- stats::model.matrix(~ 0 + group, data = meta_mu)
+  colnames(design_mu) <- sub("^group", "", colnames(design_mu))
+  dge_mu <- edgeR::estimateDisp(dge_mu, design_mu)
+  fit_mu <- edgeR::glmQLFit(dge_mu, design_mu)
+  nb_dispersion_mu <- if (!is.null(dge_mu$trended.dispersion)) {
+    dge_mu$trended.dispersion
+  } else if (!is.null(dge_mu$tagwise.dispersion)) {
+    dge_mu$tagwise.dispersion
+  } else {
+    rep_len(dge_mu$common.dispersion, nrow(dge_mu))
+  }
+
+  cohort_levels_mu <- names(panel_c_category_to_state)
+  draws_list <- vector("list", length(panel_c_gene_order))
+  cohort_list <- vector("list", length(panel_c_gene_order))
+  names(draws_list) <- names(cohort_list) <- panel_c_gene_order
+  panel_c_n_grid_rows <- NA_integer_
+
+  for (g in panel_c_gene_order) {
+    row <- panel_c_estimates[match(g, panel_c_estimates$gene), ]
+    fit <- row$brms_fit[[1]]
+    mu <- brms_comprehensive_mu_grand_mean_draws(fit)
+    panel_c_n_grid_rows <- mu$n_grid_rows
+    draws_list[[g]] <- tibble::tibble(
+      gene = g,
+      .feature = row$.feature,
+      .draw = seq_along(mu$grand_mean_draws),
+      log_mu = mu$grand_mean_draws
+    )
+    cohort_list[[g]] <- lapply(cohort_levels_mu, function(cat) {
+      cm <- edger_log_mu_cohort(
+        row$.feature, cat, fit_mu, nb_dispersion_mu, counts_mu, offset_vec_mu
+      )
+      tibble::tibble(
+        gene = g,
+        .feature = row$.feature,
+        Category = cat,
+        state = unname(panel_c_category_to_state[[cat]]),
+        cohort_log_mu = cm$log_mu,
+        cohort_se = cm$se,
+        cohort_df = cm$df,
+        n_libraries = cm$n
+      )
+    }) |>
+      dplyr::bind_rows()
+  }
+
+  panel_c_mu_draws <- dplyr::bind_rows(draws_list)
+  panel_c_cohort_log_mu <- dplyr::bind_rows(cohort_list)
+
+  saveRDS(
+    list(
+      estimand = paste(
+        "comprehensive: blood+Normal+10xGenomics3+offset0;",
+        "equal-avg over sex×age×ethnicity; dataset new level"
+      ),
+      gene_order = panel_c_gene_order,
+      n_grid_rows = panel_c_n_grid_rows,
+      draws = panel_c_mu_draws,
+      cohort_log_mu = panel_c_cohort_log_mu
+    ),
+    params$panel_c_mu_density_rds,
+    compress = "xz"
+  )
+}
+
+panel_c_cohort_log_mu <- panel_c_cohort_log_mu |>
+  dplyr::mutate(
+    gene = factor(.data$gene, levels = panel_c_gene_order),
+    state = factor(.data$state, levels = state_levels)
+  )
+
+panel_c_mu_draws <- panel_c_mu_draws |>
+  dplyr::mutate(gene = factor(.data$gene, levels = panel_c_gene_order))
+
+panel_c_cohort_log_mu |>
+  dplyr::mutate(dplyr::across(dplyr::where(is.numeric), ~ round(.x, 3)))
+```
+
+```{r}
+#| label: panel-c1-draw
+#| fig-width: 7.2
+#| fig-height: 7.2
+#| fig-cap: "Figure 2c1. Comprehensive healthy posterior of log(μ) (grey density) versus cohort NB MLE log(μ) for control, untreated SAVI, and JAK-inhibitor–treated SAVI (coloured lines). One facet per covered STING-signature gene (4 × 4)."
+
+plot_panel_c1_mu_density <- function(draws, cohort_lines, welch_annot) {
+  # Stack p-labels on the left of each facet (not at the vline x), so close
+  # cohort estimates cannot collide.
+  welch_left <- welch_annot |>
+    dplyr::mutate(
+      state = factor(as.character(.data$state), levels = state_levels),
+      label_vjust = 1.35 + 1.55 * (as.integer(.data$state) - 1L)
+    )
+
+  ggplot2::ggplot() +
+    ggplot2::geom_density(
+      data = draws,
+      ggplot2::aes(x = .data$log_mu),
+      fill = col_light,
+      colour = col_mid,
+      alpha = 0.7,
+      linewidth = 0.3
+    ) +
+    ggplot2::geom_vline(
+      data = cohort_lines,
+      ggplot2::aes(
+        xintercept = .data$cohort_log_mu,
+        colour = .data$state
+      ),
+      linewidth = 0.3,
+      alpha = 0.9
+    ) +
+    ggplot2::geom_text(
+      data = welch_left,
+      ggplot2::aes(
+        x = -Inf,
+        y = Inf,
+        label = .data$p_label,
+        colour = .data$state,
+        vjust = .data$label_vjust
+      ),
+      inherit.aes = FALSE,
+      hjust = -0.08,
+      size = 2,
+      show.legend = FALSE
+    ) +
+    ggplot2::scale_colour_manual(
+      values = state_colours,
+      labels = state_labels_short,
+      name = NULL
+    ) +
+    ggplot2::scale_y_continuous(labels = label_drop_leading_zero()) +
+    ggplot2::facet_wrap(~ gene, ncol = 4, nrow = 4, scales = "free") +
+    ggplot2::labs(
+      x = expression(log(mu)~"(offset 0)"),
+      y = "Density"
+    ) +
+    theme_multipanel +
+    ggplot2::theme(
+      legend.position = "bottom"
+    )
+}
+
+panel_c1_welch <- compute_panel_c1_welch(panel_c_mu_draws, panel_c_cohort_log_mu)
+
+panel_c1_welch |>
+  dplyr::select(gene, state, cohort_log_mu, welch_p, p_label) |>
+  dplyr::mutate(dplyr::across(dplyr::where(is.numeric), ~ round(.x, 4)))
+
+panel_c1 <- plot_panel_c1_mu_density(
+  panel_c_mu_draws,
+  panel_c_cohort_log_mu,
+  panel_c1_welch
+)
+panel_c1
+```
+
+```{r}
+#| label: panel-c1-audit-text
+
+cat(
+  sprintf(
+    paste(
+      "Panel c1: %d genes; comprehensive HCA grid = %d covariate profiles;",
+      "%d posterior draws per gene; cohort lines = edgeR NB MLE log(μ)",
+      "for CTRL (n=%d), untreated (n=%d), treated (n=%d).\n"
+    ),
+    length(panel_c_gene_order),
+    as.integer(panel_c_n_grid_rows),
+    nrow(panel_c_mu_draws) / length(panel_c_gene_order),
+    unique(panel_c_cohort_log_mu$n_libraries[panel_c_cohort_log_mu$state == "control"]),
+    unique(panel_c_cohort_log_mu$n_libraries[panel_c_cohort_log_mu$state == "untreated"]),
+    unique(panel_c_cohort_log_mu$n_libraries[panel_c_cohort_log_mu$state == "treated"])
+  )
+)
+```
+
+## C2. *ADRB2* personalised predictive counts (offset 0)
+
+Single-gene audit for **ADRB2**: healthy `posterior_predict()` counts under a
+**personalised** null (untreated age × sex; assay fixed to `10x Genomics 3`;
+ethnicity and dataset marginalised), evaluated at **`offset = 0`** so predictions
+sit on the same reference-depth scale as TMM-scaled abundance. The density
+shades the **central 95%** of the predictive distribution; vertical lines mark
+each untreated patient's observed **`counts_scaled`**.
+
+```{r}
+#| label: panel-c2-adrb2-personalised-data
+
+marginalize_predict_draws <- function(y_rep_mat) {
+  if (is.null(dim(y_rep_mat)) || ncol(y_rep_mat) <= 1L) {
+    return(as.numeric(y_rep_mat))
+  }
+  as.numeric(y_rep_mat)
+}
+
+rebuild_panel_c_adrb2 <- isTRUE(params$run_panel_c_rebuild) ||
+  !file.exists(params$panel_c_adrb2_personalised_rds)
+
+if (!rebuild_panel_c_adrb2) {
+  panel_c_adrb2_cache <- readRDS(params$panel_c_adrb2_personalised_rds)
+  ok_adrb2 <- is.list(panel_c_adrb2_cache) &&
+    identical(panel_c_adrb2_cache$gene, "ADRB2") &&
+    all(c("draws", "untreated_obs") %in% names(panel_c_adrb2_cache))
+  if (!ok_adrb2) {
+    message("Ignoring stale ADRB2 personalised cache.")
+    rebuild_panel_c_adrb2 <- TRUE
+  } else {
+    panel_c_adrb2_draws <- panel_c_adrb2_cache$draws
+    panel_c_adrb2_obs <- panel_c_adrb2_cache$untreated_obs
+    message(
+      "Loaded ADRB2 personalised predictive draws: ",
+      nrow(panel_c_adrb2_draws), " rows"
+    )
+  }
+}
+
+if (rebuild_panel_c_adrb2) {
+  if (!exists("se_monocytic_panel_c", inherits = FALSE)) {
+    se_monocytic_panel_c <- readRDS(params$panel_c_se_rds)$se_monocytic
+  }
+  if (!exists("panel_c_estimates", inherits = FALSE)) {
+    panel_c_estimates <- readRDS(params$estimates_rds)
+  }
+
+  adrb2_row <- panel_c_estimates[match("ADRB2", panel_c_estimates$gene), ]
+  adrb2_fit <- adrb2_row$brms_fit[[1]]
+  adrb2_feature <- adrb2_row$.feature
+
+  panel_c_adrb2_obs <- savi_libraries |>
+    dplyr::filter(as.character(.data$state) == "untreated") |>
+    dplyr::transmute(
+      library_id,
+      subject_id,
+      sex = as.character(.data$sex),
+      age_years,
+      age_decade = as.character(ceiling(.data$age_years / 10))
+    )
+
+  cd_c2 <- SummarizedExperiment::colData(se_monocytic_panel_c) |>
+    as.data.frame() |>
+    tibble::rownames_to_column("col_id") |>
+    dplyr::mutate(library_id = as.character(.data$Sample))
+
+  panel_c_adrb2_obs <- panel_c_adrb2_obs |>
+    dplyr::left_join(
+      cd_c2 |>
+        dplyr::select("col_id", "library_id", "offset"),
+      by = "library_id"
+    ) |>
+    dplyr::mutate(
+      observed_count = as.numeric(
+        SummarizedExperiment::assay(
+          se_monocytic_panel_c, "counts"
+        )[adrb2_feature, .data$col_id]
+      ),
+      observed_scaled = as.numeric(
+        SummarizedExperiment::assay(
+          se_monocytic_panel_c, "counts_scaled"
+        )[adrb2_feature, .data$col_id]
+      ),
+      offset_obs = as.numeric(.data$offset)
+    ) |>
+    dplyr::select(-"col_id", -"offset")
+
+  stopifnot(nrow(panel_c_adrb2_obs) == 5L)
+
+  ndraws_c2 <- 400L
+  set.seed(20260809L)
+  draws_list <- vector("list", nrow(panel_c_adrb2_obs))
+  n_eth <- NA_integer_
+  for (i in seq_len(nrow(panel_c_adrb2_obs))) {
+    nd <- tibble::tibble(
+      age_decade = panel_c_adrb2_obs$age_decade[[i]],
+      sex = panel_c_adrb2_obs$sex[[i]],
+      ethnicity_groups = NA_character_,
+      assay_groups_altered = "10x Genomics 3",
+      disease_groups_altered = "Normal",
+      tissue_groups = "blood",
+      offset = 0
+    )
+    nd_grid <- build_newdata_grid(
+      adrb2_fit,
+      nd,
+      marginalize_over = "ethnicity_groups",
+      required = c(
+        "tissue_groups", "offset", "disease_groups_altered",
+        "assay_groups_altered", "sex", "age_decade"
+      ),
+      new_level_tag = paste0("__pers__", panel_c_adrb2_obs$subject_id[[i]])
+    )
+    y_mat <- brms::posterior_predict(
+      adrb2_fit,
+      newdata = nd_grid,
+      summary = FALSE,
+      re_formula = NULL,
+      allow_new_levels = TRUE,
+      sample_new_levels = "gaussian",
+      ndraws = ndraws_c2
+    )
+    n_eth <- ncol(y_mat)
+    draws_list[[i]] <- tibble::tibble(
+      subject_id = panel_c_adrb2_obs$subject_id[[i]],
+      library_id = panel_c_adrb2_obs$library_id[[i]],
+      draw = marginalize_predict_draws(y_mat)
+    )
+  }
+
+  panel_c_adrb2_draws <- dplyr::bind_rows(draws_list)
+  saveRDS(
+    list(
+      gene = "ADRB2",
+      .feature = adrb2_feature,
+      estimand = paste(
+        "personalised untreated age×sex; assay 10x3;",
+        "ethnicity marginalised; offset=0; posterior_predict"
+      ),
+      ndraws_per_profile = ndraws_c2,
+      n_grid_ethnicity = n_eth,
+      draws = panel_c_adrb2_draws,
+      untreated_obs = panel_c_adrb2_obs
+    ),
+    params$panel_c_adrb2_personalised_rds,
+    compress = "xz"
+  )
+}
+
+panel_c_adrb2_obs <- panel_c_adrb2_obs |>
+  dplyr::mutate(
+    subject_id = factor(
+      .data$subject_id,
+      levels = c("P1", "P2", "P4", "P5", "P6")
+    )
+  )
+
+panel_c_adrb2_obs
+```
+
+```{r}
+#| label: panel-c2-draw
+#| fig-width: 5.5
+#| fig-height: 3.2
+#| fig-cap: "Figure 2c2. ADRB2 personalised healthy posterior predictive counts at offset 0. Teal fill = central 95% of the predictive density (equal mixture over untreated age×sex); light grey = tails. Coloured lines = TMM-scaled observed counts for untreated SAVI patients."
+
+plot_panel_c2_adrb2 <- function(draws, obs, cred_mass = 0.95) {
+  x_draws <- log1p(pmax(draws$draw, 0))
+  alpha_tail <- (1 - cred_mass) / 2
+  q_ci <- as.numeric(
+    stats::quantile(x_draws, probs = c(alpha_tail, 1 - alpha_tail))
+  )
+
+  dens <- stats::density(x_draws, n = 512)
+  dens_df <- tibble::tibble(x = dens$x, y = pmax(dens$y, 0))
+  dens_mid <- dens_df |>
+    dplyr::filter(.data$x >= q_ci[[1]], .data$x <= q_ci[[2]])
+  dens_lo <- dens_df |>
+    dplyr::filter(.data$x <= q_ci[[1]])
+  dens_hi <- dens_df |>
+    dplyr::filter(.data$x >= q_ci[[2]])
+
+  line_df <- obs |>
+    dplyr::mutate(x = log1p(pmax(.data$observed_scaled, 0)))
+
+  ggplot2::ggplot() +
+    ggplot2::geom_area(
+      data = dens_lo,
+      ggplot2::aes(x = .data$x, y = .data$y),
+      fill = col_light,
+      colour = NA,
+      alpha = 0.9
+    ) +
+    ggplot2::geom_area(
+      data = dens_hi,
+      ggplot2::aes(x = .data$x, y = .data$y),
+      fill = col_light,
+      colour = NA,
+      alpha = 0.9
+    ) +
+    ggplot2::geom_area(
+      data = dens_mid,
+      ggplot2::aes(x = .data$x, y = .data$y, fill = "Central 95%"),
+      colour = NA,
+      alpha = 0.55
+    ) +
+    ggplot2::geom_line(
+      data = dens_df,
+      ggplot2::aes(x = .data$x, y = .data$y),
+      colour = col_mid,
+      linewidth = 0.35
+    ) +
+    ggplot2::geom_vline(
+      xintercept = q_ci,
+      colour = col_meta,
+      linetype = "dashed",
+      linewidth = 0.35,
+      alpha = 0.85
+    ) +
+    ggplot2::geom_vline(
+      data = line_df,
+      ggplot2::aes(xintercept = .data$x, colour = .data$subject_id),
+      linewidth = 0.5,
+      alpha = 0.95
+    ) +
+    ggplot2::scale_fill_manual(
+      values = c("Central 95%" = col_meta),
+      name = NULL
+    ) +
+    ggplot2::scale_colour_manual(
+      values = setNames(
+        scales::hue_pal()(nrow(obs)),
+        levels(obs$subject_id)
+      ),
+      name = "Untreated"
+    ) +
+    ggplot2::scale_x_continuous(labels = label_drop_leading_zero()) +
+    ggplot2::scale_y_continuous(labels = label_drop_leading_zero()) +
+    ggplot2::labs(
+      x = expression(log[1 + p]("count @ offset 0")),
+      y = "Density"
+    ) +
+    theme_multipanel +
+    ggplot2::theme(legend.position = "bottom") +
+    ggplot2::guides(
+      fill = ggplot2::guide_legend(
+        override.aes = list(alpha = 0.55, colour = NA)
+      )
+    )
+}
+
+panel_c2 <- plot_panel_c2_adrb2(panel_c_adrb2_draws, panel_c_adrb2_obs)
+panel_c2
+```
+
+```{r}
+#| label: panel-c2-audit-text
+
+panel_c_adrb2_x <- log1p(pmax(panel_c_adrb2_draws$draw, 0))
+panel_c_adrb2_q <- as.numeric(stats::quantile(panel_c_adrb2_x, c(0.025, 0.975)))
+
+cat(
+  sprintf(
+    paste(
+      "Panel c2 (ADRB2): personalised posterior_predict at offset 0 for %d",
+      "untreated age×sex profiles (equal mixture); %d predictive draws;",
+      "central 95%% on log1p scale = [%.2f, %.2f];",
+      "vertical lines = counts_scaled for P1/P2/P4/P5/P6",
+      "(scaled = %.0f, %.0f, %.0f, %.0f, %.0f).\n"
+    ),
+    dplyr::n_distinct(panel_c_adrb2_draws$subject_id),
+    nrow(panel_c_adrb2_draws),
+    panel_c_adrb2_q[[1]],
+    panel_c_adrb2_q[[2]],
+    panel_c_adrb2_obs$observed_scaled[panel_c_adrb2_obs$subject_id == "P1"],
+    panel_c_adrb2_obs$observed_scaled[panel_c_adrb2_obs$subject_id == "P2"],
+    panel_c_adrb2_obs$observed_scaled[panel_c_adrb2_obs$subject_id == "P4"],
+    panel_c_adrb2_obs$observed_scaled[panel_c_adrb2_obs$subject_id == "P5"],
+    panel_c_adrb2_obs$observed_scaled[panel_c_adrb2_obs$subject_id == "P6"]
+  )
+)
+```
+
+## C3. *ADRB2* UMAP (all donors vs high-depth donor removed)
+
+Disease-associated monocytes from the published GSE226598 Seurat object
+(`params$savi_sc_celltype`), SCT `data`, split by analysis arm. Short facet
+labels: **CTRL / Untreated / Treated**. Top row: all donors. Bottom row: same
+plot after removing every cell from **`params$adrb2_outlier_sample`**
+(`P6_STING_ht`), the high-depth untreated library that can dominate *ADRB2*
+pseudobulk and single-cell colouring.
+
+```{r}
+#| label: panel-c3-seurat-mono
+
+seurat_reduction_name <- function(se) {
+  nms <- names(se@reductions)
+  hit <- intersect(c("umap", "UMAP", "tsne", "TSNE"), nms)
+  if (length(hit)) {
+    return(hit[[1]])
+  }
+  nms[[1]]
+}
+
+category_to_plot_label <- c(
+  CTRL = "CTRL",
+  SAVI = "Untreated",
+  SAVI_treated = "Treated"
+)
+
+seurat_savi_c3 <- read_geo_rds_gz(params$savi_seurat_gz)
+stopifnot("Category" %in% colnames(seurat_savi_c3@meta.data))
+stopifnot("Sample" %in% colnames(seurat_savi_c3@meta.data))
+stopifnot("CellType" %in% colnames(seurat_savi_c3@meta.data))
+
+reduction_use <- seurat_reduction_name(seurat_savi_c3)
+
+seurat_savi_mono <- subset(
+  seurat_savi_c3,
+  subset = CellType == params$savi_sc_celltype
+)
+rm(seurat_savi_c3)
+gc(verbose = FALSE)
+
+if (ncol(seurat_savi_mono) == 0L) {
+  stop(
+    "No cells for CellType = '", params$savi_sc_celltype,
+    "'. Check `CellType` levels in the Seurat object."
+  )
+}
+if (!"SCT" %in% SeuratObject::Assays(seurat_savi_mono)) {
+  stop(
+    "SCT assay not found. Available: ",
+    paste(SeuratObject::Assays(seurat_savi_mono), collapse = ", ")
+  )
+}
+if (!"ADRB2" %in% rownames(seurat_savi_mono[["SCT"]])) {
+  stop("ADRB2 not found in SCT assay rownames.")
+}
+
+seurat_savi_mono$Category_plot <- factor(
+  unname(category_to_plot_label[as.character(seurat_savi_mono$Category)]),
+  levels = c("CTRL", "Untreated", "Treated")
+)
+if (anyNA(seurat_savi_mono$Category_plot)) {
+  stop("Unexpected Category levels in Seurat metadata.")
+}
+
+outlier_sample <- params$adrb2_outlier_sample
+n_outlier_cells <- sum(seurat_savi_mono$Sample == outlier_sample, na.rm = TRUE)
+if (n_outlier_cells == 0L) {
+  stop("Outlier sample '", outlier_sample, "' not found in monocyte subset.")
+}
+
+seurat_savi_mono_no_outlier <- subset(
+  seurat_savi_mono,
+  subset = Sample != outlier_sample
+)
+
+tibble::tibble(
+  cell_type = params$savi_sc_celltype,
+  reduction = reduction_use,
+  n_cells_all = ncol(seurat_savi_mono),
+  n_cells_no_outlier = ncol(seurat_savi_mono_no_outlier),
+  outlier_sample = outlier_sample,
+  n_outlier_cells = n_outlier_cells
+)
+```
+
+```{r}
+#| label: panel-c3-helpers
+
+style_panel_c3_featureplot <- function(p) {
+  p &
+    ggplot2::theme(
+      plot.title = ggplot2::element_text(size = 7),
+      plot.subtitle = ggplot2::element_blank(),
+      strip.background = ggplot2::element_blank(),
+      strip.text = ggplot2::element_text(size = 7),
+      axis.title = ggplot2::element_text(size = 7),
+      axis.title.y.right = ggplot2::element_text(size = 7),
+      axis.text = ggplot2::element_text(size = 6),
+      legend.title = ggplot2::element_text(size = 7),
+      legend.text = ggplot2::element_text(size = 6),
+      legend.key.size = grid::unit(4, "mm"),
+      plot.margin = ggplot2::margin(0, 0, 0, 0)
+    )
+}
+
+panel_c3_row_label <- function(label) {
+  ggplot2::ggplot() +
+    ggplot2::annotate(
+      "text",
+      x = 0.5,
+      y = 0.5,
+      label = label,
+      angle = 90,
+      size = 2.3,
+      colour = col_dark,
+      fontface = "bold"
+    ) +
+    ggplot2::coord_cartesian(xlim = c(0, 1), ylim = c(0, 1), clip = "off") +
+    ggplot2::theme_void() +
+    ggplot2::theme(plot.margin = ggplot2::margin(0, 0, 0, 0))
+}
+
+plot_adrb2_umap_by_category <- function(seurat_obj, reduction) {
+  style_panel_c3_featureplot(
+    Seurat::FeaturePlot(
+      seurat_obj,
+      features = "ADRB2",
+      assay = "SCT",
+      split.by = "Category_plot",
+      reduction = reduction,
+      slot = "data",
+      ncol = 3,
+      order = TRUE,
+      pt.size = 0.25
+    )
+  )
+}
+```
+
+```{r}
+#| label: panel-c3-draw
+#| fig-width: 7.2
+#| fig-height: 4.2
+#| fig-cap: "Figure 2c3. ADRB2 on disease-associated-monocyte UMAP, split by CTRL / Untreated / Treated. Top: all donors. Bottom: P6_STING_ht cells removed."
+
+p_adrb2_umap_all <- plot_adrb2_umap_by_category(seurat_savi_mono, reduction_use)
+p_adrb2_umap_no_p6 <- plot_adrb2_umap_by_category(
+  seurat_savi_mono_no_outlier,
+  reduction_use
+)
+
+panel_c3 <- 
+  (
+    ( p_adrb2_umap_all & theme(axis.title.x.bottom = element_blank()) )
+  /
+    ( p_adrb2_umap_no_p6 & theme(plot.title = element_blank()))
+) +
+  patchwork::plot_layout(heights = c(1, 1)) 
+
+panel_c3
+```
+
+```{r}
+#| label: panel-c3-audit-text
+
+cat(
+  sprintf(
+    paste(
+      "Panel c3 (ADRB2 UMAP): cell type = %s; reduction = %s;",
+      "%d cells all donors (%s); %d cells after removing %s (%d cells dropped).",
+      "Facets: CTRL / Untreated / Treated (from Category CTRL / SAVI / SAVI_treated).\n"
+    ),
+    params$savi_sc_celltype,
+    reduction_use,
+    ncol(seurat_savi_mono),
+    paste(
+      sprintf(
+        "%s=%d",
+        names(table(seurat_savi_mono$Category_plot)),
+        as.integer(table(seurat_savi_mono$Category_plot))
+      ),
+      collapse = ", "
+    ),
+    ncol(seurat_savi_mono_no_outlier),
+    outlier_sample,
+    n_outlier_cells
+  )
+)
+```
+
+------------------------------------------------------------------------
+
+# Next panels
+
+Panels d–f will be added in this v1 report as their analyses land.
+
+```{r}
+sessionInfo()
+```
+

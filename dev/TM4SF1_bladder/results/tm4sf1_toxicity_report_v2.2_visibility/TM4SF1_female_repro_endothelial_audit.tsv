@@ -1,0 +1,125 @@
+tissue_groups	sex	age_decade	ethnicity_groups	n_donor_keys	direct_empirical_support	requires_extrapolation	marginal_weight	weight_rule	cell_type
+female reproductive system	female	1	African	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	1	East Asian	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	1	European	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	1	Hispanic/Latin American	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	1	Middle Eastern & North African	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	1	Native American & Pacific Islander	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	1	South Asian	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	10	African	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	10	East Asian	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	10	European	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	10	Hispanic/Latin American	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	10	Middle Eastern & North African	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	10	Native American & Pacific Islander	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	10	South Asian	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	2	African	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	2	East Asian	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	2	European	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	2	Hispanic/Latin American	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	2	Middle Eastern & North African	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	2	Native American & Pacific Islander	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	2	South Asian	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	3	African	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	3	East Asian	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	3	European	1	TRUE	FALSE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	3	Hispanic/Latin American	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	3	Middle Eastern & North African	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	3	Native American & Pacific Islander	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	3	South Asian	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	4	African	1	TRUE	FALSE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	4	East Asian	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	4	European	1	TRUE	FALSE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	4	Hispanic/Latin American	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	4	Middle Eastern & North African	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	4	Native American & Pacific Islander	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	4	South Asian	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	5	African	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	5	East Asian	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	5	European	1	TRUE	FALSE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	5	Hispanic/Latin American	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	5	Middle Eastern & North African	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	5	Native American & Pacific Islander	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	5	South Asian	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	6	African	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	6	East Asian	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	6	European	2	TRUE	FALSE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	6	Hispanic/Latin American	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	6	Middle Eastern & North African	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	6	Native American & Pacific Islander	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	6	South Asian	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	7	African	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	7	East Asian	1	TRUE	FALSE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	7	European	3	TRUE	FALSE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	7	Hispanic/Latin American	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	7	Middle Eastern & North African	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	7	Native American & Pacific Islander	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	7	South Asian	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	8	African	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	8	East Asian	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	8	European	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	8	Hispanic/Latin American	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	8	Middle Eastern & North African	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	8	Native American & Pacific Islander	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	8	South Asian	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	9	African	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	9	East Asian	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	9	European	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	9	Hispanic/Latin American	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	9	Middle Eastern & North African	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	9	Native American & Pacific Islander	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	9	South Asian	0	FALSE	TRUE	0.014285714285714285	equal sex (1/1) × equal age (1/10) × equal ethnicity (1/7)	endothelial
+female reproductive system	female	1	African	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	1	East Asian	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	1	European	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	1	Hispanic/Latin American	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	1	Native American & Pacific Islander	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	1	South Asian	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	2	African	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	2	East Asian	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	2	European	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	2	Hispanic/Latin American	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	2	Native American & Pacific Islander	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	2	South Asian	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	3	African	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	3	East Asian	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	3	European	1	TRUE	FALSE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	3	Hispanic/Latin American	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	3	Native American & Pacific Islander	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	3	South Asian	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	4	African	1	TRUE	FALSE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	4	East Asian	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	4	European	1	TRUE	FALSE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	4	Hispanic/Latin American	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	4	Native American & Pacific Islander	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	4	South Asian	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	5	African	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	5	East Asian	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	5	European	1	TRUE	FALSE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	5	Hispanic/Latin American	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	5	Native American & Pacific Islander	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	5	South Asian	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	6	African	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	6	East Asian	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	6	European	2	TRUE	FALSE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	6	Hispanic/Latin American	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	6	Native American & Pacific Islander	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	6	South Asian	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	7	African	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	7	East Asian	1	TRUE	FALSE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	7	European	3	TRUE	FALSE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	7	Hispanic/Latin American	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	7	Native American & Pacific Islander	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	7	South Asian	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	8	African	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	8	East Asian	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	8	European	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	8	Hispanic/Latin American	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	8	Native American & Pacific Islander	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	8	South Asian	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	9	African	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	9	East Asian	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	9	European	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	9	Hispanic/Latin American	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	9	Native American & Pacific Islander	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial
+female reproductive system	female	9	South Asian	0	FALSE	TRUE	0.018518518518518517	equal sex (1/1) × equal age (1/9) × equal ethnicity (1/6)	epithelial

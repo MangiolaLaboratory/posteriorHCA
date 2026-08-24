@@ -1,3 +1,4 @@
+# R / package (existing)
 .Rproj.user
 .Rhistory
 .RData
@@ -5,3 +6,49 @@
 .Rbuildignore
 posteriorHCA.Rproj
 inst/doc
+
+# IDE / local
+.Rproj.user
+.DS_Store
+
+# Case-study data (canonical copy is Box / GEO, not GitHub)
+dev/**/data/**
+!dev/**/data/
+!dev/**/data/*.R
+!dev/**/data/*.r
+!dev/**/data/*.sh
+!dev/**/data/metadata/
+!dev/**/data/metadata/**
+
+# Derived / restart checkpoints outside data/
+dev/**/intermediate/
+
+# Quarto / knitr caches and generated figure libs
+**/*_cache/
+**/*_files/
+**/_targets/
+
+# Binary objects (never GitHub)
+*.rds
+*.rds.gz
+*.RData
+*.rda
+*.Rdata
+*.mtx
+*.mtx.gz
+*.h5
+*.h5ad
+*.loom
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+
+# Logs and download leftovers
+logs/
+wget-log*
+wget-log
+wget-log.1
+
+# Copyright paper PDF (too large for GitHub)
+dev/Jie_HCC/s41586-*.pdf

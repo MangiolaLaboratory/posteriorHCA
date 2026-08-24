@@ -1,0 +1,1370 @@
+---
+title: "TIMES HCC case study - personalised posteriorHCA baseline"
+subtitle: "Patient-specific healthy liver NK predictive and heteroscedastic log-mean tests"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: true
+    embed-resources: true
+execute:
+  echo: true
+  warning: false
+  message: false
+editor: source
+abstract: |
+  This companion analysis replaces the comprehensive cohort-level baseline with
+  a personalised healthy liver NK baseline for each HCC patient-compartment
+  pseudobulk. Known age decade, sex, liver tissue, and the aligned TMMwsp offset
+  are retained. Unknown ethnicity and the unseen GeoMx assay level are
+  marginalised using their empirical joint distribution among healthy liver NK
+  atlas samples. A new GeoMx dataset effect is drawn from the fitted hierarchical
+  distribution. Because each comparison is one observed count against a
+  posterior distribution, the primary test uses `posterior_predict()`.
+  A secondary `posterior_linpred()` analysis estimates a patient log mean and
+  NB sampling SE, then applies a heteroscedastic normal (Welch-style) test
+  against the matched healthy posterior mean and SD.
+  `posterior_epred()` summarises the personalised healthy expected count and
+  effect size.
+params:
+  case_dir: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC"
+  model_store_root: "/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/HPC_posterior/NEW_CELL_TYPE"
+  target_cell_type: "nk"
+  baseline_tissue_group: "liver"
+  expression_csv: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/codeocean_GeoMx_all_gene_expression_matrix.csv"
+  roi_metadata_csv: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/codeocean_GeoMx_all_roi_metadata.csv"
+  normalization_csv: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/Jie_HCC_IF_TC_TMMwsp_offsets.csv"
+  patient_metadata_csv: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/Jie_HCC_personalised_baseline_patient_metadata.csv"
+  test_results_csv: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/Jie_HCC_personalised_baseline_gene_patient_tests.csv"
+  patient_scores_csv: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/Jie_HCC_personalised_baseline_patient_scores.csv"
+  performance_csv: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/Jie_HCC_personalised_baseline_performance.csv"
+  linpred_test_results_csv: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/Jie_HCC_personalised_baseline_linpred_welch_tests.csv"
+  linpred_patient_scores_csv: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/Jie_HCC_personalised_baseline_linpred_welch_patient_scores.csv"
+  predictive_draws_rds: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/Jie_HCC_personalised_baseline_predictive_draws.rds"
+---
+
+# Analysis question
+
+The comprehensive-baseline report estimates one healthy grand mean per gene and
+one mean per HCC cohort. This report instead asks a patient-level question:
+
+> Is one observed HCC patient-compartment gene count surprising under the
+> posterior predictive distribution of a metadata-matched healthy liver NK
+> sample at the same library-size offset?
+
+The healthy counterfactual keeps only information known for that patient and
+represented by the atlas model:
+
+| Model term | Personalised treatment |
+|---|---|
+| `age_decade` | Patient age converted with `ceiling(age / 10)` |
+| `sex` | Patient sex, lower-case atlas level |
+| `tissue_groups` | Fixed to `liver` |
+| `disease_groups_altered` | Fixed to `Normal` |
+| `offset` | Patient-specific TMMwsp offset from the SAVI-aligned normalization |
+| `ethnicity_groups` | Unknown; empirically marginalised over healthy liver NK |
+| `assay_groups_altered` | GeoMx is unseen by the model; empirically marginalised |
+| `dataset_id_altered` | New shared GeoMx dataset level drawn hierarchically |
+
+The assay term cannot be set to `GeoMx_DSP`: it is a fixed effect and GeoMx was
+not a fitted level. Treating it as a known atlas assay would invent information.
+
+## Which posterior quantity answers which question
+
+For a single observed count, the functions answer different questions:
+
+| Function | Quantity | Role here |
+|---|---|---|
+| `posterior_linpred(transform = FALSE)` | Latent log count-component mean, `log(mu)` | Matched healthy mean and SD for a secondary heteroscedastic log-mean test |
+| `posterior_epred()` | Expected observed count, including zero inflation but excluding observation noise | Effect-size summary |
+| `posterior_predict()` | Replicated observed count, including parameter, random-effect, zero-inflation and NB sampling uncertainty | **Primary predictive test** |
+
+For each gene-sample pair, the report computes lower and upper posterior
+predictive tail probabilities, a two-sided predictive tail probability, the
+central 95% predictive interval, and a mid-rank predictive percentile. The
+percentile is transformed to a standard-normal score so that absolute values
+can be averaged across genes for an outcome-free patient deviation score.
+Benjamini-Hochberg values are exploratory because only four atlas-covered TIMES
+genes and five patient-compartment observations are available.
+
+The log-mean analysis aligns with the `log(mu)` quantity used in the
+comprehensive cohort report. For a positive patient count `y`, offset `o`, and
+NB shape `r`, the patient estimate is `log(y) - o` and its delta-method NB SE
+is `sqrt(1 / y + 1 / r)`. It is compared with the mean and SD of matched
+healthy `posterior_linpred()` draws using a heteroscedastic normal statistic.
+This is the appropriate one-observation analogue of a Welch comparison, but
+not a literal `t.test()`: there is no within-patient replicate sample from
+which to estimate a classical Welch degrees of freedom. The reported p-values
+therefore use the normal reference distribution and remain exploratory.
+
+------------------------------------------------------------------------
+
+# Setup
+
+```{r}
+#| label: setup
+
+suppressPackageStartupMessages({
+  library(tibble)
+  library(tidyr)
+  library(dplyr)
+  library(readr)
+  library(purrr)
+  library(ggplot2)
+  library(forcats)
+  library(stringr)
+  library(targets)
+  library(brms)
+  library(posterior)
+})
+
+theme_set(theme_minimal(base_size = 11))
+
+set.seed(20250625)
+
+data_dir <- file.path(params$case_dir, "data")
+processed_dir <- file.path(data_dir, "processed")
+dir.create(processed_dir, recursive = TRUE, showWarnings = FALSE)
+
+model_path <- file.path(
+  params$model_store_root,
+  paste0("V1_", params$target_cell_type)
+)
+model_store <- file.path(model_path, "_targets")
+
+if (!dir.exists(model_store)) {
+  stop("Missing targets store: ", model_store)
+}
+```
+
+# Biomarker and model coverage
+
+```{r}
+#| label: biomarker-coverage
+
+times_biomarkers <- readr::read_csv(
+  file.path(data_dir, "times_biomarkers.csv"),
+  show_col_types = FALSE
+)
+
+model_meta <- targets::tar_meta(
+  starts_with("estimates_chunk_"),
+  store = model_store
+) |>
+  dplyr::filter(.data$type == "branch") |>
+  dplyr::mutate(
+    .feature = stringr::str_extract(
+      .data$warnings,
+      "(?<=Gene:___)ENSG\\d+(?=___)"
+    )
+  )
+
+biomarker_model_status <- times_biomarkers |>
+  dplyr::mutate(
+    in_v1_nk_store = .data$.feature %in% model_meta$.feature
+  ) |>
+  dplyr::select(gene, .feature, role, in_v1_nk_store)
+
+atlas_biomarkers <- biomarker_model_status |>
+  dplyr::filter(.data$in_v1_nk_store)
+
+biomarker_model_status
+```
+
+`HLA-DRB1` is retained in the direct within-HCC recurrence analysis but cannot
+be tested against a personalised posteriorHCA baseline because its `V1_nk`
+model branch is absent. The personalised test therefore uses SPON2, VIM, ZFP36,
+and ZFP36L2.
+
+# Recover patient metadata and observed counts
+
+```{r}
+#| label: patient-data
+
+roi_metadata <- readr::read_csv(
+  params$roi_metadata_csv,
+  show_col_types = FALSE
+) |>
+  dplyr::filter(
+    .data$included_in_author_nk_analysis,
+    .data$compartment %in% c("IF", "TC")
+  ) |>
+  dplyr::mutate(
+    sample_id = paste(.data$patient_id, .data$compartment, sep = "_")
+  )
+
+expression_df <- utils::read.csv(
+  params$expression_csv,
+  check.names = FALSE,
+  stringsAsFactors = FALSE
+)
+
+missing_genes <- setdiff(atlas_biomarkers$gene, expression_df$gene)
+if (length(missing_genes)) {
+  stop("Expression matrix is missing: ", paste(missing_genes, collapse = ", "))
+}
+
+expression_mat <- as.matrix(
+  expression_df[
+    match(atlas_biomarkers$gene, expression_df$gene),
+    setdiff(names(expression_df), "gene"),
+    drop = FALSE
+  ]
+)
+mode(expression_mat) <- "numeric"
+rownames(expression_mat) <- atlas_biomarkers$gene
+
+roi_columns_by_sample <- split(
+  roi_metadata$author_column,
+  roi_metadata$sample_id
+)
+
+patient_counts <- do.call(
+  cbind,
+  purrr::map(names(roi_columns_by_sample), function(sample_id) {
+    columns <- roi_columns_by_sample[[sample_id]]
+    values <- round(expression_mat[, columns, drop = FALSE])
+    n_observed <- rowSums(!is.na(values))
+    counts <- rowSums(values, na.rm = TRUE)
+    counts[n_observed == 0L] <- NA_real_
+    counts
+  })
+)
+colnames(patient_counts) <- names(roi_columns_by_sample)
+rownames(patient_counts) <- rownames(expression_mat)
+
+complete_samples <- colnames(patient_counts)[
+  colSums(!is.na(patient_counts)) == nrow(patient_counts)
+]
+patient_counts <- patient_counts[, complete_samples, drop = FALSE]
+
+normalization <- readr::read_csv(
+  params$normalization_csv,
+  show_col_types = FALSE
+) |>
+  dplyr::filter(.data$sample_role == "hcc_patient_pseudobulk") |>
+  dplyr::select(
+    sample_id, multiplier, offset, library_size, reference_sample
+  )
+
+patient_metadata <- roi_metadata |>
+  dplyr::filter(.data$sample_id %in% complete_samples) |>
+  dplyr::group_by(
+    .data$sample_id, .data$patient_id, .data$compartment,
+    .data$recurrence, .data$age, .data$gender, .data$relapse,
+    .data$death, .data$platform
+  ) |>
+  dplyr::summarise(
+    n_rois = dplyr::n_distinct(.data$author_column),
+    roi_contexts = paste(sort(unique(.data$cell_context)), collapse = "; "),
+    .groups = "drop"
+  ) |>
+  dplyr::left_join(normalization, by = "sample_id") |>
+  dplyr::mutate(
+    age_decade = as.character(ceiling(.data$age / 10)),
+    sex = stringr::str_to_lower(.data$gender),
+    tissue_groups = params$baseline_tissue_group,
+    disease_groups_altered = "Normal",
+    ethnicity_groups = NA_character_,
+    assay_groups_altered = NA_character_,
+    dataset_id_altered = "__Jie_HCC_GeoMx_new_dataset__"
+  ) |>
+  dplyr::arrange(.data$compartment, .data$recurrence, .data$patient_id)
+
+if (anyNA(patient_metadata$offset)) {
+  stop("At least one selected patient-compartment lacks an aligned offset.")
+}
+
+observed_counts <- as.data.frame(as.table(patient_counts)) |>
+  tibble::as_tibble() |>
+  dplyr::rename(
+    gene = "Var1",
+    sample_id = "Var2",
+    observed_count = "Freq"
+  ) |>
+  dplyr::mutate(
+    gene = as.character(.data$gene),
+    sample_id = as.character(.data$sample_id)
+  ) |>
+  dplyr::left_join(patient_metadata, by = "sample_id") |>
+  dplyr::left_join(
+    dplyr::select(atlas_biomarkers, gene, .feature),
+    by = "gene"
+  ) |>
+  dplyr::mutate(
+    observed_count = as.numeric(.data$observed_count),
+    observed_count_offset_zero = .data$observed_count / exp(.data$offset)
+  )
+
+readr::write_csv(patient_metadata, params$patient_metadata_csv)
+
+patient_metadata |>
+  dplyr::select(
+    sample_id, patient_id, compartment, recurrence, age, age_decade,
+    sex, relapse, death, n_rois, roi_contexts, platform, multiplier, offset
+  ) |>
+  dplyr::mutate(
+    dplyr::across(dplyr::where(is.numeric), ~round(.x, 4))
+  )
+```
+
+Only age and sex are patient-specific covariates in the fitted gene model.
+Recurrence, death, compartment, and ROI context are preserved for evaluation
+and interpretation but are not supplied to the healthy atlas model.
+
+# Personalised posterior prediction
+
+## Helper functions
+
+```{r}
+#| label: prediction-helpers
+
+fit_levels <- function(fit, variable) {
+  if (is.null(fit$data) || !variable %in% names(fit$data)) {
+    return(character())
+  }
+  values <- fit$data[[variable]]
+  levels_out <- if (is.factor(values)) {
+    levels(values)
+  } else {
+    sort(unique(as.character(values)))
+  }
+  levels_out[!is.na(levels_out) & nzchar(levels_out)]
+}
+
+known_or_missing <- function(value, fit, variable) {
+  value <- as.character(value[[1]])
+  if (is.na(value) || !nzchar(value)) {
+    return(NA_character_)
+  }
+  if (!value %in% fit_levels(fit, variable)) {
+    return(NA_character_)
+  }
+  value
+}
+
+read_fit_for_feature <- function(feature_id) {
+  target_name <- model_meta |>
+    dplyr::filter(.data$.feature == feature_id) |>
+    dplyr::slice(1) |>
+    dplyr::pull(.data$name)
+
+  if (!length(target_name)) {
+    stop("No target found for feature ", feature_id)
+  }
+
+  targets::tar_read_raw(
+    target_name[[1]],
+    store = model_store
+  )$brms_fit[[1]]
+}
+
+# Preserve the observed joint distribution of unknown fixed effects among
+# healthy liver NK atlas samples. Duplicate rows are deliberate empirical
+# weights; unsupported ethnicity-assay combinations are not invented.
+healthy_unknown_reference <- function(fit) {
+  fit_data <- tibble::as_tibble(fit$data)
+  reference <- fit_data |>
+    dplyr::filter(
+      as.character(.data$disease_groups_altered) == "Normal",
+      as.character(.data$tissue_groups) == params$baseline_tissue_group
+    ) |>
+    dplyr::transmute(
+      ethnicity_groups = as.character(.data$ethnicity_groups),
+      assay_groups_altered = as.character(.data$assay_groups_altered)
+    ) |>
+    tidyr::drop_na() |>
+    dplyr::filter(
+      nzchar(.data$ethnicity_groups),
+      nzchar(.data$assay_groups_altered)
+    )
+
+  if (!nrow(reference)) {
+    stop("No complete healthy liver rows available for marginalisation.")
+  }
+  reference
+}
+
+build_personalised_grid <- function(fit, sample_metadata) {
+  unknown_reference <- healthy_unknown_reference(fit)
+
+  sample_rows <- sample_metadata |>
+    dplyr::mutate(
+      age_decade = purrr::map_chr(
+        .data$age_decade,
+        ~known_or_missing(.x, fit, "age_decade")
+      ),
+      sex = purrr::map_chr(
+        .data$sex,
+        ~known_or_missing(.x, fit, "sex")
+      )
+    )
+
+  if (anyNA(sample_rows$age_decade) || anyNA(sample_rows$sex)) {
+    stop("Observed age decade or sex is absent from the fitted model levels.")
+  }
+
+  grid <- purrr::map_dfr(seq_len(nrow(sample_rows)), function(i) {
+    sample_row <- sample_rows[i, , drop = FALSE]
+
+    unknown_reference |>
+      dplyr::mutate(
+        sample_id = sample_row$sample_id,
+        patient_id = sample_row$patient_id,
+        compartment = sample_row$compartment,
+        recurrence = sample_row$recurrence,
+        age_decade = sample_row$age_decade,
+        sex = sample_row$sex,
+        disease_groups_altered = "Normal",
+        tissue_groups = params$baseline_tissue_group,
+        offset = sample_row$offset,
+        dataset_id_altered = "__Jie_HCC_GeoMx_new_dataset__",
+        unknown_row = dplyr::row_number()
+      )
+  })
+
+  list(
+    grid = grid,
+    n_unknown_rows = nrow(unknown_reference),
+    unknown_reference = unknown_reference
+  )
+}
+
+extract_mixture_draws <- function(
+    draw_matrix,
+    selected_unknown_rows,
+    n_unknown_rows
+) {
+  n_draws <- nrow(draw_matrix)
+  n_samples <- ncol(selected_unknown_rows)
+
+  sample_index <- matrix(
+    rep(seq_len(n_samples), each = n_draws),
+    nrow = n_draws,
+    ncol = n_samples
+  )
+  column_index <- (
+    sample_index - 1L
+  ) * n_unknown_rows + selected_unknown_rows
+
+  matrix(
+    draw_matrix[cbind(
+      rep(seq_len(n_draws), times = n_samples),
+      as.vector(column_index)
+    )],
+    nrow = n_draws,
+    ncol = n_samples
+  )
+}
+
+predict_one_gene <- function(gene, feature_id, sample_metadata, seed) {
+  fit <- read_fit_for_feature(feature_id)
+  grid_info <- build_personalised_grid(fit, sample_metadata)
+  grid <- grid_info$grid
+
+  prediction_newdata <- grid |>
+    dplyr::select(
+      age_decade, sex, disease_groups_altered, ethnicity_groups,
+      assay_groups_altered, dataset_id_altered, tissue_groups, offset
+    )
+
+  n_available <- posterior::ndraws(posterior::as_draws_df(fit))
+  draw_ids <- seq_len(n_available)
+
+  set.seed(seed)
+  predictive_matrix <- brms::posterior_predict(
+    fit,
+    newdata = prediction_newdata,
+    draw_ids = draw_ids,
+    re_formula = NULL,
+    allow_new_levels = TRUE,
+    sample_new_levels = "gaussian"
+  )
+
+  set.seed(seed + 1L)
+  expected_matrix <- brms::posterior_epred(
+    fit,
+    newdata = prediction_newdata,
+    draw_ids = draw_ids,
+    re_formula = NULL,
+    allow_new_levels = TRUE,
+    sample_new_levels = "gaussian"
+  )
+
+  # `transform = FALSE` returns the log-NB count mean, including the offset.
+  set.seed(seed + 2L)
+  linear_predictor_matrix <- brms::posterior_linpred(
+    fit,
+    newdata = prediction_newdata,
+    draw_ids = draw_ids,
+    re_formula = NULL,
+    allow_new_levels = TRUE,
+    sample_new_levels = "gaussian",
+    transform = FALSE
+  )
+
+  # NB shape is needed to propagate one-count uncertainty on the latent scale.
+  set.seed(seed + 3L)
+  shape_matrix <- brms::posterior_linpred(
+    fit,
+    newdata = prediction_newdata,
+    draw_ids = draw_ids,
+    re_formula = NULL,
+    allow_new_levels = TRUE,
+    sample_new_levels = "gaussian",
+    dpar = "shape",
+    transform = TRUE
+  )
+
+  set.seed(seed + 4L)
+  selected_unknown_rows <- matrix(
+    sample.int(
+      grid_info$n_unknown_rows,
+      n_available * nrow(sample_metadata),
+      replace = TRUE
+    ),
+    nrow = n_available,
+    ncol = nrow(sample_metadata)
+  )
+
+  predictive_draws <- extract_mixture_draws(
+    predictive_matrix,
+    selected_unknown_rows,
+    grid_info$n_unknown_rows
+  )
+  expected_draws <- extract_mixture_draws(
+    expected_matrix,
+    selected_unknown_rows,
+    grid_info$n_unknown_rows
+  )
+  linear_predictor_draws <- extract_mixture_draws(
+    linear_predictor_matrix,
+    selected_unknown_rows,
+    grid_info$n_unknown_rows
+  )
+  shape_draws <- extract_mixture_draws(
+    shape_matrix,
+    selected_unknown_rows,
+    grid_info$n_unknown_rows
+  )
+
+  colnames(predictive_draws) <- sample_metadata$sample_id
+  colnames(expected_draws) <- sample_metadata$sample_id
+  colnames(linear_predictor_draws) <- sample_metadata$sample_id
+  colnames(shape_draws) <- sample_metadata$sample_id
+
+  purrr::map_dfr(seq_len(nrow(sample_metadata)), function(i) {
+    tibble::tibble(
+      gene = gene,
+      .feature = feature_id,
+      sample_id = sample_metadata$sample_id[[i]],
+      draw = seq_len(n_available),
+      predicted_count = predictive_draws[, i],
+      expected_count = expected_draws[, i],
+      healthy_linpred_log_mu = linear_predictor_draws[, i] -
+        sample_metadata$offset[[i]],
+      healthy_nb_shape = shape_draws[, i],
+      unknown_reference_row = selected_unknown_rows[, i],
+      n_unknown_reference_rows = grid_info$n_unknown_rows
+    )
+  })
+}
+```
+
+The same new dataset tag is supplied for every patient row in a gene-level
+prediction call. This preserves the fact that all samples came from one GeoMx
+dataset while drawing that unseen random intercept from the fitted Gaussian
+population. For each posterior draw and patient, one healthy-liver
+ethnicity-assay row is sampled. This is a finite-mixture predictive draw; taking
+the row mean would incorrectly average away uncertainty for a single patient.
+
+## Generate personalised draws
+
+```{r}
+#| label: generate-personalised-draws
+
+predictive_draws <- purrr::pmap_dfr(
+  list(
+    atlas_biomarkers$gene,
+    atlas_biomarkers$.feature,
+    20250625L + seq_len(nrow(atlas_biomarkers))
+  ),
+  function(gene, feature_id, seed) {
+    predict_one_gene(
+      gene = gene,
+      feature_id = feature_id,
+      sample_metadata = patient_metadata,
+      seed = seed
+    )
+  }
+)
+
+saveRDS(predictive_draws, params$predictive_draws_rds)
+
+predictive_draws |>
+  dplyr::count(.data$gene, .data$sample_id, name = "n_draws") |>
+  dplyr::arrange(.data$gene, .data$sample_id)
+```
+
+# `posterior_predict()`: count-scale test results
+
+```{r}
+#| label: predictive-tests
+
+predictive_tests <- predictive_draws |>
+  dplyr::left_join(
+    observed_counts |>
+      dplyr::select(
+        gene, .feature, sample_id, patient_id, compartment, recurrence,
+        age, age_decade, sex, relapse, death, n_rois, roi_contexts,
+        platform, multiplier, offset, library_size, observed_count,
+        observed_count_offset_zero
+      ),
+    by = c("gene", ".feature", "sample_id")
+  ) |>
+  dplyr::group_by(
+    .data$gene, .data$.feature, .data$sample_id, .data$patient_id,
+    .data$compartment, .data$recurrence, .data$age, .data$age_decade,
+    .data$sex, .data$relapse, .data$death, .data$n_rois,
+    .data$roi_contexts, .data$platform, .data$multiplier, .data$offset,
+    .data$library_size, .data$observed_count,
+    .data$observed_count_offset_zero
+  ) |>
+  dplyr::summarise(
+    n_draws = dplyr::n(),
+    n_unknown_reference_rows = dplyr::first(
+      .data$n_unknown_reference_rows
+    ),
+    healthy_predictive_median = stats::median(.data$predicted_count),
+    healthy_predictive_lo = stats::quantile(.data$predicted_count, 0.025),
+    healthy_predictive_hi = stats::quantile(.data$predicted_count, 0.975),
+    healthy_epred_median = stats::median(.data$expected_count),
+    healthy_epred_lo = stats::quantile(.data$expected_count, 0.025),
+    healthy_epred_hi = stats::quantile(.data$expected_count, 0.975),
+    predictive_p_lower = (
+      1 + sum(.data$predicted_count <= .data$observed_count)
+    ) / (dplyr::n() + 1),
+    predictive_p_upper = (
+      1 + sum(.data$predicted_count >= .data$observed_count)
+    ) / (dplyr::n() + 1),
+    predictive_percentile = (
+      0.5 +
+        sum(.data$predicted_count < .data$observed_count) +
+        0.5 * sum(.data$predicted_count == .data$observed_count)
+    ) / (dplyr::n() + 1),
+    .groups = "drop"
+  ) |>
+  dplyr::mutate(
+    predictive_tail_p = pmin(
+      1,
+      2 * pmin(.data$predictive_p_lower, .data$predictive_p_upper)
+    ),
+    predictive_z = stats::qnorm(
+      pmin(
+        1 - 0.5 / (.data$n_draws + 1),
+        pmax(
+          0.5 / (.data$n_draws + 1),
+          .data$predictive_percentile
+        )
+      )
+    ),
+    absolute_predictive_z = abs(.data$predictive_z),
+    log2fc_vs_healthy_epred = log2(
+      (.data$observed_count + 0.5) /
+        (.data$healthy_epred_median + 0.5)
+    ),
+    direction = dplyr::case_when(
+      .data$predictive_p_lower <= 0.025 ~ "below_personalised_healthy",
+      .data$predictive_p_upper <= 0.025 ~ "above_personalised_healthy",
+      TRUE ~ "consistent_with_personalised_healthy"
+    ),
+    q_value_global = stats::p.adjust(
+      .data$predictive_tail_p,
+      method = "BH"
+    )
+  ) |>
+  dplyr::group_by(.data$sample_id) |>
+  dplyr::mutate(
+    q_value_within_sample = stats::p.adjust(
+      .data$predictive_tail_p,
+      method = "BH"
+    )
+  ) |>
+  dplyr::ungroup() |>
+  dplyr::arrange(
+    .data$compartment, .data$recurrence, .data$patient_id, .data$gene
+  )
+
+readr::write_csv(predictive_tests, params$test_results_csv)
+
+predictive_tests |>
+  dplyr::select(
+    gene, sample_id, recurrence, age_decade, sex, offset, observed_count,
+    healthy_predictive_median, healthy_predictive_lo,
+    healthy_predictive_hi, healthy_epred_median,
+    log2fc_vs_healthy_epred, predictive_percentile, predictive_tail_p,
+    q_value_global, direction
+  ) |>
+  dplyr::mutate(
+    dplyr::across(dplyr::where(is.numeric), ~round(.x, 4))
+  )
+```
+
+The two-sided value is a posterior predictive tail probability with a
+finite-draw correction, not a Welch or edgeR cohort test. A result outside the
+central predictive mass means that the observed count is difficult to generate
+from the personalised healthy counterfactual after propagating all modeled
+sources of uncertainty.
+
+# `posterior_linpred()`: patient log-mean test results
+
+```{r}
+#| label: linpred-welch-tests
+
+if (any(predictive_tests$observed_count <= 0)) {
+  stop("The NB delta-method log-mean SE requires positive observed counts.")
+}
+
+# The healthy distribution is the matched posterior_linpred distribution at
+# offset zero. A single patient has one NB count, so its log(mu) SE is obtained
+# by the delta method: Var(log(y)) approximately 1 / y + 1 / shape.
+linpred_tests <- predictive_draws |>
+  dplyr::select(
+    gene, .feature, sample_id, draw, healthy_linpred_log_mu,
+    healthy_nb_shape, n_unknown_reference_rows
+  ) |>
+  dplyr::left_join(
+    predictive_tests |>
+      dplyr::select(
+        gene, .feature, sample_id, patient_id, compartment, recurrence,
+        age, age_decade, sex, relapse, death, n_rois, roi_contexts, platform,
+        multiplier, offset, library_size, observed_count
+      ),
+    by = c("gene", ".feature", "sample_id")
+  ) |>
+  dplyr::group_by(
+    .data$gene, .data$.feature, .data$sample_id, .data$patient_id,
+    .data$compartment, .data$recurrence, .data$age, .data$age_decade,
+    .data$sex, .data$relapse, .data$death, .data$n_rois,
+    .data$roi_contexts, .data$platform, .data$multiplier, .data$offset,
+    .data$library_size, .data$observed_count
+  ) |>
+  dplyr::summarise(
+    n_draws = dplyr::n(),
+    n_unknown_reference_rows = dplyr::first(
+      .data$n_unknown_reference_rows
+    ),
+    healthy_log_mu_mean = mean(.data$healthy_linpred_log_mu),
+    healthy_log_mu_sd = stats::sd(.data$healthy_linpred_log_mu),
+    healthy_log_mu_lo = stats::quantile(.data$healthy_linpred_log_mu, 0.025),
+    healthy_log_mu_hi = stats::quantile(.data$healthy_linpred_log_mu, 0.975),
+    healthy_nb_shape_median = stats::median(.data$healthy_nb_shape),
+    .groups = "drop"
+  ) |>
+  dplyr::mutate(
+    patient_log_mu = log(.data$observed_count) - .data$offset,
+    patient_log_mu_se = sqrt(
+      1 / .data$observed_count + 1 / .data$healthy_nb_shape_median
+    ),
+    delta_log_mu_vs_healthy = (
+      .data$patient_log_mu - .data$healthy_log_mu_mean
+    ),
+    delta_log_mu_se = sqrt(
+      .data$patient_log_mu_se^2 + .data$healthy_log_mu_sd^2
+    ),
+    welch_style_z = (
+      .data$delta_log_mu_vs_healthy / .data$delta_log_mu_se
+    ),
+    welch_style_p = 2 * stats::pnorm(-abs(.data$welch_style_z)),
+    direction = dplyr::case_when(
+      .data$welch_style_z <= -1.96 ~ "below_personalised_healthy",
+      .data$welch_style_z >= 1.96 ~ "above_personalised_healthy",
+      TRUE ~ "not_significant"
+    ),
+    q_value_global = stats::p.adjust(.data$welch_style_p, method = "BH")
+  ) |>
+  dplyr::group_by(.data$sample_id) |>
+  dplyr::mutate(
+    q_value_within_sample = stats::p.adjust(
+      .data$welch_style_p,
+      method = "BH"
+    )
+  ) |>
+  dplyr::ungroup() |>
+  dplyr::arrange(
+    .data$compartment, .data$recurrence, .data$patient_id, .data$gene
+  )
+
+linpred_patient_scores <- linpred_tests |>
+  dplyr::group_by(
+    .data$sample_id, .data$patient_id, .data$compartment,
+    .data$recurrence, .data$age, .data$sex, .data$death
+  ) |>
+  dplyr::summarise(
+    n_genes = dplyr::n(),
+    mean_absolute_welch_z = mean(abs(.data$welch_style_z)),
+    mean_signed_welch_z = mean(.data$welch_style_z),
+    n_p_lt_0_05 = sum(.data$welch_style_p < 0.05),
+    n_global_q_lt_0_05 = sum(.data$q_value_global < 0.05),
+    .groups = "drop"
+  ) |>
+  dplyr::arrange(.data$compartment, .data$recurrence, .data$patient_id)
+
+readr::write_csv(linpred_tests, params$linpred_test_results_csv)
+readr::write_csv(linpred_patient_scores, params$linpred_patient_scores_csv)
+
+linpred_tests |>
+  dplyr::select(
+    gene, sample_id, recurrence, observed_count, patient_log_mu,
+    patient_log_mu_se, healthy_log_mu_mean, healthy_log_mu_sd,
+    delta_log_mu_vs_healthy, delta_log_mu_se, welch_style_z,
+    welch_style_p, q_value_global, direction
+  ) |>
+  dplyr::mutate(
+    dplyr::across(dplyr::where(is.numeric), ~round(.x, 4))
+  )
+```
+
+This is a patient-level heteroscedastic log-mean test. The patient SE comes
+from the NB sampling model for one positive count; the healthy SD is the
+spread of the patient's matched `posterior_linpred()` distribution, including
+model, covariate-marginalisation, and new-dataset uncertainty. It is
+Welch-style because the two sources have unequal variance, but it is not a
+literal Welch t-test with independent patient replicates. The normal-reference
+p-values and BH values are therefore exploratory.
+
+# Outcome-free patient deviation score
+
+```{r}
+#| label: patient-scores
+
+patient_scores <- predictive_tests |>
+  dplyr::group_by(
+    .data$sample_id, .data$patient_id, .data$compartment,
+    .data$recurrence, .data$age, .data$sex, .data$death
+  ) |>
+  dplyr::summarise(
+    n_genes = dplyr::n(),
+    mean_absolute_predictive_z = mean(.data$absolute_predictive_z),
+    mean_signed_predictive_z = mean(.data$predictive_z),
+    mean_abs_log2fc_vs_epred = mean(abs(.data$log2fc_vs_healthy_epred)),
+    mean_tail_surprisal = mean(-log10(.data$predictive_tail_p)),
+    n_outside_95 = sum(
+      .data$direction != "consistent_with_personalised_healthy"
+    ),
+    n_global_q_lt_0_05 = sum(.data$q_value_global < 0.05),
+    .groups = "drop"
+  ) |>
+  dplyr::arrange(.data$compartment, .data$recurrence, .data$patient_id)
+
+readr::write_csv(patient_scores, params$patient_scores_csv)
+
+patient_scores |>
+  dplyr::mutate(
+    dplyr::across(dplyr::where(is.numeric), ~round(.x, 4))
+  )
+```
+
+The primary patient score is the mean absolute predictive z-score across the
+four genes. It is outcome-free: recurrence labels are not used to construct the
+personalised null, gene-level tail probabilities, or score.
+
+```{r}
+#| label: performance
+
+auc_rank <- function(score, recurrence) {
+  recurrence <- as.character(recurrence)
+  positives <- score[recurrence == "REC"]
+  negatives <- score[recurrence == "non-REC"]
+  if (!length(positives) || !length(negatives)) {
+    return(NA_real_)
+  }
+  mean(outer(positives, negatives, ">")) +
+    0.5 * mean(outer(positives, negatives, "=="))
+}
+
+combined_patient_scores <- patient_scores |>
+  dplyr::group_by(.data$patient_id, .data$recurrence) |>
+  dplyr::summarise(
+    mean_absolute_predictive_z = mean(.data$mean_absolute_predictive_z),
+    n_compartments = dplyr::n(),
+    .groups = "drop"
+  )
+
+combined_linpred_patient_scores <- linpred_patient_scores |>
+  dplyr::group_by(.data$patient_id, .data$recurrence) |>
+  dplyr::summarise(
+    mean_absolute_welch_z = mean(
+      .data$mean_absolute_welch_z
+    ),
+    n_compartments = dplyr::n(),
+    .groups = "drop"
+  )
+
+predictive_performance <- dplyr::bind_rows(
+  patient_scores |>
+    dplyr::group_by(.data$compartment) |>
+    dplyr::summarise(
+      n_patients = dplyr::n_distinct(.data$patient_id),
+      n_rec = sum(.data$recurrence == "REC"),
+      auc = auc_rank(
+        .data$mean_absolute_predictive_z,
+        .data$recurrence
+      ),
+      .groups = "drop"
+    ) |>
+    dplyr::transmute(
+      scope = as.character(.data$compartment),
+      n_patients, n_rec, auc
+    ),
+  combined_patient_scores |>
+    dplyr::summarise(
+      scope = "combined_available_IF_TC",
+      n_patients = dplyr::n(),
+      n_rec = sum(.data$recurrence == "REC"),
+      auc = auc_rank(
+        .data$mean_absolute_predictive_z,
+        .data$recurrence
+      )
+  )
+)
+
+linpred_performance <- dplyr::bind_rows(
+  linpred_patient_scores |>
+    dplyr::group_by(.data$compartment) |>
+    dplyr::summarise(
+      n_patients = dplyr::n_distinct(.data$patient_id),
+      n_rec = sum(.data$recurrence == "REC"),
+      auc = auc_rank(
+        .data$mean_absolute_welch_z,
+        .data$recurrence
+      ),
+      .groups = "drop"
+    ) |>
+    dplyr::transmute(
+      scope = as.character(.data$compartment),
+      n_patients, n_rec, auc
+    ),
+  combined_linpred_patient_scores |>
+    dplyr::summarise(
+      scope = "combined_available_IF_TC",
+      n_patients = dplyr::n(),
+      n_rec = sum(.data$recurrence == "REC"),
+      auc = auc_rank(
+        .data$mean_absolute_welch_z,
+        .data$recurrence
+      )
+    )
+)
+
+performance <- dplyr::bind_rows(
+  predictive_performance |>
+    dplyr::mutate(analysis = "posterior_predict"),
+  linpred_performance |>
+    dplyr::mutate(analysis = "posterior_linpred_welch_style")
+) |>
+  dplyr::select(.data$analysis, dplyr::everything())
+
+readr::write_csv(performance, params$performance_csv)
+performance
+```
+
+# Visual summaries
+
+## `posterior_predict()`: observed-count predictive checks
+
+```{r}
+#| label: plot-predictive-intervals
+#| fig-width: 9
+#| fig-height: 7
+#| fig-align: center
+
+plot_tests <- predictive_tests |>
+  dplyr::mutate(
+    sample_label = paste0(.data$sample_id, " (", .data$recurrence, ")"),
+    sample_label = factor(
+      .data$sample_label,
+      levels = rev(unique(.data$sample_label))
+    )
+  )
+
+ggplot2::ggplot(
+  plot_tests,
+  ggplot2::aes(
+    y = .data$sample_label,
+    colour = .data$recurrence
+  )
+) +
+  ggplot2::geom_errorbar(
+    ggplot2::aes(
+      xmin = log1p(.data$healthy_predictive_lo),
+      xmax = log1p(.data$healthy_predictive_hi)
+    ),
+    orientation = "y",
+    width = 0.18,
+    linewidth = 0.7,
+    colour = "grey55"
+  ) +
+  ggplot2::geom_point(
+    ggplot2::aes(x = log1p(.data$healthy_predictive_median)),
+    shape = 3,
+    size = 2.5,
+    stroke = 0.8
+  ) +
+  ggplot2::geom_point(
+    ggplot2::aes(x = log1p(.data$observed_count)),
+    size = 2.8
+  ) +
+  ggplot2::facet_wrap(~ gene, scales = "free_x", ncol = 2) +
+  ggplot2::scale_colour_manual(
+    values = c(`non-REC` = "#2878B5", REC = "#C23B4A")
+  ) +
+  ggplot2::labs(
+    title = "Observed counts against personalised healthy predictions",
+    subtitle = "Points = observed; plus signs = predictive median; bars = central 95% posterior predictive interval",
+    x = "log(1 + count), evaluated at each patient's TMMwsp offset",
+    y = NULL,
+    colour = "Outcome"
+  ) +
+  ggplot2::theme(legend.position = "bottom")
+```
+
+```{r}
+#| label: plot-predictive-z
+#| fig-width: 8
+#| fig-height: 5
+#| fig-align: center
+
+ggplot2::ggplot(
+  plot_tests,
+  ggplot2::aes(
+    x = .data$sample_label,
+    y = forcats::fct_rev(factor(.data$gene)),
+    fill = .data$predictive_z
+  )
+) +
+  ggplot2::geom_tile(colour = "white", linewidth = 0.5) +
+  ggplot2::geom_text(
+    ggplot2::aes(label = sprintf("p=%.3f", .data$predictive_tail_p)),
+    size = 3
+  ) +
+  ggplot2::scale_fill_gradient2(
+    low = "#2166AC",
+    mid = "white",
+    high = "#B2182B",
+    midpoint = 0,
+    name = "Predictive z"
+  ) +
+  ggplot2::labs(
+    title = "Direction and strength of personalised healthy deviation",
+    subtitle = "Negative values are below healthy; positive values are above healthy",
+    x = NULL,
+    y = NULL
+  ) +
+  ggplot2::theme(
+    panel.grid = ggplot2::element_blank(),
+    axis.text.x = ggplot2::element_text(angle = 25, hjust = 1)
+  )
+```
+
+## `posterior_linpred()`: patient and matched healthy density overlap
+
+```{r}
+#| label: plot-linpred-density-overlap
+#| fig-width: 12
+#| fig-height: 10
+#| fig-align: center
+
+set.seed(20250630)
+patient_density <- linpred_tests |>
+  dplyr::select(
+    gene, sample_id, patient_id, compartment, recurrence,
+    patient_log_mu, patient_log_mu_se
+  ) |>
+  tidyr::uncount(2000L, .id = "density_draw") |>
+  dplyr::mutate(
+    log_mu = stats::rnorm(
+      dplyr::n(),
+      mean = .data$patient_log_mu,
+      sd = .data$patient_log_mu_se
+    ),
+    distribution = .data$recurrence
+  )
+
+healthy_density <- predictive_draws |>
+  dplyr::select(gene, sample_id, healthy_linpred_log_mu) |>
+  dplyr::left_join(
+    linpred_tests |>
+      dplyr::select(gene, sample_id, patient_id, compartment, recurrence),
+    by = c("gene", "sample_id")
+  ) |>
+  dplyr::transmute(
+    gene, sample_id, patient_id, compartment, recurrence,
+    log_mu = .data$healthy_linpred_log_mu,
+    distribution = "Healthy baseline"
+  )
+
+density_means <- dplyr::bind_rows(
+  linpred_tests |>
+    dplyr::transmute(
+      gene, sample_id, patient_id, compartment, recurrence,
+      mean_log_mu = .data$patient_log_mu,
+      distribution = .data$recurrence
+    ),
+  linpred_tests |>
+    dplyr::transmute(
+      gene, sample_id, patient_id, compartment, recurrence,
+      mean_log_mu = .data$healthy_log_mu_mean,
+      distribution = "Healthy baseline"
+    )
+) |>
+  dplyr::mutate(
+    sample_label = paste0(.data$sample_id, " (", .data$recurrence, ")")
+  )
+
+density_data <- dplyr::bind_rows(patient_density, healthy_density) |>
+  dplyr::mutate(
+    sample_label = paste0(.data$sample_id, " (", .data$recurrence, ")")
+  )
+
+ggplot2::ggplot(
+  density_data,
+  ggplot2::aes(
+    x = .data$log_mu,
+    colour = .data$distribution,
+    fill = .data$distribution
+  )
+) +
+  ggplot2::geom_density(alpha = 0.12, linewidth = 0.7, adjust = 1.15) +
+  ggplot2::geom_point(
+    data = density_means,
+    ggplot2::aes(
+      x = .data$mean_log_mu,
+      y = 0,
+      colour = .data$distribution,
+      fill = .data$distribution
+    ),
+    inherit.aes = FALSE,
+    shape = 21,
+    size = 2.5,
+    stroke = 0.7
+  ) +
+  ggplot2::facet_grid(sample_label ~ gene) +
+  ggplot2::scale_colour_manual(
+    values = c(
+      "Healthy baseline" = "grey35",
+      "non-REC" = "#2878B5",
+      REC = "#C23B4A"
+    )
+  ) +
+  ggplot2::scale_fill_manual(
+    values = c(
+      "Healthy baseline" = "grey70",
+      "non-REC" = "#2878B5",
+      REC = "#C23B4A"
+    )
+  ) +
+  ggplot2::labs(
+    title = "Patient log-mean estimates against matched healthy NK baselines",
+    subtitle = "Lines = patient and that patient's healthy reference; dots on the x-axis = means",
+    x = "Offset-zero log(mu)",
+    y = "Density",
+    colour = "Distribution",
+    fill = "Distribution"
+  ) +
+  ggplot2::theme(legend.position = "bottom")
+```
+
+Each panel contains exactly one HCC patient-compartment and the healthy
+`posterior_linpred()` distribution matched to that same patient. No baseline
+draws or patient estimates are pooled across individuals. Blue and red curves
+denote non-REC and REC only as an outcome annotation; coloured curves are
+normal approximations centred on NB-derived patient log means with their
+delta-method SEs.
+
+## Outcome-free predictive patient scores
+
+```{r}
+#| label: plot-patient-scores
+#| fig-width: 8
+#| fig-height: 4.5
+#| fig-align: center
+
+ggplot2::ggplot(
+  patient_scores,
+  ggplot2::aes(
+    x = .data$compartment,
+    y = .data$mean_absolute_predictive_z,
+    colour = .data$recurrence,
+    label = .data$patient_id
+  )
+) +
+  ggplot2::geom_point(size = 3) +
+  ggplot2::geom_text(
+    nudge_x = 0.08,
+    hjust = 0,
+    size = 3.2,
+    show.legend = FALSE
+  ) +
+  ggplot2::scale_colour_manual(
+    values = c(`non-REC` = "#2878B5", REC = "#C23B4A")
+  ) +
+  ggplot2::labs(
+    title = "Outcome-free personalised deviation scores",
+    subtitle = "Mean absolute posterior predictive z-score across four atlas-covered TIMES genes",
+    x = NULL,
+    y = "Mean absolute predictive z",
+    colour = "Outcome"
+  ) +
+  ggplot2::theme(legend.position = "bottom")
+```
+
+# Interpretation
+
+```{r}
+#| label: interpretation-values
+
+n_tests <- nrow(predictive_tests)
+n_outside <- sum(
+  predictive_tests$direction != "consistent_with_personalised_healthy"
+)
+n_global_q <- sum(predictive_tests$q_value_global < 0.05)
+n_below <- sum(
+  predictive_tests$direction == "below_personalised_healthy"
+)
+n_above <- sum(
+  predictive_tests$direction == "above_personalised_healthy"
+)
+n_below_epred <- sum(predictive_tests$log2fc_vs_healthy_epred < 0)
+
+n_linpred_significant <- sum(linpred_tests$welch_style_p < 0.05)
+n_linpred_global_q <- sum(linpred_tests$q_value_global < 0.05)
+n_linpred_below <- sum(
+  linpred_tests$direction == "below_personalised_healthy"
+)
+n_linpred_above <- sum(
+  linpred_tests$direction == "above_personalised_healthy"
+)
+n_linpred_below_rec <- sum(
+  linpred_tests$direction == "below_personalised_healthy" &
+    linpred_tests$recurrence == "REC"
+)
+n_linpred_below_nonrec <- sum(
+  linpred_tests$direction == "below_personalised_healthy" &
+    linpred_tests$recurrence == "non-REC"
+)
+
+rec_scores <- patient_scores |>
+  dplyr::filter(.data$recurrence == "REC") |>
+  dplyr::pull(.data$mean_absolute_predictive_z)
+nonrec_scores <- patient_scores |>
+  dplyr::filter(.data$recurrence == "non-REC") |>
+  dplyr::pull(.data$mean_absolute_predictive_z)
+
+linpred_rec_scores <- linpred_patient_scores |>
+  dplyr::filter(.data$recurrence == "REC") |>
+  dplyr::pull(.data$mean_absolute_welch_z)
+linpred_nonrec_scores <- linpred_patient_scores |>
+  dplyr::filter(.data$recurrence == "non-REC") |>
+  dplyr::pull(.data$mean_absolute_welch_z)
+
+outside_predictive_interval <- predictive_tests |>
+  dplyr::filter(
+    .data$direction != "consistent_with_personalised_healthy"
+  ) |>
+  dplyr::select(
+    gene, sample_id, recurrence, observed_count,
+    healthy_predictive_lo, healthy_predictive_hi,
+    predictive_tail_p, q_value_global, direction
+  )
+```
+
+Across `r n_tests` gene-by-patient-compartment tests, `r n_outside` observations
+fall outside the central 95% personalised posterior predictive distribution:
+`r n_below` below and `r n_above` above healthy expectation. After global
+Benjamini-Hochberg adjustment, `r n_global_q` remain below 0.05.
+
+```{r}
+#| label: outside-predictive-interval
+
+outside_predictive_interval |>
+  dplyr::mutate(
+    dplyr::across(dplyr::where(is.numeric), ~round(.x, 4))
+  )
+```
+
+All `r n_below_epred` observed counts are below their personalised healthy
+`posterior_epred` median. The stronger result is comparative rather than
+gene-wise significance: the REC patient A29 has mean absolute predictive
+z-scores of `r round(patient_scores$mean_absolute_predictive_z[patient_scores$sample_id == "A29_IF"], 3)`
+in IF and
+`r round(patient_scores$mean_absolute_predictive_z[patient_scores$sample_id == "A29_TC"], 3)`
+in TC. The available non-REC scores range from
+`r round(min(nonrec_scores), 3)` to `r round(max(nonrec_scores), 3)`.
+
+The `posterior_linpred` log-mean test reports `r n_linpred_significant` of
+`r n_tests` comparisons with an unadjusted normal-reference p-value below
+0.05 (`r n_linpred_global_q` after global BH adjustment):
+`r n_linpred_below` below and `r n_linpred_above` above the personalised
+healthy mean. `r n_linpred_below_rec` below-healthy calls are in the REC
+patient, versus `r n_linpred_below_nonrec` in non-REC patients. A29's mean
+absolute Welch-style z-score is
+`r round(linpred_patient_scores$mean_absolute_welch_z[linpred_patient_scores$sample_id == "A29_IF"], 3)`
+in IF and
+`r round(linpred_patient_scores$mean_absolute_welch_z[linpred_patient_scores$sample_id == "A29_TC"], 3)`
+in TC, versus `r round(min(linpred_nonrec_scores), 3)` to
+`r round(max(linpred_nonrec_scores), 3)` in non-REC samples. As in the
+predictive analysis, the outcome-free patient ordering is more stable than any
+single-gene threshold.
+
+The patient score is a standardized predictive-deviation index, not a
+recurrence probability. Its recurrence discrimination is descriptive:
+
+```{r}
+#| label: performance-display
+
+performance |>
+  dplyr::mutate(auc = round(.data$auc, 3))
+```
+
+These results test whether posteriorHCA can create a patient-specific healthy
+counterfactual, not whether it has equal power to the original spatial TIMES
+model. The current evaluation has three patients, one REC patient, four
+atlas-covered genes, author-processed GeoMx values, and an assay platform absent
+from model training. Age, sex, tissue, offset, disease state, unknown
+fixed-effect uncertainty, dataset heterogeneity, and observation noise are
+handled explicitly; the remaining modality mismatch cannot be removed without
+healthy GeoMx liver NK training data or a fitted cross-platform calibration
+term.
+
+The difference from the comprehensive cohort analysis is intentional. That
+analysis compares estimated latent log means and can provide sharper evidence
+about cohort displacement. Here, `posterior_linpred()` supplies the matched
+healthy log-mean distribution, while the patient log-mean SE is derived from
+its one-count NB sampling model. The primary personalised analysis instead
+asks whether one raw count is unusual for a new healthy observation, so
+`posterior_predict()` additionally represents zero-inflation and count
+generation. The log-mean test complements that calibrated predictive check;
+it must not be presented as a standard replicated-sample Welch t-test.
+
+# Output files
+
+```{r}
+#| label: output-files
+
+output_paths <- c(
+  patient_metadata_csv = params$patient_metadata_csv,
+  test_results_csv = params$test_results_csv,
+  patient_scores_csv = params$patient_scores_csv,
+  performance_csv = params$performance_csv,
+  linpred_test_results_csv = params$linpred_test_results_csv,
+  linpred_patient_scores_csv = params$linpred_patient_scores_csv,
+  predictive_draws_rds = params$predictive_draws_rds
+)
+
+tibble::tibble(
+  output = names(output_paths),
+  path = unname(output_paths),
+  exists = file.exists(output_paths)
+)
+```

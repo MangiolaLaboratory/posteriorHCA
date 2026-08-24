@@ -1,0 +1,704 @@
+---
+title: "Testing a diseased cohort against a Bayesian healthy atlas"
+subtitle: "From the ZINB baseline to a non-parametric biomarker test on the mean parameter μ"
+date: today
+date-format: "DD MMM YYYY"
+title-block-banner: true
+author:
+  - name: Chen Zhan
+    orcid: 0000-0002-4794-8339
+    email: chen.zhan@adelaide.edu.au
+    affiliation:
+      - id: sgc
+        name: SAiGENCI, The University of Adelaide
+format:
+  html:
+    theme: minty
+    df-print: paged
+    code-line-numbers: true
+    embed-resources: true
+    code-fold: true
+    code-fold-default: true
+    toc: true
+    toc-location: left
+    toc-title: "Contents"
+knitr:
+  opts_chunk:
+    message: false
+    warning: false
+editor: source
+---
+
+```{r setup}
+suppressMessages({
+  library(SummarizedExperiment)
+  library(edgeR)
+  library(tidybulk)
+  library(dplyr)
+  library(tidyverse)
+  library(knitr)
+})
+
+# Cached objects (built once; see mu_test_build_env.R / mu_test_epred_baseline.R)
+se_cache           <- "/home/a1237163/mu_test_se_monocytic.rds"
+epred_baseline_rds <- "/home/a1237163/mu_test_epred_baseline.rds"
+data_dir           <- "/home/a1237163/lab/chen/posteriorHCA/dev/SAVI/data"
+baseline_draws_rds <- file.path(data_dir, "SAVI_gene_baseline_draws_universal.rds")
+
+gene_id <- "ENSG00000196428"          # TSC22D2
+
+.c              <- readRDS(se_cache)
+se_monocytic    <- .c$se_monocytic
+ref_sample_name <- .c$ref_sample_name
+
+# Human-readable table formatting (avoid scientific notation in kable).
+fmt_num <- function(x, digits = 3) {
+  format(round(x, digits), nsmall = digits, trim = TRUE, scientific = FALSE)
+}
+fmt_int <- function(x) format(as.integer(x), big.mark = ",", scientific = FALSE, trim = TRUE)
+```
+
+# The question
+
+We have a Bayesian model of "healthy" gene expression built from a large
+single-cell atlas, and a small diseased cohort of our own — **SAVI** (STING-associated
+vasculopathy with onset in infancy), a handful of donors, sequenced as
+disease-associated monocytes, together with a matched **CTRL** group.
+
+For a candidate biomarker gene we want to answer a deceptively simple question:
+
+> Is the gene's expression in the SAVI cohort **significantly different** from what
+> the healthy atlas says it should be?
+
+The difficulty is that the two sides come from completely different statistical
+machinery: a Bayesian **zero-inflated negative binomial (ZINB)** mixed model for
+the atlas, and a frequentist **edgeR negative-binomial GLM** for our cohort. To
+compare them we must (i) extract a quantity that means the *same thing* in both
+models, and (ii) make sure it is reported on the *same scale*. This report tells
+that story and documents the verification we did along the way.
+
+# The healthy baseline: a Bayesian ZINB atlas model
+
+Each gene in the atlas is modelled with `brms` as a zero-inflated negative
+binomial regression on the raw counts, with a per-sample **offset** and a rich
+fixed/random-effect structure:
+
+```{r brms-formula}
+#| eval: false
+#| code-fold: false
+# (exposition only — the fit is reconstructed from a compressed store; see below)
+formula <- bf(
+  counts ~ 1 + offset(offset) +
+    age_decade * sex + disease_groups_altered + ethnicity_groups + assay_groups_altered +
+    (1 | dataset_id_altered) +
+    (1 + age_decade * sex + ethnicity_groups | <finer grouping>),
+  shape  ~ 1 + disease_groups_altered + assay_groups_altered + ethnicity_groups +
+    (1 | tissue_groups)
+)
+brm(formula, data = data, family = zero_inflated_negbinomial())
+```
+
+The negative-binomial **mean parameter** for sample $j$ is
+
+$$
+\log \mu_j \;=\; \underbrace{\text{offset}_j}_{\text{sequencing depth}} \;+\; \mathbf{x}_j^\top \boldsymbol\beta ,
+$$
+
+and the observed count is then $y_j \sim \text{ZINB}(\mu_j, \phi, \pi)$, i.e. with
+probability $\pi$ a structural zero and otherwise $\text{NB}(\mu_j, \phi)$.
+
+## What the offset is
+
+The offset is the **log effective library size**. In training it is defined from
+`tidybulk::scale_abundance`:
+
+$$
+\text{offset}_j \;=\; \log\!\frac{1}{\text{multiplier}_j},
+$$
+
+where `multiplier`$_j$ is the TMMwsp scaling factor that maps sample $j$ onto a
+chosen **reference sample** (the atlas column whose library size is closest to the
+mean). By construction the reference sample has `multiplier` $=1$, so its offset is
+**exactly 0**. Everything the model reports "at offset 0" is therefore "at the
+reference sample's depth".
+
+## The universal (marginal) baseline
+
+Our cohort's metadata (age, sex, ethnicity, assay) is largely **unknown**. So
+instead of conditioning the baseline on specific covariates, we build a
+**universal** baseline: we hold the biologically required terms fixed
+(`disease = Normal`, `tissue = blood`, `offset = 0`), and **marginalise** over the
+unknown covariates by averaging the prediction over the full grid of their atlas
+levels. This yields, per gene, a large pool of posterior draws of $\log\mu$ that
+represents "healthy expression across all plausible covariate combinations".
+
+# What "μ" means — and why `posterior_linpred`, not `posterior_epred`
+
+This is the first subtlety. For a **zero-inflated** NB model the two obvious
+`brms` extractors give different things:
+
+| extractor | returns | meaning |
+|---|---|---|
+| `posterior_epred()` | $(1-\pi)\,\mu$ | expected **count** (zero-inflation folded in) |
+| `posterior_linpred(transform = FALSE)` | $\log\mu$ | the NB **location parameter** (log scale) |
+
+We want the **NB mean parameter $\mu$** — the biological expression level *before*
+the zero-inflation machinery — because that is the quantity edgeR's NB GLM also
+estimates. So the baseline draws are produced with
+`posterior_linpred(transform = FALSE)` and then exponentiated, **not**
+`posterior_epred`.
+
+```{r brms-extract, eval=FALSE}
+# How the baseline draws were generated (mu_test_epred_baseline.R).
+log_mu_mat <- posterior_linpred(
+  fit, newdata = nd_grid, transform = FALSE,   # log(mu), NOT epred
+  re_formula = NULL, allow_new_levels = TRUE, sample_new_levels = "gaussian"
+)
+log_mu           <- as.numeric(log_mu_mat)   # pooled draws x grid (full spread)
+grand_mean_draws <- rowMeans(log_mu_mat)     # per-draw average over the grid (see §[SE](#sec-se))
+```
+
+```{r load-baseline}
+ep <- readRDS(epred_baseline_rds)
+baseline_summary <- tibble::tibble(
+  quantity = c("median μ (count scale)",
+               "mean log(μ)",
+               "SD log(μ) — full predictive spread",
+               "SD of grand-mean draws — uncertainty in the mean",
+               "n pooled draws", "n posterior draws (grand mean)"),
+  value = c(fmt_num(ep$median_mu, 1),
+            fmt_num(ep$mean_log_mu, 3),
+            fmt_num(ep$sd_log_mu, 3),
+            fmt_num(ep$sd_grand_mean, 3),
+            fmt_int(ep$n_draws),
+            fmt_int(ep$n_grand))
+)
+kable(baseline_summary, caption = "Healthy baseline μ for TSC22D2 (universal marginal).")
+```
+
+## Baseline distributions on the log(μ) scale
+
+Both baseline summaries live on the **log(μ) scale** because that is what
+`posterior_linpred(transform = FALSE)` returns — the NB location parameter before
+exponentiation. We expect both distributions to be **approximately normal**, for
+slightly different reasons:
+
+- **Full marginal log(μ) draws** (`log_mu`, pooled over posterior draws × covariate
+  grid). Each draw is the linear predictor
+  $\log\mu = \text{offset} + \mathbf{x}^\top\boldsymbol\beta + \text{random effects}$.
+  That is a sum of many fixed and random components. Even though we marginalise over
+  a discrete covariate grid (a mixture), the resulting cloud is bell-shaped: most
+  mass sits near the typical healthy state, with heavier tails from rare covariate
+  combinations (young vs senior, different ethnicities, etc.).
+
+- **Grand-mean log(μ) draws** (`grand_mean_draws`, one value per posterior draw).
+  For each draw we average log(μ) over the full covariate grid. By the **central
+  limit theorem**, averaging $G$ grid points shrinks the variance by roughly $1/G$
+  and pushes the distribution toward **Normality** much more tightly than the full
+  marginal cloud. That is exactly why its SD (`r fmt_num(ep$sd_grand_mean, 3)`) is
+  less than half the full predictive SD (`r fmt_num(ep$sd_log_mu, 3)`): we are
+  looking at uncertainty in the **mean**, not spread across conditions.
+
+```{r baseline-density, fig.height=4.2, fig.width=7.2, fig.cap="Baseline log(μ): full marginal spread (blue) vs posterior of the grand mean (orange). The grand-mean distribution is narrower and more Gaussian because each value averages over the covariate grid."}
+par(mar = c(4.2, 4.2, 2.5, 1))
+dens_marg <- density(ep$log_mu, na.rm = TRUE)
+dens_mean <- density(ep$grand_mean_draws, na.rm = TRUE)
+ylim <- range(c(dens_marg$y, dens_mean$y))
+plot(dens_marg, col = "#3b6ea5", lwd = 2, ylim = ylim,
+     main = "Baseline log(μ): marginal vs grand mean",
+     xlab = expression(log(mu)), ylab = "Density")
+lines(dens_mean, col = "#e67e22", lwd = 2)
+abline(v = ep$mean_log_mu, col = "#3b6ea5", lty = 2, lwd = 1.5)
+abline(v = ep$mean_grand_mean, col = "#e67e22", lty = 2, lwd = 1.5)
+legend("topright", bty = "n", lwd = 2, lty = c(1, 1, 2, 2),
+       col = c("#3b6ea5", "#e67e22", "#3b6ea5", "#e67e22"),
+       legend = c("Marginal log(μ) (full spread)",
+                  "Grand-mean log(μ) (grid collapsed)",
+                  "Marginal mean", "Grand-mean mean"))
+```
+
+# The cohort: an edgeR negative-binomial model
+
+For our own samples we use the standard edgeR NB-GLM workflow, with a
+**group-means design** `~ 0 + group` so that each group (SAVI, CTRL,
+reference) gets its own coefficient = $\log\mu$ at offset 0, rather than a fold
+change relative to a reference.
+
+The crucial alignment step: we set edgeR's offset to the **same**
+`scale_abundance` definition the ZINB was trained with, anchored to the **same**
+reference sample. Then "offset 0" means the same thing on both sides.
+
+```{r edger-fit}
+se_test <- se_monocytic |>
+  tidybulk::scale_abundance(method = "TMMwsp", reference_sample = ref_sample_name)
+
+counts     <- assay(se_test, "counts")
+meta       <- as.data.frame(colData(se_test))
+offset_vec <- log(1 / meta$multiplier)                 # = training definition
+
+group <- as.character(meta$Category); group[is.na(group)] <- "reference"
+meta$group <- factor(group) |> fct_relevel("reference")
+
+dge <- DGEList(counts = counts, samples = meta,
+               genes = as.data.frame(rowData(se_test)))
+reference <- which(colnames(dge$counts) == ref_sample_name)
+dge$offset <- matrix(offset_vec, nrow(dge), ncol(dge), byrow = TRUE)
+
+design <- model.matrix(~ 0 + group, data = meta)
+colnames(design) <- sub("^group", "", colnames(design))
+
+dge <- estimateDisp(dge, design)
+fit <- glmQLFit(dge, design)
+gi  <- match(gene_id, rownames(fit))
+
+# Same dispersion mu_test.R uses (trended, falling back as needed).
+nb_dispersion <- if (!is.null(dge$trended.dispersion)) {
+  dge$trended.dispersion
+} else if (!is.null(dge$tagwise.dispersion)) {
+  dge$tagwise.dispersion
+} else {
+  rep_len(dge$common.dispersion, nrow(dge))
+}
+disp <- nb_dispersion[gi]
+```
+
+# Are the two offsets the same thing?
+
+Both models use exactly the same equation, $\log\mu_j = \text{offset}_j + \mathbf{x}_j^\top\boldsymbol\beta$,
+with $\mu$ on the **raw count scale** and $\exp(\text{offset})$ the per-sample size
+factor. So conceptually the offset plays an identical role. But we should verify
+that edgeR's normalisation and the training `scale_abundance` normalisation are the
+same numerically. We compared edgeR's default offset
+($\log(\text{lib.size}\times\text{norm.factor})$ from `calcNormFactors`) against
+`scale_abundance`'s $\log(1/\text{multiplier})$:
+
+```{r offset-equiv}
+A <- DGEList(counts = counts, samples = meta)
+A <- calcNormFactors(A, refColumn = reference, method = "TMMwsp")
+off_calcNF  <- log(A$samples$lib.size * A$samples$norm.factors)   # edgeR default
+off_scaleAb <- offset_vec                                         # scale_abundance
+
+offset_check <- tibble::tibble(
+  metric = c("correlation(off1, off2)",
+             "off1 - off2 : mean (the global constant)",
+             "off1 - off2 : SD (0 => perfectly parallel)"),
+  value  = c(round(cor(off_calcNF, off_scaleAb), 6),
+             round(mean(off_calcNF - off_scaleAb), 4),
+             signif(sd(off_calcNF - off_scaleAb), 3))
+)
+kable(offset_check, caption = "The two offsets are identical up to a global constant.")
+```
+
+```{r offset-plot, fig.height=3.4, fig.width=4.6, fig.cap="calcNormFactors vs scale_abundance offsets: a perfect line. They are the same normalisation; scale_abundance simply re-anchors the reference sample to 0."}
+plot(off_scaleAb, off_calcNF, pch = 19, col = "#3b6ea5",
+     xlab = "scale_abundance  log(1/multiplier)",
+     ylab = "calcNormFactors  log(lib.size*nf)")
+abline(a = mean(off_calcNF - off_scaleAb), b = 1, col = "#c0392b", lwd = 2)
+```
+
+**Conclusion.** The offset is the same quantity in the brms ZINB model and the
+edgeR NB model, and the two normalisation routines produce the same factors
+(correlation 1, differing only by a constant). We use `scale_abundance` solely
+because it re-anchors the reference sample to offset 0 — matching the brms
+training convention so that both sides report μ "at offset 0".
+
+# The pitfall: edgeR's coefficient is *not* μ at offset 0 {#sec-pitfall}
+
+It is tempting to read the cohort's $\log\mu$ straight off
+`fit$coefficients[gene, group]` (since offset 0 is the reference scale). **This is
+wrong**, and finding out why was the key discovery.
+
+edgeR's DGEList pipeline (`glmFit`/`glmQLFit`) internally **rescales a supplied
+offset by a constant**. As a result its coefficients are shifted on the *absolute*
+scale. The shift cancels in any group-vs-group contrast — edgeR's intended use —
+so nobody normally notices. But we are comparing an **absolute** μ to an external
+baseline, where the shift does *not* cancel.
+
+We verified the true NB mean three independent ways:
+
+```{r pitfall}
+sav <- which(meta$group == "SAVI")
+ctl <- which(meta$group == "CTRL")
+
+nb_mle <- function(j) {
+  # genuine NB MLE of log(mu) at offset 0, offset applied directly
+  edgeR::mglmOneGroup(matrix(counts[gi, j], nrow = 1),
+                      dispersion = disp, offset = offset_vec[j])
+}
+glm_nb <- function(j) {
+  unname(coef(glm(counts[gi, j] ~ 1 + offset(offset_vec[j]),
+                  family = MASS::negative.binomial(theta = 1/disp)))[1])
+}
+
+verify <- tibble::tibble(
+  estimator = c("edgeR glmQLFit coefficient (the trap)",
+                "edgeR mglmOneGroup (raw NB MLE)",
+                "independent MASS::glm.nb"),
+  SAVI_logmu = c(fit$coefficients[gi, "SAVI"], nb_mle(sav), glm_nb(sav)),
+  SAVI_mu    = exp(c(fit$coefficients[gi, "SAVI"], nb_mle(sav), glm_nb(sav))),
+  CTRL_logmu = c(fit$coefficients[gi, "CTRL"], nb_mle(ctl), glm_nb(ctl))
+) |>
+  mutate(across(where(is.numeric), ~round(.x, 3)))
+kable(verify, caption = "glmQLFit's coefficient is shifted by a constant (~0.85 here) for BOTH groups; the raw NB MLE is the correct μ at offset 0.")
+```
+
+The `glmQLFit` coefficient understates SAVI's μ by a factor of roughly
+$\exp(0.85)\approx 2.4\times$ — a constant shift visible in **both** groups (so it
+would vanish in a SAVI-vs-CTRL contrast, but it badly distorts the comparison to
+the healthy baseline).
+
+**Fix.** Take the **point estimate** from the raw NB MLE (`mglmOneGroup`, offset
+applied directly), and use `glmQLFit` only for the **QL-shrunk Wald SE**, which is
+invariant to a constant offset shift. This is exactly what `mu_test.R` now does:
+
+```{r cohort-mu}
+ql_se <- function(grp) {
+  mu_all <- fit$fitted.values[gi, ]
+  W      <- mu_all / (1 + disp * mu_all)              # NB IRLS working weights
+  cov_un <- solve(t(fit$design) %*% (W * fit$design))
+  sqrt(fit$s2.post[gi] * cov_un[grp, grp])
+}
+
+mu_comparison <- tibble::tribble(
+  ~source, ~group, ~`log(μ)`, ~`μ @ offset 0`, ~`SE / spread`,
+  "Baseline (marginal)", "Healthy atlas",
+    ep$mean_log_mu, ep$median_mu, ep$sd_log_mu,
+  "Baseline (grand mean)", "Healthy atlas",
+    ep$mean_grand_mean, exp(ep$mean_grand_mean), ep$sd_grand_mean,
+  "Cohort (edgeR NB MLE)", "SAVI",
+    nb_mle(sav), exp(nb_mle(sav)), ql_se("SAVI"),
+  "Cohort (edgeR NB MLE)", "CTRL",
+    nb_mle(ctl), exp(nb_mle(ctl)), ql_se("CTRL")
+) |>
+  mutate(
+    `log(μ)` = fmt_num(`log(μ)`, 3),
+    `μ @ offset 0` = fmt_num(`μ @ offset 0`, 1),
+    `SE / spread` = fmt_num(`SE / spread`, 3)
+  )
+
+kable(mu_comparison,
+      caption = "Baseline vs cohort μ at offset 0 (reference scale). Baseline rows report the marginal mean/median and grand mean; cohort rows use the NB MLE point estimate + QL Wald SE.")
+```
+
+# Standard errors on the log(μ) scale {#sec-se}
+
+The Welch test needs a standard error for **each side**. The code looks asymmetric —
+`sd(grand_mean_draws)` on the baseline vs a Fisher-information formula on the cohort —
+but both quantities answer the same question: **how precisely do we know the mean
+log(μ) at offset 0?** They are on equal footing in
+$\text{SE}_{\text{diff}} = \sqrt{\text{SE}_1^2 + \text{SE}_2^2}$.
+
+## Baseline: posterior SD of the grand mean
+
+For the biomarker test we use the **grand-mean** posterior, not the full marginal
+spread. Per posterior draw $s$ we average $\log\mu$ over the covariate grid
+(`rowMeans` on the draws × grid matrix), giving one scalar draw of the healthy
+**mean** $\bar\ell_s$. The point estimate and its SE are:
+
+$$
+\hat\ell_{\text{base}} = \frac{1}{S}\sum_s \bar\ell_s,
+\qquad
+\text{SE}_{\text{base}} = \text{sd}(\bar\ell_1,\ldots,\bar\ell_S) = \texttt{sd\_grand\_mean}.
+$$
+
+In Bayesian inference the **posterior standard deviation of a parameter is its
+standard error** — it already integrates every source of uncertainty the atlas model
+knows about (fixed-effect posteriors, hierarchical shrinkage, priors). There is no
+separate Fisher matrix to assemble because we hold the full posterior sample.
+
+This is **not** the same as `sd(log_mu)` (the full marginal spread, ≈ `r fmt_num(ep$sd_log_mu, 3)`).
+That larger SD mixes *between-condition* heterogeneity (young vs old, different
+ethnicities, etc.) with estimation noise. For a biomarker we compare to the
+**average** healthy μ, so the tighter grand-mean SD (≈ `r fmt_num(ep$sd_grand_mean, 3)`)
+is the correct null uncertainty.
+
+Because each grand-mean draw averages $G$ grid points, the distribution is also
+closer to Normal than the full marginal cloud (see the density plot above) — which
+makes the Gaussian Welch $t$ a reasonable parametric companion to the rank test.
+
+## Cohort: QL Wald SE from `glmQLFit`
+
+edgeR has no posterior draws. The cohort contributes a **frequentist** point estimate
+(`mglmOneGroup`, the raw NB MLE at offset 0) and a **QL Wald SE** reconstructed from
+the negative-binomial GLM curvature:
+
+$$
+\text{SE}_{\text{cohort}} = \sqrt{\hat\phi_g \;\bigl(\mathbf{X}^\top \mathbf{W}\,\mathbf{X}\bigr)^{-1}_{kk}},
+$$
+
+where $\hat\phi_g = \texttt{s2.post}$ is edgeR's quasi-dispersion after empirical-Bayes
+shrinkage across genes, and $\mathbf{W}$ is the diagonal matrix of NB IRLS working
+weights. For a log link and NB variance $\mathrm{Var}(Y)=\mu(1+\phi\mu)$,
+
+$$
+W_i = \frac{\mu_i}{1 + \phi\,\mu_i}.
+$$
+
+With a group-means design `~ 0 + group`, $\mathbf{X}^\top\mathbf{W}\mathbf{X}$ is
+**block-diagonal**, so for cohort $k$ with samples $i \in k$ this collapses to the
+intuitive weighted "standard error of the group mean":
+
+$$
+\text{SE}_{\text{cohort}}^2 = \frac{\hat\phi_g}{\sum_{i \in k} W_i}.
+$$
+
+That is the NB/QL analogue of $\sigma^2/n$ on the log scale — the same *kind* of
+object as `sd_grand_mean`, just assembled from the likelihood because frequentist
+GLMs do not carry a posterior.
+
+```{r se-decompose, eval=FALSE}
+# mu_test.R — QL Wald SE (invariant to a constant offset shift)
+mu_all <- fit$fitted.values[gi, ]
+W      <- mu_all / (1 + disp * mu_all)            # NB IRLS weights
+cov_un <- solve(t(fit$design) %*% (W * fit$design))
+se     <- sqrt(fit$s2.post[gi] * cov_un[cohort, cohort])
+```
+
+**Why pair this SE with `mglmOneGroup`?** The point estimate deliberately avoids
+`fit$coefficients` (§[The pitfall](#sec-pitfall)), but the SE from `glmQLFit` is
+still valid: a constant additive shift of the offset reparameterises intercept ↔
+offset without changing fitted $\mu_i$, the design $\mathbf{X}$, the weights $W_i$,
+$\hat\phi_g$, or $\mathrm{Var}(\hat\beta)$. Only the *location* of the coefficient
+moves; the Wald SE of the group mean does not.
+
+## Combining them in the Welch $t$-test
+
+The deviation-from-mean Welch statistic is
+
+$$
+t = \frac{\hat\ell_{\text{base}} - \hat\ell_{\text{cohort}}}
+         {\sqrt{\text{SE}_{\text{base}}^2 + \text{SE}_{\text{cohort}}^2}},
+$$
+
+with atlas and cohort treated as **independent** (different data). In code:
+
+```{r welch-se-usage, eval=FALSE}
+welch_t_from_mean_se(
+  mean1 = mu_baseline$mean_grand_mean,
+  se1   = mu_baseline$sd_grand_mean,    # posterior SD of the grand mean
+  n1    = mu_baseline$n_grand,
+  mean2 = cm$log_mu,
+  se2   = cm$se,                        # QL Wald SE from glmQLFit
+  n2    = cm$df + 1
+)
+```
+
+Two implementation details matter:
+
+1. **`n1 = n_grand` (large).** The $t$-statistic uses `se1` and `se2` directly; `n1`
+   only feeds the Satterthwaite degrees of freedom. Passing the (large) number of
+   posterior draws tells the $t$ distribution that the baseline component is
+   effectively Normal — we do **not** want a fake small-sample inflation from Monte
+   Carlo draw count when `se1` already encodes that uncertainty.
+
+2. **`n2 = df.residual.adj + 1`.** The cohort side is genuinely small ($\sim$5 SAVI
+   donors), so the residual df from edgeR's QL fit governs the $t$ tail behaviour.
+   In practice $\text{SE}_{\text{cohort}}$ dominates $\text{SE}_{\text{diff}}$,
+   which is correct: precision is limited by the small cohort, not by the atlas.
+
+The parametric Welch $t$ is backed by a **non-parametric check** that makes no
+Gaussianity assumption on the baseline:
+`mean(grand_mean_draws >= cohort_log_mu)` ranks the cohort estimate directly in the
+posterior. The rank $p$ is the robust primary; the Welch $p$ is the parametric
+cross-check.
+
+| | Baseline `sd_grand_mean` | Cohort QL Wald SE |
+|---|---|---|
+| Paradigm | Bayesian posterior SD | Frequentist QL Wald SE |
+| Estimand | uncertainty in healthy **mean** log(μ) | uncertainty in cohort **mean** log(μ) |
+| Typical magnitude (TSC22D2) | `r fmt_num(ep$sd_grand_mean, 3)` | `r fmt_num(ql_se("SAVI"), 3)` (SAVI) |
+| Dominates `SE_diff`? | No (atlas is huge) | Yes (few donors) |
+
+**Bottom line.** `sd(grand_mean_draws)` is not a shortcut — it is the complete
+Bayesian SE of the grand mean. The edgeR formula is the matching frequentist SE of
+the cohort group mean. Both refer to log(μ) at offset 0, both quantify uncertainty
+in the **mean** (not population spread), and they are combined appropriately in the
+Welch test.
+
+# The tests
+
+## Why we do *not* simply test predicted counts {#sec-predictive}
+
+The most direct-looking idea is: draw the baseline **posterior-predictive counts**
+($y^{\text{rep}}$) and run a non-parametric (KS / rank) test of the observed cohort
+counts against them. We implemented this (`bootstrapping_p_value`), but it does not
+make much statistical sense as the primary test, for two reasons:
+
+1. **It conflates three different sources of variation.** A predicted *count*
+   carries NB dispersion noise **and** the zero-inflation Bernoulli **and** the
+   uncertainty in μ. Comparing a handful of observed counts to that mixture mostly
+   measures sampling noise, not a shift in the underlying expression level.
+2. **The cohort counts live on a depth that varies 250×** between donors (24k →
+   6.1M reads here), so the raw-count distribution is dominated by library size,
+   not biology.
+
+In other words, the predictive-count test answers "could these exact counts have
+been emitted by a healthy individual?", which is almost always "yes" given ZINB's
+enormous variance. The question we actually care about is about the **mean
+parameter μ**, so we test on the **`linpred` (log μ) scale** instead. That is the
+quantity both models share, and it is where the signal lives.
+
+If you still want the predictive-count KS as a reference, the revised
+`bootstrapping_p_value` builds the reference set **deterministically**: it maps
+each observed order statistic to the closest baseline quantile position
+$(i-0.5)/n$, rather than drawing a random baseline subsample. That removes
+unnecessary Monte-Carlo noise from the focal comparison while keeping the same
+bootstrap null calibration (`KS(focal_draws, resampled baseline)`).
+
+## Testing on the μ scale
+
+We summarise the cohort as $(\log\hat\mu,\ \text{SE})$ and compare it to the
+baseline grand-mean posterior with a Welch $t$-test, plus a non-parametric
+empirical upper-tail rank ("what fraction of healthy grand-mean draws exceed the
+cohort?"). The two standard errors — posterior `sd(grand_mean_draws)` vs edgeR's
+QL Wald SE — are derived differently but refer to the same estimand; see
+§[Standard errors](#sec-se) for the full justification.
+
+```{r welch-fn}
+welch_t <- function(mean1, se1, n1, mean2, se2, n2) {
+  sd1 <- se1 * sqrt(n1); sd2 <- se2 * sqrt(n2)
+  se_diff <- sqrt(se1^2 + se2^2)
+  t_stat  <- (mean1 - mean2) / se_diff
+  df <- (sd1^2/n1 + sd2^2/n2)^2 /
+        ((sd1^2/n1)^2/(n1-1) + (sd2^2/n2)^2/(n2-1))
+  c(t = t_stat, df = df, p = 2 * pt(abs(t_stat), df, lower.tail = FALSE))
+}
+```
+
+## Prediction interval vs deviation-from-the-mean — why the grand mean works {#sec-grandmean}
+
+Here is the conceptual crux. The universal baseline's spread is **huge**
+(SD of $\log\mu \approx$ `r round(ep$sd_log_mu,2)`). But that spread is *not*
+uncertainty about the healthy mean — it is the **biological heterogeneity between
+covariate conditions** (a *prediction* interval). Two very different nulls follow:
+
+- **Prediction interval (conservative).** Use the full marginal spread as the
+  reference. This asks *"is the cohort outside the entire cloud of every plausible
+  healthy condition?"* — a very high bar. A genuine biomarker can be clearly
+  elevated above the *typical* healthy cell yet still sit inside that giant cloud.
+
+- **Deviation from the mean (lever a — the biomarker question).** Collapse the
+  covariate grid **per posterior draw** (`rowMeans` of the draws × grid matrix) to
+  get the posterior of the **healthy grand mean**. Its SD
+  ($\approx$ `r round(ep$sd_grand_mean,2)`) is the uncertainty in the *mean*
+  (a *credible* interval), not the between-condition spread. This asks *"is the
+  cohort's mean shifted from the average healthy μ?"* — which is what a biomarker
+  claim actually means.
+
+Decomposing the variance is the whole trick: the grand-mean SD is less than half
+the full predictive SD, so the deviation-from-mean null is far tighter and has real
+power, **without** changing any data — only the estimand.
+
+```{r run-tests}
+run_cohort <- function(grp, j) {
+  cm_logmu <- nb_mle(j); cm_se <- ql_se(grp); cm_n <- length(j)
+
+  # PREDICTION INTERVAL: vs full marginal spread
+  w_pred <- welch_t(ep$mean_log_mu, ep$sd_log_mu, ep$n_draws, cm_logmu, cm_se, cm_n)
+  rank_pred <- mean(ep$log_mu >= cm_logmu)
+
+  # DEVIATION FROM MEAN: vs posterior of the grand mean
+  w_mean <- welch_t(ep$mean_grand_mean, ep$sd_grand_mean, ep$n_grand, cm_logmu, cm_se, cm_n)
+  rank_mean_up <- mean(ep$grand_mean_draws >= cm_logmu)
+
+  tibble::tibble(
+    group = grp,
+    `PI Welch p`        = round(w_pred["p"], 4),
+    `PI rank P(>=)`     = round(rank_pred, 4),
+    `Mean Welch p`      = round(w_mean["p"], 4),
+    `Mean rank P(>=)`   = round(rank_mean_up, 4)
+  )
+}
+results <- bind_rows(run_cohort("SAVI", sav), run_cohort("CTRL", ctl))
+kable(results, caption = "Prediction-interval (PI, conservative) vs deviation-from-mean tests. The latter is the biomarker-appropriate null.")
+```
+
+# Final results
+
+```{r final-table}
+cohort_numeric <- tibble::tibble(
+  group = c("SAVI", "CTRL"),
+  log_mu = c(nb_mle(sav), nb_mle(ctl)),
+  mu = exp(c(nb_mle(sav), nb_mle(ctl))),
+  se = c(ql_se("SAVI"), ql_se("CTRL"))
+)
+
+final <- tibble::tribble(
+  ~source, ~group, ~`log(μ)`, ~`μ @ offset 0`, ~`SE / spread`,
+  "Baseline (marginal)", "Healthy atlas",
+    ep$mean_log_mu, ep$median_mu, ep$sd_log_mu,
+  "Baseline (grand mean)", "Healthy atlas",
+    ep$mean_grand_mean, exp(ep$mean_grand_mean), ep$sd_grand_mean
+) |>
+  bind_rows(
+    cohort_numeric |>
+      transmute(
+        source = "Cohort (edgeR NB MLE)",
+        group,
+        `log(μ)` = log_mu,
+        `μ @ offset 0` = mu,
+        `SE / spread` = se
+      ) |>
+      left_join(results, by = "group")
+  ) |>
+  mutate(
+    `log(μ)` = fmt_num(`log(μ)`, 3),
+    `μ @ offset 0` = fmt_num(`μ @ offset 0`, 1),
+    `SE / spread` = fmt_num(`SE / spread`, 3),
+    across(c(`PI Welch p`, `PI rank P(>=)`, `Mean Welch p`, `Mean rank P(>=)`),
+           ~ifelse(is.na(.x), "—", fmt_num(.x, 4)))
+  )
+
+kable(final,
+      caption = sprintf("Final results for %s (TSC22D2): baseline metrics + cohort estimates and tests.", gene_id))
+```
+
+Reading the table:
+
+- **SAVI** sits at μ ≈ `r round(exp(nb_mle(sav)))` vs a healthy median of
+  ≈ `r round(ep$median_mu)` — roughly a `r round(exp(nb_mle(sav))/ep$median_mu,1)`×
+  elevation. Under the **deviation-from-mean** null it is **significant**
+  (both the Welch $t$ and the non-parametric rank reach $p \lesssim 0.01$), while
+  under the ultra-conservative prediction-interval null it is not — exactly the
+  expected behaviour given the universal baseline's heterogeneity.
+- **CTRL** stays non-significant under *both* nulls ($p \approx 0.3$–$0.6$). This
+  is the essential **sanity check**: the tightened (grand-mean) null is not
+  manufacturing significance — it correctly leaves the control null while lifting
+  the diseased cohort.
+
+# The final story / solution
+
+Putting it together, the working recipe is:
+
+1. **Same estimand both sides.** Compare the NB **mean parameter μ** (log scale).
+   From brms use `posterior_linpred(transform = FALSE)` — *not* `posterior_epred`
+   (which folds in zero-inflation). From edgeR use the NB group mean.
+2. **Same scale both sides.** Give edgeR the **same `scale_abundance` offset** the
+   ZINB was trained with, anchored to the **same reference sample**, so "offset 0"
+   is identical. The offset truly is the same object in both models (verified:
+   the two normalisations are parallel, correlation 1).
+3. **Read μ correctly.** Do **not** use `glmQLFit$coefficients` for the absolute
+   μ — edgeR rescales the offset internally and the coefficient is shifted by a
+   constant. Use the raw NB MLE (`mglmOneGroup`) for the point estimate and
+   `glmQLFit` only for the QL-shrunk SE (invariant to that constant shift).
+4. **Match the SEs.** Baseline `sd(grand_mean_draws)` is the Bayesian SE of the
+   healthy mean; cohort `sqrt(s2.post · (X'WX)^{-1}_{kk})` is the QL Wald SE of the
+   group mean. Both quantify uncertainty in log(μ) at offset 0 and enter the Welch
+   test on equal footing.
+5. **Pick the right null.** Test against the posterior of the healthy **grand
+   mean** (deviation-from-mean), not the full marginal predictive spread. The
+   former is the uncertainty in the mean (a credible interval) and answers the
+   actual biomarker question; the latter is a between-condition prediction
+   interval and is needlessly conservative.
+6. **Test on μ, not on predicted counts.** The predictive-count KS test is kept as
+   a reference but is under-powered and ill-posed for this question, because a
+   predicted count mixes NB dispersion + zero inflation + depth.
+
+With this, the SAVI biomarker reaches clear significance ($p \lesssim 0.01$) while
+the control remains null — the result we expected biologically, obtained through a
+principled, non-parametric test on the shared mean parameter.
+
+The next natural extension is to move from a single gene to a **biomarker panel**:
+aggregating the per-gene deviations across the signature (still non-parametrically)
+gives substantially more power than any single gene against a universal baseline.
+

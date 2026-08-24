@@ -1,0 +1,87 @@
+cell_type	tissue_groups	sex	biologically_allowed	analysis_allowed	atlas_observed	n_unique_donor_keys	supported	C_obs	C_k	extrapolation_weight	plotted_in_figure
+epithelial	brainstem and cerebellar structures	female	female, male	female, male	male	0	FALSE	0	0	1	TRUE
+epithelial	brainstem and cerebellar structures	male	female, male	female, male	male	10	TRUE	0.04	0.02	0.96	TRUE
+epithelial	cardiovascular system	female	female, male	female, male	female	1	FALSE	0.02	0	0.98	TRUE
+epithelial	cardiovascular system	male	female, male	female, male	female	0	FALSE	0	0	1	TRUE
+epithelial	cerebral lobes and cortical areas	female	female, male	female, male	female, male	1	FALSE	0.02	0	0.98	TRUE
+epithelial	cerebral lobes and cortical areas	male	female, male	female, male	female, male	3	FALSE	0.02	0.02	0.98	TRUE
+epithelial	digestive system (general)	female	female, male	female, male	female	0	FALSE	0	0	1	TRUE
+epithelial	digestive system (general)	male	female, male	female, male	female	0	FALSE	0	0	1	TRUE
+epithelial	general brain and major structures	female	female, male	female, male	male	0	FALSE	0	0	1	TRUE
+epithelial	general brain and major structures	male	female, male	female, male	male	1	FALSE	0.02	0	0.98	TRUE
+epithelial	integumentary system (skin)	female	female, male	female, male	female, male	0	FALSE	0	0	1	TRUE
+epithelial	integumentary system (skin)	male	female, male	female, male	female, male	2	FALSE	0.04	0	0.96	TRUE
+epithelial	large intestine	female	female, male	female, male	female, male	1	FALSE	0.02	0	0.98	TRUE
+epithelial	large intestine	male	female, male	female, male	female, male	1	FALSE	0.02	0	0.98	TRUE
+epithelial	limbic and basal systems	female	female, male	female, male	male	0	FALSE	0	0	1	TRUE
+epithelial	limbic and basal systems	male	female, male	female, male	male	9	FALSE	0.04	0.04	0.96	TRUE
+epithelial	liver	female	female, male	female, male	female, male	7	FALSE	0.07	0.02	0.93	TRUE
+epithelial	liver	male	female, male	female, male	female, male	10	TRUE	0.09	0.04	0.91	TRUE
+epithelial	miscellaneous glands	female	female, male	female, male	female, male	2	FALSE	0.04	0	0.96	TRUE
+epithelial	miscellaneous glands	male	female, male	female, male	female, male	1	FALSE	0.02	0	0.98	TRUE
+epithelial	nasal, oral, and pharyngeal regions	female	female, male	female, male	female, male	7	FALSE	0.07	0.02	0.93	TRUE
+epithelial	nasal, oral, and pharyngeal regions	male	female, male	female, male	female, male	7	FALSE	0.07	0.02	0.93	TRUE
+epithelial	renal system	female	female, male	female, male	female, male	32	TRUE	0.19	0.07	0.81	TRUE
+epithelial	renal system	male	female, male	female, male	female, male	33	TRUE	0.13	0.11	0.87	TRUE
+epithelial	respiratory system	female	female, male	female, male	female, male	30	TRUE	0.2	0.07	0.8	TRUE
+epithelial	respiratory system	male	female, male	female, male	female, male	37	TRUE	0.24	0.07	0.76	TRUE
+epithelial	sensory-related structures	female	female, male	female, male	female, male	14	TRUE	0.11	0.04	0.89	TRUE
+epithelial	sensory-related structures	male	female, male	female, male	female, male	17	TRUE	0.13	0.06	0.87	TRUE
+epithelial	small intestine	female	female, male	female, male	female, male	1	FALSE	0.02	0	0.98	TRUE
+epithelial	small intestine	male	female, male	female, male	female, male	1	FALSE	0.02	0	0.98	TRUE
+epithelial	thymus	female	female, male	female, male	female, male	1	FALSE	0.02	0	0.98	TRUE
+epithelial	thymus	male	female, male	female, male	female, male	1	FALSE	0.02	0	0.98	TRUE
+epithelial	trachea	female	female, male	female, male	female, male	2	FALSE	0.04	0	0.96	TRUE
+epithelial	trachea	male	female, male	female, male	female, male	3	FALSE	0.04	0	0.96	TRUE
+epithelial	vasculature	female	female, male	female, male	female	0	FALSE	0	0	1	TRUE
+epithelial	vasculature	male	female, male	female, male	female	0	FALSE	0	0	1	TRUE
+endothelial	adipose tissue	female	female, male	female, male	female, male	13	TRUE	0.09	0.01	0.91	TRUE
+endothelial	adipose tissue	male	female, male	female, male	female, male	4	FALSE	0.06	0	0.94	TRUE
+endothelial	brainstem and cerebellar structures	female	female, male	female, male	female, male	6	FALSE	0.04	0.01	0.96	TRUE
+endothelial	brainstem and cerebellar structures	male	female, male	female, male	female, male	60	TRUE	0.07	0.04	0.93	TRUE
+endothelial	cardiovascular system	female	female, male	female, male	female, male	10	TRUE	0.07	0.03	0.93	TRUE
+endothelial	cardiovascular system	male	female, male	female, male	female, male	14	TRUE	0.1	0.03	0.9	TRUE
+endothelial	cerebral lobes and cortical areas	female	female, male	female, male	female, male	59	TRUE	0.1	0.03	0.9	TRUE
+endothelial	cerebral lobes and cortical areas	male	female, male	female, male	female, male	151	TRUE	0.1	0.07	0.9	TRUE
+endothelial	digestive system (general)	female	female, male	female, male	female	0	FALSE	0	0	1	TRUE
+endothelial	digestive system (general)	male	female, male	female, male	female	0	FALSE	0	0	1	TRUE
+endothelial	endocrine system	female	female, male	female, male	female	1	FALSE	0.01	0	0.99	TRUE
+endothelial	endocrine system	male	female, male	female, male	female	0	FALSE	0	0	1	TRUE
+endothelial	general brain and major structures	female	female, male	female, male	female, male	9	FALSE	0.04	0.03	0.96	TRUE
+endothelial	general brain and major structures	male	female, male	female, male	female, male	11	TRUE	0.06	0.03	0.94	TRUE
+endothelial	integumentary system (skin)	female	female, male	female, male	female, male	0	FALSE	0	0	1	TRUE
+endothelial	integumentary system (skin)	male	female, male	female, male	female, male	2	FALSE	0.03	0	0.97	TRUE
+endothelial	large intestine	female	female, male	female, male	female, male	1	FALSE	0.01	0	0.99	TRUE
+endothelial	large intestine	male	female, male	female, male	female, male	1	FALSE	0.01	0	0.99	TRUE
+endothelial	limbic and basal systems	female	female, male	female, male	female, male	3	FALSE	0.04	0	0.96	TRUE
+endothelial	limbic and basal systems	male	female, male	female, male	female, male	52	TRUE	0.06	0.03	0.94	TRUE
+endothelial	liver	female	female, male	female, male	female, male	12	TRUE	0.06	0.01	0.94	TRUE
+endothelial	liver	male	female, male	female, male	female, male	14	TRUE	0.07	0.03	0.93	TRUE
+endothelial	lymphatic system	female	female, male	female, male	female, male	1	FALSE	0.01	0	0.99	TRUE
+endothelial	lymphatic system	male	female, male	female, male	female, male	1	FALSE	0.01	0	0.99	TRUE
+endothelial	miscellaneous glands	female	female, male	female, male	female, male	2	FALSE	0.03	0	0.97	TRUE
+endothelial	miscellaneous glands	male	female, male	female, male	female, male	1	FALSE	0.01	0	0.99	TRUE
+endothelial	muscular system (skeletal muscles)	female	female, male	female, male	female, male	2	FALSE	0.03	0	0.97	TRUE
+endothelial	muscular system (skeletal muscles)	male	female, male	female, male	female, male	1	FALSE	0.01	0	0.99	TRUE
+endothelial	nasal, oral, and pharyngeal regions	female	female, male	female, male	female, male	3	FALSE	0.03	0	0.97	TRUE
+endothelial	nasal, oral, and pharyngeal regions	male	female, male	female, male	female, male	2	FALSE	0.03	0	0.97	TRUE
+endothelial	oesophagus	female	female, male	female, male	female, male	0	FALSE	0	0	1	TRUE
+endothelial	oesophagus	male	female, male	female, male	female, male	0	FALSE	0	0	1	TRUE
+endothelial	pancreas	female	female, male	female, male	female, male	1	FALSE	0.01	0	0.99	TRUE
+endothelial	pancreas	male	female, male	female, male	female, male	1	FALSE	0.01	0	0.99	TRUE
+endothelial	renal system	female	female, male	female, male	female, male	33	TRUE	0.14	0.06	0.86	TRUE
+endothelial	renal system	male	female, male	female, male	female, male	33	TRUE	0.1	0.09	0.9	TRUE
+endothelial	respiratory system	female	female, male	female, male	female, male	26	TRUE	0.16	0.04	0.84	TRUE
+endothelial	respiratory system	male	female, male	female, male	female, male	32	TRUE	0.17	0.04	0.83	TRUE
+endothelial	sensory-related structures	female	female, male	female, male	female, male	10	TRUE	0.06	0.03	0.94	TRUE
+endothelial	sensory-related structures	male	female, male	female, male	female, male	17	TRUE	0.09	0.04	0.91	TRUE
+endothelial	small intestine	female	female, male	female, male	female, male	1	FALSE	0.01	0	0.99	TRUE
+endothelial	small intestine	male	female, male	female, male	female, male	1	FALSE	0.01	0	0.99	TRUE
+endothelial	spleen	female	female, male	female, male	female, male	2	FALSE	0.03	0	0.97	TRUE
+endothelial	spleen	male	female, male	female, male	female, male	1	FALSE	0.01	0	0.99	TRUE
+endothelial	thymus	female	female, male	female, male	female, male	1	FALSE	0.01	0	0.99	TRUE
+endothelial	thymus	male	female, male	female, male	female, male	1	FALSE	0.01	0	0.99	TRUE
+endothelial	trachea	female	female, male	female, male	female, male	2	FALSE	0.03	0	0.97	TRUE
+endothelial	trachea	male	female, male	female, male	female, male	3	FALSE	0.03	0	0.97	TRUE
+endothelial	vasculature	female	female, male	female, male	male	0	FALSE	0	0	1	TRUE
+endothelial	vasculature	male	female, male	female, male	male	3	FALSE	0.03	0	0.97	TRUE

@@ -1,0 +1,3 @@
+cell_type	n_model_rows	n_posterior_draws	max_rhat	min_ess_bulk	min_ess_tail	divergences	readiness_policy	model_ready
+epithelial	1545	400	1.0646332549041961	55.242025269275594	33.21574989364797	34	Rhat<=1.01; bulk/tail ESS>=400; zero divergences	FALSE
+endothelial	2308	400	1.1018088232994803	17.696370629917915	68.28766761464654	6	Rhat<=1.01; bulk/tail ESS>=400; zero divergences	FALSE

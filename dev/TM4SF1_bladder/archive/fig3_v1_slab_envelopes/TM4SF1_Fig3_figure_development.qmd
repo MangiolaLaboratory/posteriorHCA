@@ -1,0 +1,1066 @@
+---
+title: "TM4SF1 Fig. 3 figure development"
+subtitle: "Publication-panel drafts from the corrected v2.2.1 case-study outputs"
+date: today
+date-format: "DD MMM YYYY"
+format:
+  html:
+    theme: minty
+    toc: true
+    toc-location: left
+    code-fold: true
+    code-fold-default: true
+    embed-resources: true
+    fig-path: results/TM4SF1_Fig3_figure_development/figures/
+    html-math-method: mathjax
+knitr:
+  opts_chunk:
+    message: false
+    warning: false
+    dpi: 300
+    fig.retina: 2
+    fig.align: center
+    fig.width: 7
+    fig.height: 5.5
+execute:
+  freeze: false
+editor: source
+---
+
+This report develops candidate panels for a provisional full-width manuscript
+Fig. 3. It is a plotting layer over the corrected v2.2.1 TM4SF1 report: no
+posterior prediction, marginalisation, threshold construction, admissibility
+rule, donor-support rule, candidate definition, or tumour reconstruction is
+rerun or changed. Panels are deliberately shown separately rather than
+assembled.
+
+::: {.callout-important collapse="false"}
+The current epithelial and endothelial fits do not pass the registered model-
+readiness gate. Overlap is a prioritisation signal, not evidence of toxicity.
+Prediction visibility and empirical support remain separate throughout.
+:::
+
+```{r}
+#| label: setup
+#| include: false
+
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tidyr)
+  library(purrr)
+  library(readr)
+  library(readxl)
+  library(stringr)
+  library(tibble)
+  library(ggplot2)
+  library(scales)
+  library(RColorBrewer)
+  library(ggridges)
+})
+
+options(stringsAsFactors = FALSE, scipen = 6, bitmapType = "cairo")
+set.seed(293189)
+
+case_dir <- normalizePath(".", mustWork = TRUE)
+source_results <- file.path(
+  case_dir, "results", "tm4sf1_toxicity_report_v2.2.1_audit_cleanup"
+)
+figure_results <- file.path(case_dir, "results", "TM4SF1_Fig3_figure_development")
+figure_dir <- file.path(figure_results, "figures")
+dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
+knitr::opts_chunk$set(
+  fig.path = "results/TM4SF1_Fig3_figure_development/figures/"
+)
+
+required_files <- c(
+  "posteriorHCA_TM4SF1_profile_summary.tsv",
+  "TM4SF1_study_logmu_draws.rds",
+  "TM4SF1_threshold_registry.tsv",
+  "TM4SF1_model_diagnostics.tsv",
+  "TM4SF1_paper_DE_replication.tsv",
+  "TM4SF1_paper_source_patient_summary.tsv"
+)
+stopifnot(all(file.exists(file.path(source_results, required_files))))
+
+profile_summary <- read_tsv(
+  file.path(source_results, "posteriorHCA_TM4SF1_profile_summary.tsv"),
+  show_col_types = FALSE
+)
+study_draws <- readRDS(file.path(source_results, "TM4SF1_study_logmu_draws.rds"))
+threshold_registry <- read_tsv(
+  file.path(source_results, "TM4SF1_threshold_registry.tsv"),
+  show_col_types = FALSE
+)
+model_diagnostics <- read_tsv(
+  file.path(source_results, "TM4SF1_model_diagnostics.tsv"),
+  show_col_types = FALSE
+)
+replication_de <- read_tsv(
+  file.path(source_results, "TM4SF1_paper_DE_replication.tsv"),
+  show_col_types = FALSE
+)
+paper_patient_summary <- read_tsv(
+  file.path(source_results, "TM4SF1_paper_source_patient_summary.tsv"),
+  show_col_types = FALSE
+)
+
+stopifnot(
+  all(c("epithelial", "endothelial") %in% profile_summary$cell_type),
+  all(!model_diagnostics$model_ready),
+  all(profile_summary$baseline_method == "design_standardised_v2.2.1"),
+  all(profile_summary$expression_overlap_alert == FALSE)
+)
+
+paper_workbook <- file.path(
+  case_dir, "data", "raw", "paper", "41467_2025_59888_MOESM4_ESM.xlsx"
+)
+paper_cells <- read_excel(paper_workbook, sheet = "Figure5B") |>
+  transmute(
+    barcode = as.character(Barcode),
+    paper_id = as.character(Name),
+    source_expression = as.numeric(TM4SF1),
+    histology_group = case_when(
+      str_starts(paper_id, "VAR") ~ "HV",
+      str_starts(paper_id, "UC") ~ "UC",
+      TRUE ~ NA_character_
+    )
+  ) |>
+  filter(!is.na(histology_group))
+
+tm4_patient <- read_tsv(
+  file.path(case_dir, "data", "metadata", "TM4SF1_patient_summary.tsv"),
+  show_col_types = FALSE
+)
+
+paper_cell_patient <- paper_cells |>
+  group_by(paper_id, histology_group) |>
+  summarise(
+    mean_source_expression = mean(source_expression),
+    n_cells = n(),
+    .groups = "drop"
+  )
+
+# Fig. 3 palette: biological state, model identity, and support are separate.
+fig3_col <- c(
+  HV = "#D55E00",
+  UC = "#0072B2",
+  Normal = "#009E73",
+  epithelial = "#CC79A7",
+  endothelial = "#56B4E9",
+  neutral = "#6F6F6F",
+  faint = "#D4D4D4"
+)
+sex_col <- c(
+  female = brewer.pal(3, "PRGn")[[1]],
+  male = brewer.pal(3, "PRGn")[[3]],
+  `female (structural)` = brewer.pal(3, "PRGn")[[1]]
+)
+
+# Retained verbatim as the visual base used by the corrected analysis report.
+theme_multipanel <-
+  theme_bw() +
+  theme(
+    panel.border = element_blank(),
+    axis.line = element_line(linewidth = 0.1),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    legend.position = "bottom",
+    strip.background = element_blank(),
+    axis.title.y = element_text(margin = margin(0, 0, 0, 0), size = 12),
+    axis.title.x = element_text(margin = margin(0, 0, 0, 0), size = 12),
+    panel.spacing.x = grid::unit(0.1, "lines"),
+    axis.text.x = element_text(size = 11),
+    axis.text.y = element_text(size = 11),
+    strip.text.x = element_text(size = 12),
+    strip.text.y = element_text(size = 12),
+    legend.key.size = grid::unit(5, "mm"),
+    legend.title = element_text(size = 11),
+    legend.text = element_text(size = 10),
+    strip.clip = "off",
+    plot.title = element_blank(),
+    plot.subtitle = element_blank(),
+    plot.tag = element_text(size = 13, face = "bold"),
+    axis.line.x = element_line(linewidth = 0.2),
+    axis.line.y = element_line(linewidth = 0.2),
+    axis.ticks.x = element_line(linewidth = 0.2),
+    axis.ticks.y = element_line(linewidth = 0.2),
+    plot.margin = margin(2, 4, 2, 2)
+  )
+
+theme_fig3_base <- function() {
+  theme_multipanel +
+    theme(
+      text = element_text(colour = "#2F2F2F"),
+      axis.line = element_line(colour = "#4A4A4A", linewidth = 0.22),
+      axis.ticks = element_line(colour = "#4A4A4A", linewidth = 0.22),
+      axis.ticks.length = grid::unit(1.2, "mm"),
+      legend.spacing.x = grid::unit(1, "mm"),
+      legend.margin = margin(0, 0, 0, 0)
+    )
+}
+
+theme_fig3_facet <- function() {
+  theme_fig3_base() +
+    theme(
+      strip.text = element_text(size = 10, lineheight = 0.95),
+      panel.spacing = grid::unit(1.8, "mm"),
+      axis.text = element_text(size = 10),
+      axis.title = element_text(size = 11),
+      legend.text = element_text(size = 10)
+    )
+}
+
+theme_fig3_compact <- function() {
+  theme_fig3_base() +
+    theme(
+      axis.text = element_text(size = 10),
+      axis.title = element_text(size = 11),
+      legend.text = element_text(size = 10),
+      legend.key.height = grid::unit(2.5, "mm"),
+      plot.margin = margin(1.5, 2.5, 1.5, 1.5)
+    )
+}
+
+support_level <- function(n) {
+  factor(
+    case_when(
+      n >= 10 ~ "adequate",
+      n >= 1 ~ "limited",
+      TRUE ~ "extrapolated"
+    ),
+    levels = c("adequate", "limited", "extrapolated")
+  )
+}
+
+support_marker <- function(n) {
+  case_when(n >= 10 ~ "●", n >= 1 ~ "○", TRUE ~ "×")
+}
+
+publication_tissue <- function(x) {
+  recode(
+    x,
+    "female reproductive system" = "Female reproductive",
+    "integumentary system (skin)" = "Skin",
+    "brainstem and cerebellar structures" = "Brainstem/cerebellar",
+    "cerebral lobes and cortical areas" = "Cerebral/cortical",
+    "general brain and major structures" = "General brain",
+    "limbic and basal systems" = "Limbic/basal",
+    "nasal, oral, and pharyngeal regions" = "Nasal/oral/pharyngeal",
+    "muscular system (skeletal muscles)" = "Skeletal muscle",
+    "sensory-related structures" = "Sensory-related",
+    "digestive system (general)" = "Digestive (general)",
+    .default = str_to_sentence(x)
+  )
+}
+
+publication_ethnicity <- function(x) {
+  recode(
+    x,
+    "Hispanic/Latin American" = "Hispanic/Latin Am.",
+    "Middle Eastern & North African" = "Middle Eastern/N. African",
+    "Native American & Pacific Islander" = "Native Am./Pacific Isl.",
+    .default = x
+  )
+}
+
+# The cache stores exact medians and 95% intervals, but not the full tissue-level
+# draw matrices. This continuous split-Gaussian envelope is a plotting-only
+# interpolation through those exact summaries; it is never used to recompute P.
+summary_density <- function(median, lower, upper, x) {
+  sigma_lower <- max((median - lower) / 1.96, 0.05)
+  sigma_upper <- max((upper - median) / 1.96, 0.05)
+  z <- ifelse(x <= median, (x - median) / sigma_lower, (x - median) / sigma_upper)
+  y <- exp(-0.5 * z^2)
+  y / max(y)
+}
+
+make_tissue_density_data <- function(cell_type, tissues = NULL) {
+  summary <- profile_summary |>
+    filter(dimension == "tissue", .data$cell_type == .env$cell_type)
+  if (!is.null(tissues)) {
+    summary <- filter(summary, tissue_groups %in% tissues)
+  }
+  summary <- summary |>
+    arrange(desc(probability_above_threshold), desc(median_log_mu)) |>
+    mutate(
+      support_level = support_level(n_unique_donor_keys),
+      tissue_display = publication_tissue(tissue_groups),
+      facet_label = paste0(
+        tissue_display, "\nP=", sprintf("%.2f", probability_above_threshold),
+        " · n=", n_unique_donor_keys, " ", support_marker(n_unique_donor_keys)
+      ),
+      facet_label = factor(facet_label, levels = facet_label)
+    )
+
+  hv <- study_draws |>
+    filter(
+      .data$cell_type == .env$cell_type,
+      group == "HV tumour epithelial"
+    ) |>
+    pull(log_mu)
+  x_limits <- range(c(summary$lower_log_mu, summary$upper_log_mu, hv), na.rm = TRUE)
+  x_pad <- diff(x_limits) * 0.025
+  x_grid <- seq(x_limits[[1]] - x_pad, x_limits[[2]] + x_pad, length.out = 181)
+
+  normal_density <- map_dfr(seq_len(nrow(summary)), function(i) {
+    row <- summary[i, ]
+    tibble(
+      facet_label = row$facet_label,
+      x = x_grid,
+      density = summary_density(
+        row$median_log_mu, row$lower_log_mu, row$upper_log_mu, x_grid
+      ),
+      support_level = row$support_level
+    )
+  })
+
+  hv_density_base <- density(
+    hv, from = min(x_grid), to = max(x_grid), n = length(x_grid)
+  )
+  hv_density_base <- tibble(
+    x = hv_density_base$x,
+    density = hv_density_base$y / max(hv_density_base$y)
+  )
+  hv_density <- tidyr::crossing(
+    facet_label = summary$facet_label,
+    hv_density_base
+  )
+
+  list(
+    summary = summary,
+    normal_density = normal_density,
+    hv_density = hv_density,
+    x_limits = range(x_grid)
+  )
+}
+
+plot_tissue_density <- function(cell_type, tissues = NULL, ncol = 4) {
+  dat <- make_tissue_density_data(cell_type, tissues)
+  model_colour <- unname(fig3_col[[cell_type]])
+
+  ggplot() +
+    geom_area(
+      data = dat$hv_density,
+      aes(x, density, fill = "HV tumour anchor"),
+      alpha = 0.14, linewidth = 0
+    ) +
+    geom_line(
+      data = dat$hv_density,
+      aes(x, density), colour = fig3_col[["HV"]], linewidth = 0.28
+    ) +
+    geom_area(
+      data = dat$normal_density,
+      aes(x, density, fill = "Normal posterior", alpha = support_level),
+      linewidth = 0
+    ) +
+    geom_line(
+      data = dat$normal_density,
+      aes(x, density, linetype = support_level),
+      colour = model_colour, linewidth = 0.34
+    ) +
+    geom_segment(
+      data = dat$summary,
+      aes(
+        x = lower_log_mu, xend = upper_log_mu,
+        y = -0.055, yend = -0.055
+      ),
+      colour = fig3_col[["neutral"]], linewidth = 0.35
+    ) +
+    geom_point(
+      data = dat$summary,
+      aes(median_log_mu, -0.055),
+      colour = model_colour, fill = "white", shape = 21,
+      size = 0.9, stroke = 0.3
+    ) +
+    geom_vline(
+      data = dat$summary,
+      aes(xintercept = threshold_log_mu),
+      colour = fig3_col[["HV"]], linetype = 3, linewidth = 0.25
+    ) +
+    facet_wrap(~facet_label, ncol = ncol) +
+    coord_cartesian(xlim = dat$x_limits, ylim = c(-0.09, 1.03), clip = "off") +
+    scale_fill_manual(
+      values = c(
+        "Normal posterior" = fig3_col[["Normal"]],
+        "HV tumour anchor" = fig3_col[["HV"]]
+      ),
+      name = NULL
+    ) +
+    scale_alpha_manual(
+      values = c(adequate = 0.42, limited = 0.25, extrapolated = 0.13),
+      guide = "none"
+    ) +
+    scale_linetype_manual(
+      values = c(adequate = 1, limited = 2, extrapolated = 3),
+      guide = "none"
+    ) +
+    scale_x_continuous(n.breaks = 3, labels = label_number(accuracy = 1)) +
+    labs(x = "Model-aligned latent log(μ)", y = NULL) +
+    theme_fig3_facet() +
+    theme(
+      axis.text.y = element_blank(),
+      axis.ticks.y = element_blank(),
+      axis.line.y = element_blank(),
+      legend.position = "bottom",
+      legend.key.width = grid::unit(3.3, "mm"),
+      plot.margin = margin(4, 2, 2, 1.5)
+    )
+}
+
+prepare_story_sex <- function(comparator) {
+  female_repro <- profile_summary |>
+    filter(
+      cell_type == "endothelial",
+      dimension == "tissue",
+      tissue_groups == "female reproductive system"
+    ) |>
+    mutate(sex = "female (structural)")
+
+  comparator_sex <- profile_summary |>
+    filter(
+      cell_type == "endothelial",
+      dimension == "tissue_sex",
+      tissue_groups == comparator
+    )
+
+  bind_rows(female_repro, comparator_sex) |>
+    mutate(
+      support_level = support_level(n_unique_donor_keys),
+      tissue_display = factor(
+        publication_tissue(tissue_groups),
+        levels = rev(publication_tissue(c("female reproductive system", comparator)))
+      )
+    )
+}
+
+plot_story_sex <- function(comparator) {
+  dat <- prepare_story_sex(comparator)
+  threshold <- unique(dat$threshold_log_mu)
+  ggplot(dat, aes(median_log_mu, tissue_display, colour = sex, shape = support_level)) +
+    geom_errorbar(
+      aes(xmin = lower_log_mu, xmax = upper_log_mu),
+      orientation = "y", width = 0.12, linewidth = 0.32,
+      position = position_dodge(width = 0.42), alpha = 0.72
+    ) +
+    geom_point(position = position_dodge(width = 0.42), size = 1.45, stroke = 0.35) +
+    geom_vline(
+      xintercept = threshold, colour = fig3_col[["HV"]],
+      linetype = 3, linewidth = 0.28
+    ) +
+    scale_colour_manual(
+      values = sex_col,
+      breaks = c("female", "male", "female (structural)"),
+      labels = c("Female", "Male", "Female-only tissue")
+    ) +
+    scale_shape_manual(values = c(adequate = 16, limited = 1, extrapolated = 4)) +
+    labs(x = "Endothelial Normal log(μ)", y = NULL, colour = NULL, shape = NULL) +
+    theme_fig3_compact() +
+    theme(legend.position = "none")
+}
+
+prepare_story_dimension <- function(dimension, comparator) {
+  profile_summary |>
+    filter(
+      cell_type == "endothelial",
+      .data$dimension == .env$dimension,
+      tissue_groups %in% c("female reproductive system", comparator)
+    ) |>
+    mutate(
+      support_level = support_level(n_unique_donor_keys),
+      tissue_display = factor(
+        publication_tissue(tissue_groups),
+        levels = publication_tissue(c("female reproductive system", comparator))
+      )
+    )
+}
+
+plot_story_age <- function(comparator) {
+  dat <- prepare_story_dimension("tissue_age", comparator) |>
+    arrange(tissue_display, age_decade)
+  ggplot(dat, aes(age_decade, probability_above_threshold, group = tissue_display)) +
+    geom_hline(yintercept = 0.8, colour = fig3_col[["neutral"]], linetype = 3, linewidth = 0.24) +
+    geom_line(colour = fig3_col[["Normal"]], linewidth = 0.35, alpha = 0.52) +
+    geom_point(
+      aes(shape = support_level, alpha = support_level),
+      colour = fig3_col[["Normal"]], size = 1.25, stroke = 0.32
+    ) +
+    facet_wrap(~tissue_display, ncol = 1) +
+    scale_shape_manual(values = c(adequate = 16, limited = 1, extrapolated = 4)) +
+    scale_alpha_manual(values = c(adequate = 1, limited = 0.68, extrapolated = 0.38)) +
+    scale_x_continuous(breaks = c(2, 6, 10)) +
+    scale_y_continuous(limits = c(0, 1), breaks = c(0, 0.5, 1)) +
+    labs(
+      x = "Age decade",
+      y = "Overlap probability", shape = "Support", alpha = "Support"
+    ) +
+    theme_fig3_facet() +
+    theme(legend.position = "none", strip.text = element_text(hjust = 0))
+}
+
+plot_story_ethnicity <- function(comparator) {
+  dat <- prepare_story_dimension("tissue_ethnicity", comparator) |>
+    group_by(ethnicity_groups) |>
+    mutate(order_metric = mean(probability_above_threshold)) |>
+    ungroup() |>
+    mutate(
+      ethnicity_display = publication_ethnicity(ethnicity_groups),
+      ethnicity_display = reorder(ethnicity_display, order_metric)
+    )
+  ggplot(dat, aes(probability_above_threshold, ethnicity_display)) +
+    geom_vline(xintercept = 0.8, colour = fig3_col[["neutral"]], linetype = 3, linewidth = 0.24) +
+    geom_point(
+      aes(shape = support_level, alpha = support_level),
+      colour = fig3_col[["Normal"]], size = 1.25, stroke = 0.32
+    ) +
+    facet_wrap(~tissue_display, ncol = 1, scales = "free_y") +
+    scale_shape_manual(values = c(adequate = 16, limited = 1, extrapolated = 4)) +
+    scale_alpha_manual(values = c(adequate = 1, limited = 0.68, extrapolated = 0.38)) +
+    scale_x_continuous(limits = c(0, 1), breaks = c(0, 0.5, 1)) +
+    labs(x = "Overlap probability", y = NULL, shape = "Support", alpha = "Support") +
+    theme_fig3_facet() +
+    theme(
+      legend.position = "none",
+      strip.text = element_text(hjust = 0),
+      axis.text.y = element_text(size = 8.5)
+    )
+}
+```
+
+# Proposed Fig. 3 layout
+
+The planning canvas is 183 mm × approximately 203 mm: Row 1, 48 mm; Row 2,
+92 mm; Row 3, 55 mm; with two approximately 4 mm gutters. HTML chunks are
+enlarged for on-screen review; intended print sizes remain in the Size/change
+notes.
+
+## Row 1 — establish the case and compartments
+
+### Panel A — released study result
+
+#### Draft A1 — released cell-level source with patient summaries
+
+```{r}
+#| label: panel-a-released
+#| fig-width: 6.2
+#| fig-height: 5.2
+#| out-width: 85%
+#| fig-cap: "Released Figure 5B TM4SF1 values. Violins show released cell-level values; filled points show patient means."
+
+panel_a_released <- ggplot(
+  paper_cells,
+  aes(histology_group, source_expression, fill = histology_group)
+) +
+  geom_violin(
+    scale = "width", trim = TRUE, colour = fig3_col[["neutral"]],
+    linewidth = 0.22, alpha = 0.58
+  ) +
+  geom_boxplot(
+    width = 0.13, outlier.shape = NA, fill = "white",
+    colour = fig3_col[["neutral"]], linewidth = 0.24
+  ) +
+  geom_point(
+    data = paper_cell_patient,
+    aes(y = mean_source_expression),
+    position = position_jitter(width = 0.055, height = 0),
+    shape = 21, fill = "white", colour = fig3_col[["neutral"]],
+    size = 1.2, stroke = 0.3
+  ) +
+  scale_fill_manual(values = fig3_col[c("HV", "UC")]) +
+  labs(x = NULL, y = "Released TM4SF1 expression") +
+  guides(fill = "none") +
+  theme_fig3_compact()
+
+panel_a_released
+```
+
+- **Message:** the released study source shows TM4SF1 enrichment in HV tumour epithelial cells.
+- **Source:** released Figure 5B values and patient summaries; the released Figure 5A result ranks TM4SF1 first among HV-enriched genes (log2FC 2.36).
+- **Size/change:** 57 × 48 mm; replaces a large volcano with a compact source-faithful distribution and patient-level overlay.
+- **Weakness/next:** cell values are descriptive and patients are the independent units; use this as Panel A, with the reconstruction limitation in the caption.
+
+#### Draft A2 — public-DGE patient reconstruction
+
+```{r}
+#| label: panel-a-reconstruction
+#| fig-width: 6.2
+#| fig-height: 5.2
+#| out-width: 85%
+#| fig-cap: "Patient-level TM4SF1 CPM reconstructed from the public DGE matrices. Open points fail the reconstructed 150-cell rule."
+
+panel_a_reconstruction_data <- tm4_patient |>
+  filter(
+    sample_type == "tumour",
+    broad_cell_type == "epithelial",
+    paper_id %in% c(sprintf("VAR%02d", 1:9), sprintf("UC%02d", 1:3))
+  ) |>
+  mutate(
+    reconstruction_support = if_else(
+      reconstructed_n150_threshold_met, ">=150 cells", "<150 cells"
+    )
+  )
+
+panel_a_reconstruction <- ggplot(
+  panel_a_reconstruction_data,
+  aes(histology_group, CPM, colour = histology_group, shape = reconstruction_support)
+) +
+  geom_point(
+    position = position_jitter(width = 0.08, height = 0),
+    size = 1.45, stroke = 0.38
+  ) +
+  stat_summary(
+    fun = median, geom = "crossbar", width = 0.38,
+    colour = fig3_col[["neutral"]], linewidth = 0.28
+  ) +
+  scale_colour_manual(values = fig3_col[c("HV", "UC")]) +
+  scale_shape_manual(values = c(">=150 cells" = 16, "<150 cells" = 1)) +
+  scale_y_continuous(
+    trans = scales::transform_pseudo_log(sigma = 0.1, base = 10),
+    breaks = c(0, 0.1, 1, 10, 100, 1000),
+    labels = label_number()
+  ) +
+  labs(x = NULL, y = "Patient TM4SF1 CPM", colour = NULL, shape = NULL) +
+  theme_fig3_compact() +
+  theme(legend.position = "bottom", legend.box = "vertical")
+
+panel_a_reconstruction
+```
+
+- **Message:** the patient-level public reconstruction supports HV enrichment but also exposes strong tumour heterogeneity.
+- **Source:** reconstructed raw-count patient pseudobulks; closest fixed-seed comparison is 9 HV versus 2 UC at the 150-cell rule.
+- **Size/change:** 57 × 48 mm; retains UC01 as a visibly low-cell, open point rather than hiding it.
+- **Weakness/next:** it is not an exact 9 HV + 3 UC reproduction; retain as an alternate/audit panel, not the primary Panel A.
+
+### Panel B — tumour anchor to Normal reference
+
+```{r}
+#| label: panel-b-anchor-bridge
+#| fig-width: 6.2
+#| fig-height: 5.2
+#| out-width: 85%
+#| fig-cap: "Tumour-cohort bootstrap distributions and the comprehensive epithelial posteriorHCA Normal reference on the epithelial model-aligned scale. The dashed line is the registered 5% HV anchor."
+
+panel_b_draws <- study_draws |>
+  filter(
+    cell_type == "epithelial",
+    group %in% c(
+      "HV tumour epithelial",
+      "UC tumour epithelial (2 public-DGE >=150)"
+    )
+  ) |>
+  mutate(
+    display_group = recode(
+      group,
+      "HV tumour epithelial" = "HV (n=9)",
+      "UC tumour epithelial (2 public-DGE >=150)" = "UC (n=2)"
+    ),
+    display_group = factor(
+      display_group,
+      levels = c("Normal HCA", "UC (n=2)", "HV (n=9)")
+    )
+  )
+
+panel_b_hca <- profile_summary |>
+  filter(cell_type == "epithelial", dimension == "comprehensive") |>
+  mutate(
+    display_group = factor(
+      "Normal HCA",
+      levels = c("Normal HCA", "UC (n=2)", "HV (n=9)")
+    )
+  )
+
+panel_b <- ggplot() +
+  ggridges::geom_density_ridges(
+    data = panel_b_draws,
+    aes(log_mu, display_group, fill = display_group),
+    scale = 0.82, rel_min_height = 0.015,
+    colour = "white", linewidth = 0.24, alpha = 0.72
+  ) +
+  geom_segment(
+    data = panel_b_hca,
+    aes(
+      x = lower_log_mu, xend = upper_log_mu,
+      y = display_group, yend = display_group
+    ),
+    colour = fig3_col[["Normal"]], linewidth = 1.2, lineend = "round"
+  ) +
+  geom_point(
+    data = panel_b_hca,
+    aes(median_log_mu, display_group),
+    shape = 21, fill = "white", colour = fig3_col[["Normal"]],
+    size = 1.35, stroke = 0.42
+  ) +
+  geom_vline(
+    xintercept = panel_b_hca$threshold_log_mu,
+    colour = fig3_col[["HV"]], linetype = 3, linewidth = 0.3
+  ) +
+  scale_fill_manual(values = c(
+    "HV (n=9)" = fig3_col[["HV"]],
+    "UC (n=2)" = fig3_col[["UC"]]
+  )) +
+  labs(x = "Model-aligned log(μ)", y = NULL) +
+  guides(fill = "none") +
+  theme_fig3_compact() +
+  theme(
+    axis.line.y = element_blank(), axis.ticks.y = element_blank(),
+    panel.grid.major.y = element_line(colour = "#ECECEC", linewidth = 0.2)
+  )
+
+panel_b
+```
+
+- **Message:** posteriorHCA evaluates Normal expression on an HV-derived tumour scale; it is not another tumour DEG test.
+- **Source:** exact patient Bayesian-bootstrap study draws plus the exact comprehensive epithelial posterior median and 95% interval.
+- **Size/change:** 57 × 48 mm; aligns tumour distributions, the HV anchor, and Normal reference in one compact bridge.
+- **Weakness/next:** the panel is epithelial-model specific; state that cell-type model scales are separately aligned and not interchangeable.
+
+### Panel C — broad Normal compartments
+
+```{r}
+#| label: panel-c-broad-compartments
+#| fig-width: 6.2
+#| fig-height: 5.2
+#| out-width: 85%
+#| fig-cap: "Patient-level TM4SF1 CPM in paired/adjacent normal bladder broad populations. Large diamonds are medians and bars are interquartile ranges."
+
+panel_c_points <- tm4_patient |>
+  filter(
+    sample_type == "paired_normal",
+    broad_cell_type %in% c("epithelial", "endothelial", "stromal", "immune")
+  )
+
+panel_c_summary <- panel_c_points |>
+  group_by(broad_cell_type) |>
+  summarise(
+    median_CPM = median(CPM),
+    lower_CPM = quantile(CPM, 0.25),
+    upper_CPM = quantile(CPM, 0.75),
+    .groups = "drop"
+  ) |>
+  arrange(median_CPM) |>
+  mutate(broad_cell_type = factor(broad_cell_type, levels = broad_cell_type))
+
+panel_c_points <- panel_c_points |>
+  mutate(
+    broad_cell_type = factor(
+      broad_cell_type, levels = levels(panel_c_summary$broad_cell_type)
+    )
+  )
+
+population_col <- c(
+  epithelial = fig3_col[["epithelial"]],
+  endothelial = fig3_col[["endothelial"]],
+  stromal = fig3_col[["neutral"]],
+  immune = "#A8A8A8"
+)
+
+panel_c <- ggplot(panel_c_points, aes(CPM, broad_cell_type, colour = broad_cell_type)) +
+  geom_point(
+    position = position_jitter(width = 0, height = 0.055),
+    size = 0.8, alpha = 0.55
+  ) +
+  geom_segment(
+    data = panel_c_summary,
+    aes(x = lower_CPM, xend = upper_CPM, yend = broad_cell_type),
+    linewidth = 0.62, lineend = "round"
+  ) +
+  geom_point(
+    data = panel_c_summary, aes(median_CPM),
+    shape = 18, size = 1.65
+  ) +
+  scale_colour_manual(values = population_col) +
+  scale_x_continuous(
+    trans = scales::transform_log1p(),
+    breaks = c(0, 1, 10, 100, 1000), labels = label_number()
+  ) +
+  labs(x = "Paired-normal TM4SF1 CPM", y = NULL) +
+  guides(colour = "none") +
+  theme_fig3_compact() +
+  theme(axis.line.y = element_blank(), axis.ticks.y = element_blank())
+
+panel_c
+```
+
+- **Message:** paired/adjacent normal broad-population data motivate separate epithelial and endothelial follow-up.
+- **Source:** reconstructed patient pseudobulks; points remain descriptive because these samples are adjacent/paired normal, not fully healthy tissue.
+- **Size/change:** 57 × 48 mm; ranks populations by median expression and highlights the two modelled compartments without implying a broader posteriorHCA model set.
+- **Weakness/next:** posteriorHCA has only epithelial and endothelial models here; keep that limitation explicit in the caption.
+
+**Intended Row 1 message:** TM4SF1 is an HV-enriched tumour target in the
+released source, its patient-level tumour abundance is heterogeneous, and
+epithelial plus endothelial Normal compartments are the defensible focus for
+model-aligned screening. A1–C make that transition successfully if A1 remains
+the main source-faithful Panel A and A2 is retained as an audit alternative.
+
+## Row 2 — main tissue-level posteriorHCA result
+
+The smooth Normal slabs below are quantile-matched visual envelopes through the
+cached posterior median and 95% interval. The interval bar, median point,
+reported overlap probability (`P`), donor count (`n`), HV bootstrap density,
+and registered anchor are exact cached results. Filled circle = at least 10
+donor keys; open circle = 1–9; cross = zero. Support changes opacity and line
+style only; it does not control visibility.
+
+### Panel D — endothelial
+
+#### Draft D1 — comprehensive tissue landscape
+
+```{r}
+#| label: panel-d-comprehensive
+#| fig-width: 10
+#| fig-height: 12
+#| out-width: 100%
+#| fig-cap: "All endothelial tissue baselines, ordered by P(Normal ≥ HV anchor). Normal slabs are quantile-matched renderings; exact medians and 95% intervals appear at each facet baseline."
+
+panel_d_comprehensive <- plot_tissue_density("endothelial", ncol = 4)
+panel_d_comprehensive
+```
+
+- **Message/source:** complete endothelial tissue landscape from the corrected profile summary and exact endothelial HV bootstrap draws.
+- **Size/change:** 89 × 92 mm; replaces the report forest plot with repeated Normal-versus-HV distribution grammar and direct `P`, `n`, and support marks.
+- **Weakness:** 29 facets are too dense for confident main-text reading at final size, and unsupported tissues broaden the common scale.
+- **Recommendation:** retain as a Supplementary/exhaustive design reference, not the main Panel D.
+
+#### Draft D2 — main-text prioritised
+
+```{r}
+#| label: panel-d-prioritised
+#| fig-width: 8.5
+#| fig-height: 9.0
+#| out-width: 100%
+#| fig-cap: "Prioritised endothelial tissue set. Female reproductive, skin, and respiratory tissues are retained for story evaluation; breast, liver, and renal provide supported comparators."
+
+endo_main_tissues <- c(
+  "female reproductive system",
+  "integumentary system (skin)",
+  "breast",
+  "liver",
+  "renal system",
+  "respiratory system"
+)
+panel_d_prioritised <- plot_tissue_density(
+  "endothelial", endo_main_tissues, ncol = 2
+)
+panel_d_prioritised
+```
+
+- **Message/source:** the high-overlap female-reproductive estimate is supported; the similarly high skin estimate is visibly low-support; respiratory is a supported negative comparator.
+- **Size/change:** 89 × 92 mm; six facets preserve density shape and annotations at final size.
+- **Weakness:** skin remains 98.6% extrapolation-weighted and should not be presented as a robust signal.
+- **Recommendation:** use this grammar for Panel D, but consider moving skin to Supplementary once Row 3 adopts respiratory.
+
+### Panel E — epithelial
+
+#### Draft E1 — comprehensive tissue landscape
+
+```{r}
+#| label: panel-e-comprehensive
+#| fig-width: 10
+#| fig-height: 12
+#| out-width: 100%
+#| fig-cap: "All epithelial tissue baselines, ordered by P(Normal ≥ HV anchor). Normal slabs are quantile-matched renderings; exact medians and 95% intervals appear at each facet baseline."
+
+panel_e_comprehensive <- plot_tissue_density("epithelial", ncol = 4)
+panel_e_comprehensive
+```
+
+- **Message/source:** complete epithelial tissue landscape from the corrected profile summary and exact epithelial HV bootstrap draws.
+- **Size/change:** 89 × 92 mm; uses the same visual grammar as D without forcing a shared, biologically non-equivalent model scale.
+- **Weakness:** 21 facets remain crowded and the wide uncertainty makes small ranking differences visually unimportant.
+- **Recommendation:** use as the exhaustive/Supplementary version.
+
+#### Draft E2 — main-text prioritised
+
+```{r}
+#| label: panel-e-prioritised
+#| fig-width: 8.5
+#| fig-height: 9.0
+#| out-width: 100%
+#| fig-cap: "Prioritised epithelial tissue set, retaining supported high-expression tissues and respiratory/renal comparators."
+
+epi_main_tissues <- c(
+  "breast",
+  "female reproductive system",
+  "nasal, oral, and pharyngeal regions",
+  "sensory-related structures",
+  "liver",
+  "renal system",
+  "respiratory system"
+)
+panel_e_prioritised <- plot_tissue_density(
+  "epithelial", epi_main_tissues, ncol = 2
+)
+panel_e_prioritised
+```
+
+- **Message/source:** epithelial tissue estimates show weaker overlap than the endothelial lead signal, with broad uncertainty despite adequate donor counts in the selected set.
+- **Size/change:** 89 × 92 mm; seven supported facets remain legible and preserve the D-panel grammar.
+- **Weakness:** none pass the registered 0.80 prototype rule, and the model itself is not readiness-qualified.
+- **Recommendation:** use E2; keep the comprehensive E1 landscape in Supplementary.
+
+**Intended Row 2 message:** tissue-specific Normal relationships to the HV
+anchor differ sharply between endothelial and epithelial models. The overlaid
+density/interval style is the most interpretable at 89 × 92 mm when restricted
+to approximately six or seven facets. The comprehensive drafts are valuable
+for inclusion review but are too dense for the main text.
+
+## Row 3 — demographic refinement of selected tissues
+
+Row 3 focuses on the endothelial model because the female-reproductive and
+skin lead signals arise there. Each panel shows both proposed stories:
+female reproductive + respiratory (supported negative comparator) and female
+reproductive + skin (high-overlap but extrapolation-sensitive). Structurally
+impossible male estimates for female reproductive tissue are absent.
+
+### Panel F — sex
+
+#### Draft F1 — female reproductive + respiratory
+
+```{r}
+#| label: panel-f-respiratory
+#| fig-width: 6.4
+#| fig-height: 6.0
+#| out-width: 85%
+#| fig-cap: "Endothelial sex marginals for the respiratory comparator. Purple is female and green is male; point shape denotes support. Female reproductive tissue has one structurally female tissue baseline rather than an invented male estimate."
+
+panel_f_respiratory <- plot_story_sex("respiratory system")
+panel_f_respiratory
+```
+
+- **Message/source:** respiratory female and male marginals are directly comparable and supported; female reproductive remains a female-only tissue baseline.
+- **Size/change:** 58 × 55 mm; paired point-ranges replace the report-wide sex forest plot.
+- **Weakness:** intervals are broad and do not establish a robust sex effect.
+- **Recommendation:** preferred Panel F draft because the comparator is adequately supported.
+
+#### Draft F2 — female reproductive + skin
+
+```{r}
+#| label: panel-f-skin
+#| fig-width: 6.4
+#| fig-height: 6.0
+#| out-width: 85%
+#| fig-cap: "Endothelial sex marginals for skin. Purple is female and green is male; point shape denotes support. Both skin sex estimates have limited or absent direct support."
+
+panel_f_skin <- plot_story_sex("integumentary system (skin)")
+panel_f_skin
+```
+
+- **Message/source:** the apparent skin sex contrast is prediction-visible but empirically weak.
+- **Size/change:** 58 × 55 mm; open/cross marks keep low-support estimates visible without giving them equal visual authority.
+- **Weakness:** female skin has zero donor keys and male skin has two; neither can sustain a main-text demographic claim.
+- **Recommendation:** retain for development/Supplementary only.
+
+### Panel G — age decade
+
+#### Draft G1 — female reproductive + respiratory
+
+```{r}
+#| label: panel-g-respiratory
+#| fig-width: 6.4
+#| fig-height: 6.0
+#| out-width: 85%
+#| fig-cap: "Endothelial overlap probability by age decade for female reproductive and respiratory tissues. Lines are visual guides between discrete marginal estimates."
+
+panel_g_respiratory <- plot_story_age("respiratory system")
+panel_g_respiratory
+```
+
+- **Message/source:** female-reproductive overlap is consistently high but sparsely supported; respiratory remains lower with several supported decades.
+- **Size/change:** 58 × 55 mm; ordered points and guide-lines replace the age heatmap.
+- **Weakness:** decade-specific marginals are not a fitted continuous biological age trend.
+- **Recommendation:** preferred Panel G draft, with the guide-line caveat in the caption.
+
+#### Draft G2 — female reproductive + skin
+
+```{r}
+#| label: panel-g-skin
+#| fig-width: 6.4
+#| fig-height: 6.0
+#| out-width: 85%
+#| fig-cap: "Endothelial overlap probability by age decade for female reproductive and skin tissues. Nearly all skin strata are extrapolated."
+
+panel_g_skin <- plot_story_age("integumentary system (skin)")
+panel_g_skin
+```
+
+- **Message/source:** high skin overlap across decades is dominated by extrapolated predictions rather than repeated empirical support.
+- **Size/change:** 58 × 55 mm; support-aware point/line design makes that limitation immediately visible.
+- **Weakness:** the apparent pattern is unsuitable for a demographic biology claim.
+- **Recommendation:** move to Supplementary or retire after story selection.
+
+### Panel H — ethnicity
+
+#### Draft H1 — female reproductive + respiratory
+
+```{r}
+#| label: panel-h-respiratory
+#| fig-width: 6.4
+#| fig-height: 6.0
+#| out-width: 85%
+#| fig-cap: "Endothelial overlap probability across unordered ethnicity groups for female reproductive and respiratory tissues. No lines connect categories."
+
+panel_h_respiratory <- plot_story_ethnicity("respiratory system")
+panel_h_respiratory
+```
+
+- **Message/source:** ethnicity estimates are heterogeneous in uncertainty and support; respiratory includes supported African and European strata.
+- **Size/change:** 58 × 55 mm; a horizontal dot plot replaces the ethnicity heatmap and avoids implying ordinal structure.
+- **Weakness:** sparse categories, especially in female reproductive tissue, prevent strong demographic interpretation.
+- **Recommendation:** preferred Panel H draft if Row 3 remains in the main figure; caption as exploratory marginal structure.
+
+#### Draft H2 — female reproductive + skin
+
+```{r}
+#| label: panel-h-skin
+#| fig-width: 6.4
+#| fig-height: 6.0
+#| out-width: 85%
+#| fig-cap: "Endothelial overlap probability across unordered ethnicity groups for female reproductive and skin tissues. Skin strata are almost entirely extrapolated."
+
+panel_h_skin <- plot_story_ethnicity("integumentary system (skin)")
+panel_h_skin
+```
+
+- **Message/source:** skin ethnicity estimates remain visible but their extrapolation-heavy basis is unmistakable.
+- **Size/change:** 58 × 55 mm; restrained opacity and open/cross marks keep support secondary to the biological metric.
+- **Weakness:** no skin ethnicity category has adequate direct donor support.
+- **Recommendation:** do not use for the main-text story.
+
+**Intended Row 3 message:** demographic marginals can refine a supported lead
+and a motivated negative comparator without turning sparse predictions into
+demographic claims. Female reproductive + respiratory is the cleaner main-text
+story; female reproductive + skin is extrapolation-sensitive and belongs in
+Supplementary development material.
+
+# Recommended Fig. 3 direction
+
+1. **Panels A–C:** use A1 (released source distribution with patient overlays), B (tumour bootstrap → HV anchor → epithelial Normal interval), and C (ranked paired-normal broad compartments). Keep A2 as an audit alternative.
+2. **Row allocation:** retain the proposed 48 / 92 / 55 mm row heights with approximately 4 mm gutters; Row 2 remains the dominant visual row.
+3. **Panels D–E:** use the prioritised two-column density-facet drafts. For D retain female reproductive, breast, liver, renal, respiratory, and initially skin for transparent story evaluation; move the other endothelial tissues to Supplementary. For E retain the seven supported tissues shown in E2 and move the full landscape to Supplementary.
+4. **Panels F–H:** use female reproductive + respiratory. Respiratory is a motivated, adequately supported negative comparator; skin should not carry the main-text narrative while its tissue result is 98.6% extrapolation-weighted.
+5. **Retire from the main figure:** the large TM4SF1 volcano, pooled broad-population bars, all-tissue forest plot, sex-wide forest plot, and age/ethnicity heatmaps. They remain useful audit or Supplementary outputs.
+6. **Still requiring refinement:** replace the quantile-matched Row 2 Normal envelopes with exact tissue posterior draws if a lightweight draw cache is exported; decide whether skin remains in D after Row 3 is fixed; test final caption density and strip abbreviation after assembly.
+7. **Estimated assembled size:** 183 mm × approximately 203 mm, within the 183 mm × 220 mm Nature-style cap, before caption.
+
+## Figure-development self-review
+
+- **Contribution — pass:** the row sequence carries one coherent story from target selection to tissue screening to demographic refinement.
+- **Clarity — pass with one caption requirement:** model-specific scales and the plotting-only Row 2 density interpolation must be stated explicitly.
+- **Experimental strength — needs model refit:** the released and reconstructed study evidence is transparent, but neither posteriorHCA fit is model-ready.
+- **Evaluation completeness — needs one export:** exact tissue-level posterior draw matrices are absent from the cache; exporting them would remove the only visual approximation.
+- **Design soundness — pass for development:** overlap, support, extrapolation, candidate status, and readiness remain separate; no panel implies toxicity or demographic causality.
+
+## Claim–evidence check
+
+| Draft claim | Evidence used | Status |
+|---|---|---|
+| TM4SF1 is HV-enriched in the released tumour study | Released Figure 5A rank/effect and Figure 5B expression values | Supported |
+| Endothelial and epithelial compartments warrant focused Normal screening | Patient broad-population summaries plus the two available posteriorHCA model classes | Supported with scope stated |
+| Female reproductive is a lead endothelial overlap signal | Corrected tissue summary: P = 0.87, 10 donor keys; model readiness false | Supported as an ungated prioritisation signal only |
+| Skin shows robust demographic structure | Two donor keys at tissue level and extrapolation-heavy strata | Not supported; excluded from recommended main-text story |
+
+## Session info
+
+```{r}
+sessionInfo()
+```
+

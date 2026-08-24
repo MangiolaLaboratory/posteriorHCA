@@ -1,0 +1,11 @@
+sample_type	broad_cell_type	n_cells
+tumour	endothelial	41
+Sum	endothelial	41
+tumour	epithelial	90
+Sum	epithelial	90
+tumour	immune	877
+Sum	immune	877
+tumour	stromal	134
+Sum	stromal	134
+tumour	Sum	1142
+Sum	Sum	1142

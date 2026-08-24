@@ -1,0 +1,2648 @@
+---
+title: "TM4SF1 in histological-variant bladder cancer"
+subtitle: "Design-standardised posteriorHCA baseline (v2.1 corrected admissibility)"
+date: today
+date-format: "DD MMM YYYY"
+title-block-banner: true
+author:
+  - name: Chen Zhan
+    orcid: 0000-0002-4794-8339
+    email: chen.zhan@adelaide.edu.au
+    affiliation:
+      - id: sgc
+        name: SAiGENCI, The University of Adelaide
+format:
+  html:
+    theme: minty
+    df-print: paged
+    code-line-numbers: true
+    embed-resources: true
+    html-math-method: mathjax
+    fig-path: results/tm4sf1_toxicity_report_v2.1_corrected/figures
+    code-fold: true
+    code-fold-default: true
+    toc: true
+    toc-location: left
+    toc-title: "Contents"
+knitr:
+  opts_chunk:
+    message: false
+    warning: false
+    fig.retina: 2
+    fig.align: center
+    dpi: 300
+editor: source
+execute:
+  freeze: auto
+abstract: |
+  **Version 2.1 (corrected admissibility and support diagnostics).** This
+  working copy corrects the v2 biological sex admissibility registry, constructs
+  the target prediction grid from prespecified admissible levels (not only
+  observed atlas profiles), adds weighted support diagnostics, and separates
+  admissibility, prediction and empirical support into distinct layers.
+  The bladder-cancer paper identified TM4SF1 as a candidate antigen in
+  histological-variant (HV) tumours. This report standardises Normal/10x3
+  posteriorHCA tissue × cell-type baselines using design-based weights and
+  screens them for overlap with the HV tumour-epithelial range. An overlap flag
+  is a reproducible follow-up rule, not evidence of toxicity. Figures follow
+  Nature journal style (axis labels and legends only; canvas ≤ 183 mm wide).
+params:
+  case_dir: "."
+  model_root: "/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/HPC_posterior/NEW_CELL_TYPE"
+  pseudobulk_h5ad: "/home/a1237163/lab/Mangiola_ImmuneAtlas/zenodo/pseudobulk_se.h5ad"
+  gene_symbol: "TM4SF1"
+  gene_ensembl: "ENSG00000169908"
+  model_cell_types: ["epithelial", "endothelial"]
+  n_boot: 2000
+  threshold_quantile: 0.05
+  alert_probability: 0.80
+  min_donor_keys: 10
+  refresh_hca: false
+  seed: 293189
+  v1_results_dir: "archive/v1_observed_profile/results_v1_observed_profile"
+  v2_results_dir: "archive/v2_design_standardised/results_v2_design_standardised"
+  baseline_method: "design_standardised_v2.1"
+  well_supported_k: 3
+  fig_width_mm: 183
+  panel_sm_mm: 85
+  panel_md_mm: 90
+  panel_lg_mm: 120
+---
+
+# Question and interpretation boundary
+
+**Report version:** v2.1 corrected admissibility (`TM4SF1_toxicity_case_study_v2.1_corrected.qmd`).
+The frozen v2 snapshot is `archive/v2_design_standardised/`;
+v1 is at `archive/v1_observed_profile/`;
+the original `TM4SF1_toxicity_case_study.qmd` is unchanged.
+
+The report asks which standardised Normal-labelled, 10x Genomics 3 posteriorHCA
+tissue × cell-type baselines overlap the HV tumour-epithelial TM4SF1 range after
+the study counts are aligned to each cell-type model's own offset-zero TMMwsp
+reference.
+
+An overlap flag is not evidence of toxicity. It is a prioritisation rule for
+protein localisation, antigen-density, accessibility and functional-killing
+experiments. Paired/adjacent normal bladder samples are retained as calibration
+samples and are never called fully healthy tissue. Three have at least 20
+epithelial cells (UC04, VAR07 and VAR10), but only VAR07 has a counterpart in
+the retained tumour cohort, so this is not a matched-pair analysis.
+
+------------------------------------------------------------------------
+
+# Analysis map
+
+The biological unit is the patient throughout. Cell-level source data are used
+only to reproduce the paper figure; cohort inference uses patient-level summed
+raw counts.
+
+1. Re-read the authors' released Figure 5 source tables and confirm the TM4SF1
+   differential-expression rank.
+2. Display both the released per-cell contrast and the reconstructed
+   patient-level raw-count contrast.
+3. Align the study pseudobulks to each posteriorHCA model's own offset-zero
+   TMMwsp reference.
+4. Estimate patient-cohort latent `log(mu)` with the SAVI study's
+   negative-binomial/Bayesian-bootstrap method.
+5. Predict posteriorHCA `log(mu)` on a biologically admissible Normal/10x3
+   covariate grid and marginalise with design-based weights (not atlas
+   donor/profile frequencies).
+6. Define a model-specific HV tumour-expression anchor and identify supported
+   tissue × cell-type baselines whose posterior overlaps it.
+
+**Colour / mark grammar.**
+
+| Element | Encoding |
+|---|---|
+| HV / tumour / prototype candidate | vermilion `#D55E00` |
+| UC | blue `#0072B2` |
+| Paired/adjacent normal | green `#009E73` |
+| Endothelial model | teal `#0072B2` |
+| Epithelial model | vermilion `#D55E00` |
+| Below prototype rule | charcoal `#8C8C8C` |
+| Sex (female / male) | `RColorBrewer` PRGn |
+
+**Panel export sizes (mm, width × height).**
+
+| Tier | Size | Used for |
+|---|---|---|
+| Small (`sm`) | 85 × 80 | Volcano, violin |
+| Medium (`md`) | 90 × 75 | Patient CPM, population bars/boxes |
+| Large (`lg`) | 120 × 95 | Faceted tissue / sex forest panels |
+| Heatmap | 120 × 85 | Tissue × age / ethnicity tiles |
+| Full canvas | 183 × 95 | Cohort contrast forest only |
+
+Figure panels follow Nature journal style: axis labels and legends only (no
+plot titles or subtitles). **183 mm is the maximum patched canvas width**;
+individual export panels are smaller so they can be assembled with
+`patchwork`. Only designated full-width plots use the full 183 mm. Captions
+carry the title.
+
+------------------------------------------------------------------------
+
+# Setup
+
+```{r}
+#| label: setup
+
+suppressPackageStartupMessages({
+  library(SingleCellExperiment)
+  library(SummarizedExperiment)
+  library(S4Vectors)
+  library(DelayedArray)
+  library(HDF5Array)
+  library(brms)
+  library(edgeR)
+  library(posterior)
+  library(targets)
+  library(readxl)
+  library(readr)
+  library(dplyr)
+  library(tidyr)
+  library(purrr)
+  library(stringr)
+  library(tibble)
+  library(ggplot2)
+  library(scales)
+  library(knitr)
+  library(RColorBrewer)
+  library(digest)
+})
+
+options(stringsAsFactors = FALSE, scipen = 6, bitmapType = "cairo")
+set.seed(params$seed)
+
+font_cache <- file.path(tempdir(), "tm4sf1-font-cache")
+dir.create(font_cache, recursive = TRUE, showWarnings = FALSE)
+Sys.setenv(XDG_CACHE_HOME = font_cache)
+
+# Nature double-column canvas cap and patchwork panel sizes (mm).
+mm_to_in <- function(mm) mm / 25.4
+fig_canvas_mm <- params$fig_width_mm
+panel_mm <- list(
+  sm = c(w = params$panel_sm_mm, h = 80),
+  md = c(w = params$panel_md_mm, h = 75),
+  lg = c(w = params$panel_lg_mm, h = 95),
+  heatmap = c(w = params$panel_lg_mm, h = 85),
+  full = c(w = fig_canvas_mm, h = 95)
+)
+
+first_existing <- function(paths, type = c("file", "dir")) {
+  type <- match.arg(type)
+  paths <- unique(paths[!is.na(paths) & nzchar(paths)])
+  hit <- if (type == "file") paths[file.exists(paths)] else paths[dir.exists(paths)]
+  if (!length(hit)) {
+    return(NULL)
+  }
+  hit[[1]]
+}
+
+hpc_aliases <- function(path) {
+  unique(c(
+    path,
+    sub("^/hpcfs/", "/scratchdata1/", path),
+    sub("^/scratchdata1/", "/hpcfs/", path)
+  ))
+}
+
+locate_case_dir <- function(path) {
+  candidates <- unique(c(path, getwd(), file.path(getwd(), "dev", "TM4SF1_bladder")))
+  hit <- candidates[file.exists(file.path(
+    candidates, "data", "processed", "pseudobulk_tumour_epithelial_counts.rds"
+  ))]
+  normalizePath(hit[[1]], mustWork = TRUE)
+}
+
+locate_model_root <- function(path) {
+  hit <- first_existing(hpc_aliases(path), type = "dir")
+  normalizePath(hit, mustWork = TRUE)
+}
+
+locate_pseudobulk_h5ad <- function(path, current_path = NA_character_) {
+  candidates <- unique(c(
+    hpc_aliases(path),
+    hpc_aliases(current_path),
+    "/home/a1237163/lab/Mangiola_ImmuneAtlas/zenodo/pseudobulk_se.h5ad",
+    "/hpcfs/groups/phoenix-hpc-mangiola_laboratory/Mangiola_ImmuneAtlas/zenodo/pseudobulk_se.h5ad",
+    "/scratchdata1/groups/phoenix-hpc-mangiola_laboratory/Mangiola_ImmuneAtlas/zenodo/pseudobulk_se.h5ad"
+  ))
+  hit <- first_existing(candidates, type = "file")
+  if (is.null(hit)) {
+    stop("Could not find the posteriorHCA pseudobulk H5AD.")
+  }
+  # Prefer a readable /hpcfs or home copy over a /scratchdata1 realpath.
+  ordered <- unique(c(
+    candidates[file.exists(candidates) & !startsWith(candidates, "/scratchdata1/")],
+    hit
+  ))
+  ordered[[1]]
+}
+
+hdf5_seed_path <- function(x) {
+  if (isS4(x) && methods::.hasSlot(x, "filepath")) {
+    return(as.character(x@filepath)[[1]])
+  }
+  if (isS4(x) && methods::.hasSlot(x, "seed")) {
+    return(hdf5_seed_path(x@seed))
+  }
+  NA_character_
+}
+
+relocate_hdf5_seed <- function(x, new_path) {
+  if (isS4(x) && methods::.hasSlot(x, "filepath")) {
+    x@filepath <- new_path
+    return(x)
+  }
+  if (isS4(x) && methods::.hasSlot(x, "seed")) {
+    x@seed <- relocate_hdf5_seed(x@seed, new_path)
+  }
+  x
+}
+
+relocate_se_hdf5 <- function(se, new_path) {
+  se@assays@data@listData <- lapply(
+    se@assays@data@listData,
+    relocate_hdf5_seed,
+    new_path = new_path
+  )
+  se
+}
+
+case_dir <- locate_case_dir(params$case_dir)
+model_root <- locate_model_root(params$model_root)
+results_dir <- file.path(case_dir, "results", "tm4sf1_toxicity_report_v2.1_corrected")
+cache_dir <- file.path(results_dir, "cache")
+v1_results_dir <- file.path(case_dir, params$v1_results_dir)
+v2_results_dir <- file.path(case_dir, params$v2_results_dir)
+figure_dir <- file.path("results", "tm4sf1_toxicity_report_v2.1_corrected", "figures")
+dir.create(cache_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(figure_dir, recursive = TRUE, showWarnings = FALSE)
+
+knitr::opts_chunk$set(fig.path = paste0(figure_dir, "/"))
+
+analysis_version <- "tm4sf1-logmu-v7-design-standardised-v2.1-2026-08-18"
+tm4_id <- params$gene_ensembl
+tm4_symbol <- params$gene_symbol
+
+fingerprint_files <- c(
+  file.path(case_dir, "data", "processed", "pseudobulk_tumour_epithelial_counts.rds"),
+  file.path(case_dir, "data", "processed", "pseudobulk_paired_normal_epithelial_counts.rds"),
+  file.path(case_dir, "data", "raw", "paper", "41467_2025_59888_MOESM4_ESM.xlsx"),
+  file.path(model_root, "_PAK2_TM4SF1_modelled_cell_types.csv"),
+  file.path(model_root, paste0("V1_", params$model_cell_types), "_targets", "meta", "meta")
+)
+input_fingerprint <- digest::digest(
+  setNames(
+    vapply(
+      fingerprint_files, digest::digest, character(1),
+      algo = "sha256", file = TRUE, serialize = FALSE
+    ),
+    fingerprint_files
+  ),
+  algo = "sha256"
+)
+analysis_id <- paste(
+  analysis_version,
+  paste0("gene=", tm4_id),
+  paste0("models=", paste(params$model_cell_types, collapse = ",")),
+  paste0("n_boot=", params$n_boot),
+  paste0("threshold_q=", params$threshold_quantile),
+  paste0("alert_p=", params$alert_probability),
+  paste0("min_donors=", params$min_donor_keys),
+  paste0("seed=", params$seed),
+  paste0("inputs=", input_fingerprint),
+  sep = "|"
+)
+
+# Okabe–Ito / Nature-safe colours.
+col_hv <- "#D55E00"
+col_uc <- "#0072B2"
+col_normal <- "#009E73"
+col_candidate <- "#D55E00"
+col_other <- "#8C8C8C"
+col_dark <- "#3F3F3F"
+colmap_histology <- c(HV = col_hv, UC = col_uc)
+colmap_compartment <- c(
+  tumour = col_hv,
+  "paired/adjacent normal" = col_normal
+)
+colmap_cell <- c(epithelial = col_hv, endothelial = col_uc)
+colmap_sex <- setNames(brewer.pal(3, "PRGn")[c(1, 3)], c("female", "male"))
+
+theme_multipanel <-
+  theme_bw() +
+  theme(
+    panel.border = element_blank(),
+    axis.line = element_line(linewidth = 0.1),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    legend.position = "bottom",
+    strip.background = element_blank(),
+    axis.title.y = element_text(margin = margin(0, 0, 0, 0), size = 7),
+    axis.title.x = element_text(margin = margin(0, 0, 0, 0), size = 7),
+    panel.spacing.x = unit(0.1, "lines"),
+    axis.text.x = element_text(size = 6),
+    axis.text.y = element_text(size = 6),
+    strip.text.x = element_text(size = 7),
+    strip.text.y = element_text(size = 7),
+    legend.key.size = unit(4, "mm"),
+    legend.title = element_text(size = 7),
+    legend.text = element_text(size = 6),
+    strip.clip = "off",
+    plot.title = element_blank(),
+    plot.subtitle = element_blank(),
+    plot.tag = element_text(size = 8, face = "bold"),
+    axis.line.x = element_line(linewidth = 0.2),
+    axis.line.y = element_line(linewidth = 0.2),
+    axis.ticks.x = element_line(linewidth = 0.2),
+    axis.ticks.y = element_line(linewidth = 0.2),
+    plot.margin = margin(2, 4, 2, 2)
+  )
+
+# Drop the leading zero on decimal tick labels (0.1 -> .1).
+label_drop_leading_zero <- function(accuracy = NULL, ...) {
+  function(x) {
+    s <- number(x, accuracy = accuracy, big.mark = "", trim = TRUE, ...)
+    s[!is.na(x) & x == 0] <- "0"
+    sub("^(-?)0\\.", "\\1.", s)
+  }
+}
+
+options(
+  ggplot2.continuous.y = function() {
+    scale_y_continuous(labels = label_drop_leading_zero())
+  }
+)
+
+save_figure <- function(plot, filename, width_mm, height_mm) {
+  stopifnot(width_mm <= fig_canvas_mm)
+  stem <- tools::file_path_sans_ext(filename)
+  pdf_path <- file.path(figure_dir, paste0(stem, ".pdf"))
+  png_path <- file.path(figure_dir, paste0(stem, ".png"))
+  pdf_device <- if (isTRUE(capabilities("cairo"))) cairo_pdf else "pdf"
+  ggsave(
+    pdf_path, plot,
+    width = width_mm, height = height_mm, units = "mm",
+    dpi = 600, device = pdf_device
+  )
+  ggsave(
+    png_path, plot,
+    width = width_mm, height = height_mm, units = "mm",
+    dpi = 600
+  )
+  invisible(plot)
+}
+```
+
+------------------------------------------------------------------------
+
+# 1. Reproduce the paper's TM4SF1 highlight
+
+```{r}
+#| label: paper-source-data
+
+paper_workbook <- file.path(
+  case_dir, "data", "raw", "paper", "41467_2025_59888_MOESM4_ESM.xlsx"
+)
+
+paper_de <- read_excel(paper_workbook, sheet = "Figure5A") |>
+  filter(cluster == "Variant") |>
+  mutate(
+    gene = as.character(gene),
+    hv_enriched = avg_log2FC > 0,
+    hv_rank = rank(
+      if_else(hv_enriched, p_val, NA_real_),
+      ties.method = "min",
+      na.last = "keep"
+    ),
+    minus_log10_fdr = -log10(pmax(p_val_adj, .Machine$double.xmin)),
+    is_tm4sf1 = gene == tm4_symbol
+  )
+
+tm4_paper_de <- paper_de |>
+  filter(is_tm4sf1) |>
+  transmute(
+    source = "paper Figure5A",
+    gene,
+    avg_log2FC,
+    pct_HV = pct.1,
+    pct_UC = pct.2,
+    p_value = p_val,
+    adjusted_p_value = p_val_adj,
+    HV_enriched_rank = as.integer(hv_rank)
+  )
+
+replication_de <- read_tsv(
+  file.path(case_dir, "results", "replication_audit", "TM4SF1_original_DE_result.tsv"),
+  show_col_types = FALSE
+) |>
+  transmute(
+    analysis,
+    n_HV_patients,
+    n_UC_patients,
+    cells_per_patient = n_cells_per_patient,
+    avg_log2FC,
+    p_value = p_val,
+    adjusted_p_value = coalesce(FDR_BH, p_val_adj),
+    HV_enriched_rank = HV_enriched_rank_by_p
+  )
+
+write_tsv(replication_de, file.path(results_dir, "TM4SF1_paper_DE_replication.tsv"))
+```
+
+The released table places TM4SF1 at rank `r tm4_paper_de$HV_enriched_rank`
+among HV-enriched genes: log2 fold change
+`r round(tm4_paper_de$avg_log2FC, 2)`, detection
+`r percent(tm4_paper_de$pct_HV, accuracy = 0.1)` in HV versus
+`r percent(tm4_paper_de$pct_UC, accuracy = 0.1)` in pure UC, and adjusted
+(p = `r format(tm4_paper_de$adjusted_p_value, scientific = TRUE, digits = 3)`).
+The closest public-DGE reconstruction also ranks TM4SF1 first, but it contains
+9 HV and only 2 UC patients at the paper's 150-cell minimum because the
+deposited UC01 matrix does not contain the published UC01 barcodes.
+
+```{r}
+#| label: paper-de-table
+
+replication_de |>
+  mutate(
+    avg_log2FC = round(avg_log2FC, 2),
+    p_value = format(p_value, scientific = TRUE, digits = 3),
+    adjusted_p_value = format(adjusted_p_value, scientific = TRUE, digits = 3)
+  ) |>
+  kable(
+    caption = "TM4SF1 in the released paper result and public-DGE sensitivity analyses."
+  )
+```
+
+```{r}
+#| label: paper-volcano
+#| fig-width: 3.35
+#| fig-height: 3.15
+#| fig-cap: "Released Figure 5A differential-expression table. TM4SF1 is highlighted without recomputing the authors' private object. Extreme −log10 adjusted p values are capped at the 99.5th percentile for display."
+
+volcano_cap <- quantile(paper_de$minus_log10_fdr, 0.995, na.rm = TRUE)
+paper_de_display <- paper_de |>
+  mutate(plot_y = pmin(minus_log10_fdr, volcano_cap))
+
+paper_de_plot <- ggplot(paper_de_display, aes(avg_log2FC, plot_y)) +
+  geom_point(colour = col_other, alpha = 0.45, size = 0.6, stroke = 0) +
+  geom_point(
+    data = filter(paper_de_display, is_tm4sf1),
+    colour = col_hv, size = 1.6
+  ) +
+  geom_text(
+    data = filter(paper_de_display, is_tm4sf1),
+    aes(label = gene),
+    colour = col_hv, nudge_x = 0.28, hjust = 0,
+    size = 2, fontface = "italic"
+  ) +
+  geom_vline(xintercept = 0, colour = col_other, linewidth = 0.25) +
+  coord_cartesian(clip = "off") +
+  labs(
+    x = "HV minus pure-UC average log2 fold change",
+    y = expression(-log[10](adjusted~p))
+  ) +
+  theme_multipanel +
+  theme(plot.margin = margin(2, 14, 2, 2))
+
+save_figure(
+  paper_de_plot, "01_paper_Figure5A_TM4SF1_volcano",
+  panel_mm$sm["w"], panel_mm$sm["h"]
+)
+paper_de_plot
+```
+
+------------------------------------------------------------------------
+
+# 2. Visualise TM4SF1 in the paper cohort
+
+```{r}
+#| label: paper-cell-expression
+
+paper_cells <- read_excel(paper_workbook, sheet = "Figure5B") |>
+  transmute(
+    barcode = as.character(Barcode),
+    paper_id = as.character(Name),
+    source_expression = as.numeric(TM4SF1),
+    histology_group = case_when(
+      str_starts(paper_id, "VAR") ~ "HV",
+      str_starts(paper_id, "UC") ~ "UC",
+      TRUE ~ "other"
+    )
+  ) |>
+  filter(histology_group %in% c("HV", "UC"))
+
+paper_cell_patient <- paper_cells |>
+  group_by(paper_id, histology_group) |>
+  summarise(
+    n_cells = n(),
+    mean_source_expression = mean(source_expression),
+    median_source_expression = median(source_expression),
+    source_nonzero_fraction = mean(source_expression > 1e-8),
+    .groups = "drop"
+  )
+
+write_tsv(
+  paper_cell_patient,
+  file.path(results_dir, "TM4SF1_paper_source_patient_summary.tsv")
+)
+```
+
+The authors released normalized per-cell TM4SF1 values—not raw UMI counts—for
+`r nrow(paper_cells)` tumour epithelial cells across
+`r n_distinct(paper_cells$paper_id[paper_cells$histology_group == "HV"])` HV
+and `r n_distinct(paper_cells$paper_id[paper_cells$histology_group == "UC"])`
+UC patients. The cell distributions reproduce the figure, but they are
+descriptive; patients, not cells, are the independent units. Raw DGE counts are
+used for detection and cohort modelling below.
+
+```{r}
+#| label: paper-cell-violin
+#| fig-width: 3.35
+#| fig-height: 3.15
+#| fig-cap: "Released Figure 5B TM4SF1 values. The violin is cell-level source data; filled points are patient means."
+
+paper_cell_plot <- ggplot(
+  paper_cells,
+  aes(histology_group, source_expression, fill = histology_group)
+) +
+  geom_violin(
+    scale = "width", trim = TRUE,
+    colour = col_dark, linewidth = 0.2, alpha = 0.65
+  ) +
+  geom_boxplot(
+    width = 0.14, outlier.shape = NA,
+    fill = "white", colour = col_dark, linewidth = 0.25
+  ) +
+  geom_point(
+    data = paper_cell_patient,
+    inherit.aes = FALSE,
+    aes(histology_group, mean_source_expression),
+    position = position_jitter(width = 0.06, height = 0),
+    shape = 21, fill = col_dark, colour = "white", size = 1.3, stroke = 0.25
+  ) +
+  scale_fill_manual(values = colmap_histology) +
+  labs(x = NULL, y = "Released TM4SF1 expression value") +
+  theme_multipanel +
+  guides(fill = "none")
+
+save_figure(
+  paper_cell_plot, "02_paper_Figure5B_TM4SF1_cells",
+  panel_mm$sm["w"], panel_mm$sm["h"]
+)
+paper_cell_plot
+```
+
+```{r}
+#| label: public-dge-patient-contrast
+#| fig-width: 3.54
+#| fig-height: 2.95
+#| fig-cap: "Patient-level raw-count pseudobulk contrast reconstructed from the deposited DGE matrices. UC01 is retained but marked because it has only 90 reconstructed tumour epithelial cells. VAR08 contributes most HV molecules; several HV tumours are low."
+
+tm4_patient <- read_tsv(
+  file.path(case_dir, "data", "metadata", "TM4SF1_patient_summary.tsv"),
+  show_col_types = FALSE
+) |>
+  filter(
+    sample_type == "tumour",
+    broad_cell_type == "epithelial",
+    paper_id %in% c(sprintf("VAR%02d", 1:9), sprintf("UC%02d", 1:3))
+  ) |>
+  mutate(
+    cohort_status = if_else(
+      reconstructed_n150_threshold_met,
+      ">=150 reconstructed cells",
+      "<150 reconstructed cells"
+    ),
+    paper_id = factor(paper_id, levels = paper_id[order(CPM)])
+  )
+
+patient_cpm_plot <- ggplot(
+  tm4_patient,
+  aes(paper_id, CPM, colour = histology_group, shape = cohort_status)
+) +
+  geom_point(size = 1.6) +
+  scale_y_log10(labels = label_number()) +
+  scale_colour_manual(values = colmap_histology, name = "Histology") +
+  scale_shape_manual(values = c(
+    ">=150 reconstructed cells" = 16,
+    "<150 reconstructed cells" = 1
+  ), name = "Public-DGE cohort") +
+  coord_flip() +
+  labs(x = NULL, y = "TM4SF1 CPM") +
+  theme_multipanel
+
+save_figure(
+  patient_cpm_plot, "03_public_DGE_TM4SF1_patient_CPM",
+  panel_mm$md["w"], panel_mm$md["h"]
+)
+patient_cpm_plot
+```
+
+## Which broad population carries TM4SF1?
+
+```{r}
+#| label: broad-population-source
+#| fig-width: 3.54
+#| fig-height: 2.95
+#| fig-cap: "Pooled TM4SF1 abundance and detection across broad reconstructed populations. Labels give the fraction of cells with non-zero counts. Endothelium is a key cell class for off-tumour follow-up."
+
+population_source <- read_tsv(
+  file.path(case_dir, "data", "metadata", "TM4SF1_population_source_summary.tsv"),
+  show_col_types = FALSE
+) |>
+  mutate(
+    sample_type = recode(
+      sample_type,
+      paired_normal = "paired/adjacent normal",
+      tumour = "tumour"
+    )
+  )
+
+population_plot <- ggplot(
+  population_source,
+  aes(broad_cell_type, pooled_CPM, fill = sample_type)
+) +
+  geom_col(position = position_dodge(width = 0.75), width = 0.68, colour = NA) +
+  geom_text(
+    aes(label = percent(pooled_detection_rate, accuracy = 1)),
+    position = position_dodge(width = 0.75),
+    vjust = -0.35, size = 2, colour = col_dark
+  ) +
+  scale_y_continuous(
+    labels = label_number(),
+    expand = expansion(mult = c(0, 0.16))
+  ) +
+  scale_fill_manual(values = colmap_compartment, name = "Study compartment") +
+  labs(x = NULL, y = "Pooled TM4SF1 CPM") +
+  theme_multipanel
+
+save_figure(
+  population_plot, "04_TM4SF1_broad_population_source",
+  panel_mm$md["w"], panel_mm$md["h"]
+)
+population_plot
+```
+
+Because pooled CPM is composition-weighted, the same check is shown at patient
+level:
+
+```{r}
+#| label: broad-population-patient-distribution
+#| fig-width: 3.54
+#| fig-height: 2.95
+#| fig-cap: "Patient-level TM4SF1 CPM by broad population and study compartment. Points are patient pseudobulks; low-cell profiles remain descriptive."
+
+population_patient <- read_tsv(
+  file.path(case_dir, "data", "metadata", "TM4SF1_patient_summary.tsv"),
+  show_col_types = FALSE
+) |>
+  filter(broad_cell_type %in% c("epithelial", "endothelial", "stromal", "immune")) |>
+  mutate(
+    sample_type = recode(
+      sample_type,
+      paired_normal = "paired/adjacent normal",
+      tumour = "tumour"
+    )
+  )
+
+population_patient_plot <- ggplot(
+  population_patient,
+  aes(broad_cell_type, CPM, colour = sample_type)
+) +
+  geom_boxplot(
+    aes(group = interaction(broad_cell_type, sample_type)),
+    outlier.shape = NA, width = 0.55, linewidth = 0.25, alpha = 0.15,
+    position = position_dodge(width = 0.65)
+  ) +
+  geom_point(
+    position = position_jitterdodge(jitter.width = 0.1, dodge.width = 0.65),
+    alpha = 0.8, size = 1.1, stroke = 0.2
+  ) +
+  scale_y_continuous(trans = transform_log1p(), labels = label_number()) +
+  scale_colour_manual(values = colmap_compartment, name = "Study compartment") +
+  labs(x = NULL, y = "Patient TM4SF1 CPM (log1p)") +
+  theme_multipanel
+
+save_figure(
+  population_patient_plot,
+  "04b_TM4SF1_broad_population_patient_CPM",
+  panel_mm$md["w"], panel_mm$md["h"]
+)
+population_patient_plot
+```
+
+Together, the pooled and patient-level checks motivate the comparator strategy.
+Epithelium is the closest cell-class-matched comparator for tumour epithelium,
+while endothelium must be analysed separately because its expression may
+represent a vascular off-tumour exposure. Pooling these classes would hide the
+relevant biology.
+
+------------------------------------------------------------------------
+
+# 3. Cohort-level `log(mu)` and posteriorHCA baseline
+
+The helper functions below remain in the report. They implement one chain from
+raw patient counts to model-aligned `log(mu)`.
+
+## Study-side helpers
+
+```{r}
+#| label: logmu-helpers-study
+
+# Collapse feature rows that share an Ensembl id.
+aggregate_ensembl_counts <- function(se) {
+  counts <- as.matrix(assay(se, "counts"))
+  ensembl <- as.character(rowData(se)$ensembl_id)
+  keep <- !is.na(ensembl) & nzchar(ensembl)
+  out <- rowsum(counts[keep, , drop = FALSE], ensembl[keep], reorder = FALSE)
+  storage.mode(out) <- "numeric"
+  out
+}
+
+read_study_pseudobulk <- function(case_dir) {
+  tumour_se <- readRDS(file.path(
+    case_dir, "data", "processed", "pseudobulk_tumour_epithelial_counts.rds"
+  ))
+  normal_se <- readRDS(file.path(
+    case_dir, "data", "processed",
+    "pseudobulk_paired_normal_epithelial_counts.rds"
+  ))
+
+  tumour_counts <- aggregate_ensembl_counts(tumour_se)
+  normal_counts <- aggregate_ensembl_counts(normal_se)
+
+  tumour_meta <- as.data.frame(colData(tumour_se)) |>
+    rownames_to_column("source_column") |>
+    mutate(
+      analysis_group = histology_group,
+      study_state = "tumour epithelial",
+      include_for_logmu = TRUE
+    )
+  normal_meta <- as.data.frame(colData(normal_se)) |>
+    rownames_to_column("source_column") |>
+    mutate(
+      analysis_group = "paired_normal",
+      study_state = "paired-normal epithelial",
+      include_for_logmu = n_cells >= 20
+    )
+
+  common <- intersect(rownames(tumour_counts), rownames(normal_counts))
+  normal_keep <- normal_meta$include_for_logmu
+  counts <- cbind(
+    tumour_counts[common, , drop = FALSE],
+    normal_counts[common, normal_keep, drop = FALSE]
+  )
+  meta <- bind_rows(tumour_meta, normal_meta[normal_keep, , drop = FALSE]) |>
+    mutate(
+      analysis_column = c(
+        paste0("tumour__", tumour_meta$patient_id),
+        paste0("paired_normal_epithelial__", normal_meta$patient_id[normal_keep])
+      ),
+      strict_n150 = study_state != "tumour epithelial" |
+        reconstructed_n150_threshold_met
+    )
+
+  colnames(counts) <- meta$analysis_column
+  rownames(meta) <- meta$analysis_column
+  list(counts = counts, metadata = meta)
+}
+
+# TMM against the model's own offset-zero reference sample.
+align_to_hca_reference <- function(study_counts, reference_counts, reference_name) {
+  shared <- intersect(rownames(study_counts), names(reference_counts))
+  combined <- cbind(
+    study_counts[shared, , drop = FALSE],
+    setNames(reference_counts[shared], shared)
+  )
+  colnames(combined)[ncol(combined)] <- reference_name
+
+  norm_factors <- calcNormFactors(
+    combined, refColumn = ncol(combined), method = "TMMwsp"
+  )
+  library_size <- colSums(combined)
+  effective_size <- library_size * norm_factors
+  multiplier <- effective_size[[reference_name]] / effective_size
+  offset <- log(1 / multiplier)
+
+  list(
+    counts = combined[, colnames(study_counts), drop = FALSE],
+    offset = offset[colnames(study_counts)],
+    multiplier = multiplier[colnames(study_counts)],
+    shared_features = shared
+  )
+}
+
+fit_shared_dispersion <- function(counts, metadata, offset, feature_id) {
+  design <- model.matrix(~ 0 + factor(metadata$analysis_group))
+  dge <- DGEList(counts = counts)
+  dge$offset <- matrix(offset, nrow(counts), ncol(counts), byrow = TRUE)
+
+  keep <- filterByExpr(dge, design = design)
+  keep[match(feature_id, rownames(dge))] <- TRUE
+  dge <- dge[keep, , keep.lib.sizes = FALSE]
+  dge <- estimateDisp(dge, design, robust = TRUE)
+  invisible(glmQLFit(dge, design, robust = TRUE))
+
+  dispersion <- if (!is.null(dge$trended.dispersion)) {
+    dge$trended.dispersion
+  } else if (!is.null(dge$tagwise.dispersion)) {
+    dge$tagwise.dispersion
+  } else {
+    rep_len(dge$common.dispersion, nrow(dge))
+  }
+  names(dispersion) <- rownames(dge)
+  unname(dispersion[[feature_id]])
+}
+
+draw_dirichlet_weights <- function(n) {
+  weights <- rexp(n)
+  n * weights / sum(weights)
+}
+
+bootstrap_cohort_logmu <- function(counts, offset, dispersion, columns, n_boot, seed) {
+  y <- counts[tm4_id, columns, drop = FALSE]
+  o <- offset[columns]
+  set.seed(seed)
+  vapply(seq_len(n_boot), function(i) {
+    mglmOneGroup(
+      y, offset = o, dispersion = dispersion,
+      weights = draw_dirichlet_weights(length(columns))
+    )[[1]]
+  }, numeric(1))
+}
+
+pair_log2_contrast <- function(x, y, n = 2000L, seed = 1L) {
+  set.seed(seed)
+  delta <- (sample(x, n, replace = TRUE) - sample(y, n, replace = TRUE)) / log(2)
+  tibble(
+    estimate_log2 = median(delta),
+    lower_log2 = quantile(delta, 0.025),
+    upper_log2 = quantile(delta, 0.975),
+    probability_positive = mean(delta > 0)
+  )
+}
+```
+
+## posteriorHCA helpers (v2.1 corrected admissibility)
+
+```{r}
+#| label: logmu-helpers-hca
+
+read_hca_bundle <- function(cell_type, model_root, feature_id) {
+  store <- file.path(model_root, paste0("V1_", cell_type), "_targets")
+  registry <- read.csv(
+    file.path(model_root, "_PAK2_TM4SF1_modelled_cell_types.csv"),
+    check.names = FALSE
+  )
+  target_name <- registry |>
+    filter(
+      cell_type == paste0("V1_", .env$cell_type),
+      ensembl_id == feature_id,
+      isTRUE(in_feature_df) | in_feature_df
+    ) |>
+    pull(estimates_branch) |>
+    unique()
+
+  chunk <- targets::tar_read_raw(target_name[[1]], store = store)
+  fit <- chunk$brms_fit[[match(feature_id, chunk$.feature)]]
+  pseudobulk <- targets::tar_read_raw("pseudobulk_sample", store = store)
+
+  current_h5ad <- hdf5_seed_path(pseudobulk@assays@data@listData[["counts"]])
+  h5ad <- locate_pseudobulk_h5ad(params$pseudobulk_h5ad, current_h5ad)
+  pseudobulk <- relocate_se_hdf5(pseudobulk, h5ad)
+  sample_meta <- as.data.frame(colData(pseudobulk)) |>
+    rownames_to_column("sample_column")
+  counts <- assay(pseudobulk, "counts")
+
+  reference_index <- which(sample_meta$offset == 0)
+  if (length(reference_index) != 1L) {
+    stop(
+      "Expected exactly one offset==0 reference sample in ", cell_type,
+      "; found ", length(reference_index)
+    )
+  }
+  reference_name <- sample_meta$sample_column[[reference_index]]
+  reference_counts <- as.numeric(as.matrix(counts[, reference_index, drop = FALSE]))
+  names(reference_counts) <- rownames(pseudobulk)
+
+  profiles <- sample_meta |>
+    transmute(
+      sample_column,
+      dataset_id = as.character(dataset_id),
+      donor_id = as.character(donor_id),
+      tissue = as.character(tissue),
+      tissue_groups = as.character(tissue_groups),
+      age_decade = as.character(age_decade),
+      sex = as.character(sex),
+      ethnicity_groups = as.character(ethnicity_groups),
+      disease_group = as.character(disease_groups),
+      assay_group = as.character(assay_groups)
+    ) |>
+    filter(
+      disease_group == "Normal",
+      assay_group == "10x Genomics 3",
+      if_all(
+        c(dataset_id, donor_id, tissue_groups, age_decade, sex, ethnicity_groups),
+        ~ !is.na(.x) & nzchar(.x)
+      )
+    ) |>
+    mutate(donor_key = paste(dataset_id, donor_id, sep = "___")) |>
+    distinct(
+      donor_key, tissue_groups, age_decade, sex, ethnicity_groups,
+      .keep_all = TRUE
+    )
+
+  fit_draws <- posterior::as_draws_array(fit)
+  draw_diagnostics <- posterior::summarise_draws(fit_draws)
+  nuts <- brms::nuts_params(fit)
+  finite_max <- function(x) {
+    x <- x[is.finite(x)]
+    if (length(x)) max(x) else NA_real_
+  }
+  finite_min <- function(x) {
+    x <- x[is.finite(x)]
+    if (length(x)) min(x) else NA_real_
+  }
+
+  max_rhat_value <- finite_max(draw_diagnostics$rhat)
+  min_ess_bulk_value <- finite_min(draw_diagnostics$ess_bulk)
+  min_ess_tail_value <- finite_min(draw_diagnostics$ess_tail)
+  divergence_count <- sum(
+    nuts$Parameter == "divergent__" & nuts$Value == 1,
+    na.rm = TRUE
+  )
+
+  diagnostics <- tibble(
+    cell_type,
+    n_model_rows = nrow(fit$data),
+    n_posterior_draws = posterior::ndraws(fit_draws),
+    max_rhat = max_rhat_value,
+    min_ess_bulk = min_ess_bulk_value,
+    min_ess_tail = min_ess_tail_value,
+    divergences = divergence_count,
+    readiness_policy = "Rhat<=1.01; bulk/tail ESS>=400; zero divergences",
+    model_ready = all(is.finite(c(
+      max_rhat_value, min_ess_bulk_value, min_ess_tail_value, divergence_count
+    ))) &
+      max_rhat_value <= 1.01 &
+      min_ess_bulk_value >= 400 &
+      min_ess_tail_value >= 400 &
+      divergence_count == 0
+  )
+
+  list(
+    fit = fit,
+    profiles = profiles,
+    reference_counts = reference_counts,
+    reference_name = reference_name,
+    model_store = store,
+    target_name = target_name[[1]],
+    diagnostics = diagnostics
+  )
+}
+
+posterior_hca_logmu <- function(fit, newdata, seed) {
+  set.seed(seed)
+  brms::posterior_linpred(
+    fit,
+    newdata = newdata,
+    transform = FALSE,
+    re_formula = NULL,
+    allow_new_levels = TRUE,
+    sample_new_levels = "gaussian"
+  )
+}
+
+## Layer 1 — Biological sex admissibility registry (cell-type independent)
+
+structural_sex_constraints <- c(
+  "female reproductive system" = "female",
+  "male reproductive system" = "male",
+  "prostate" = "male",
+  "testis" = "male",
+  "ovary" = "female"
+)
+
+analysis_sex_restrictions <- c(
+  "breast" = "female"
+)
+
+excluded_ethnicity_levels <- "Other/Unknown"
+
+biologically_allowed_sexes <- function(tissue) {
+  if (tissue %in% names(structural_sex_constraints)) {
+    return(structural_sex_constraints[[tissue]])
+  }
+  c("female", "male")
+}
+
+sex_restriction_type <- function(tissue) {
+  if (tissue %in% names(structural_sex_constraints)) {
+    return("hard structural constraint")
+  }
+  if (tissue %in% names(analysis_sex_restrictions)) {
+    return("analysis restriction (not structural)")
+  }
+  "both sexes biologically valid"
+}
+
+is_sex_restricted <- function(tissue) {
+  tissue %in% names(structural_sex_constraints) ||
+    tissue %in% names(analysis_sex_restrictions)
+}
+
+allowed_sexes_for_tissue <- function(tissue) {
+  if (tissue %in% names(structural_sex_constraints)) {
+    return(structural_sex_constraints[[tissue]])
+  }
+  if (tissue %in% names(analysis_sex_restrictions)) {
+    return(analysis_sex_restrictions[[tissue]])
+  }
+  c("female", "male")
+}
+
+reports_both_sexes <- function(tissue) {
+  length(allowed_sexes_for_tissue(tissue)) >= 2L
+}
+
+build_tissue_sex_rules <- function(tissues, profiles) {
+  map_dfr(sort(unique(tissues)), function(tissue) {
+    bio_allowed <- biologically_allowed_sexes(tissue)
+    analysis_allowed <- allowed_sexes_for_tissue(tissue)
+    atlas_observed <- sort(unique(
+      profiles$sex[profiles$tissue_groups == tissue]
+    ))
+    tibble(
+      tissue_groups = tissue,
+      biologically_allowed_sex = paste(bio_allowed, collapse = ", "),
+      analysis_allowed_sex = paste(analysis_allowed, collapse = ", "),
+      atlas_observed_sex = paste(atlas_observed, collapse = ", "),
+      n_biologically_allowed = length(bio_allowed),
+      n_analysis_allowed = length(analysis_allowed),
+      reports_tissue_sex = reports_both_sexes(tissue),
+      restriction_type = sex_restriction_type(tissue),
+      has_unobserved_target_sex = !all(analysis_allowed %in% atlas_observed)
+    )
+  })
+}
+
+## Layer 2 — Target grid and prediction
+
+build_target_grid <- function(profiles, min_donors) {
+  tissues <- sort(unique(profiles$tissue_groups))
+  age_levels <- sort(unique(profiles$age_decade))
+  eth_levels <- sort(unique(profiles$ethnicity_groups))
+  eth_levels <- setdiff(eth_levels, excluded_ethnicity_levels)
+
+  observed_support <- profiles |>
+    group_by(tissue_groups, sex, age_decade, ethnicity_groups) |>
+    summarise(
+      n_donor_keys = n_distinct(donor_key),
+      n_profile_rows = n(),
+      .groups = "drop"
+    )
+
+  target_grid <- map_dfr(tissues, function(tissue) {
+    target_sexes <- allowed_sexes_for_tissue(tissue)
+    tidyr::crossing(
+      tissue_groups = tissue,
+      sex = target_sexes,
+      age_decade = age_levels,
+      ethnicity_groups = eth_levels
+    )
+  }) |>
+    left_join(observed_support, by = c(
+      "tissue_groups", "sex", "age_decade", "ethnicity_groups"
+    )) |>
+    mutate(
+      n_donor_keys = coalesce(n_donor_keys, 0L),
+      n_profile_rows = coalesce(n_profile_rows, 0L),
+      direct_empirical_support = n_donor_keys > 0L,
+      requires_extrapolation = !direct_empirical_support,
+      restriction_type = vapply(
+        tissue_groups, sex_restriction_type, character(1)
+      )
+    )
+  target_grid
+}
+
+design_cells_to_newdata <- function(cells) {
+  cells |>
+    transmute(
+      counts = 1,
+      age_decade,
+      sex,
+      disease_groups_altered = "Normal",
+      ethnicity_groups,
+      assay_groups_altered = "10x Genomics 3",
+      dataset_id_altered = "__TM4SF1_new_study__",
+      tissue_groups,
+      offset = 0
+    )
+}
+
+## Nested equal-weight marginalisation
+
+nested_marginal_draws <- function(logmu, cells) {
+  if (!nrow(cells)) {
+    return(numeric())
+  }
+  sex_levels <- sort(unique(cells$sex))
+  sex_draws <- map(sex_levels, function(sex_level) {
+    sex_cells <- dplyr::filter(cells, sex == sex_level)
+    age_levels <- sort(unique(sex_cells$age_decade))
+    age_draws <- map(age_levels, function(age_level) {
+      age_cells <- dplyr::filter(sex_cells, age_decade == age_level)
+      eth_levels <- sort(unique(age_cells$ethnicity_groups))
+      eth_draws <- map(eth_levels, function(eth_level) {
+        idx <- age_cells$row_idx[age_cells$ethnicity_groups == eth_level]
+        if (length(idx) == 1L) logmu[, idx] else rowMeans(logmu[, idx, drop = FALSE])
+      })
+      Reduce(`+`, eth_draws) / length(eth_draws)
+    })
+    Reduce(`+`, age_draws) / length(age_draws)
+  })
+  Reduce(`+`, sex_draws) / length(sex_draws)
+}
+
+tissue_baseline_draw <- function(logmu, cells, tissue) {
+  sub <- dplyr::filter(cells, tissue_groups == tissue)
+  if (!nrow(sub)) return(numeric())
+  nested_marginal_draws(logmu, sub)
+}
+
+compute_marginalisation_weights <- function(cells, tissue = NULL) {
+  sub <- if (is.null(tissue)) cells else dplyr::filter(cells, tissue_groups == tissue)
+  if (!nrow(sub)) return(tibble())
+
+  sex_levels <- sort(unique(sub$sex))
+  n_sex <- length(sex_levels)
+  map_dfr(sex_levels, function(sx) {
+    sex_cells <- dplyr::filter(sub, sex == sx)
+    age_levels <- sort(unique(sex_cells$age_decade))
+    n_age <- length(age_levels)
+    map_dfr(age_levels, function(ag) {
+      age_cells <- dplyr::filter(sex_cells, age_decade == ag)
+      eth_levels <- sort(unique(age_cells$ethnicity_groups))
+      n_eth <- length(eth_levels)
+      map_dfr(eth_levels, function(et) {
+        cell <- dplyr::filter(age_cells, ethnicity_groups == et)
+        tibble(
+          tissue_groups = cell$tissue_groups[[1]],
+          sex = sx, age_decade = ag, ethnicity_groups = et,
+          n_donor_keys = cell$n_donor_keys[[1]],
+          direct_empirical_support = cell$direct_empirical_support[[1]],
+          requires_extrapolation = cell$requires_extrapolation[[1]],
+          marginal_weight = 1 / (n_sex * n_age * n_eth),
+          weight_rule = paste0(
+            "equal sex (1/", n_sex, ") × equal age (1/", n_age,
+            ") × equal ethnicity (1/", n_eth, ")"
+          )
+        )
+      })
+    })
+  })
+}
+
+## Layer 3 — Support diagnostics
+
+compute_support_diagnostics <- function(weights_df, k = 3L) {
+  if (!nrow(weights_df)) {
+    return(tibble(
+      n_target_cells = 0L, n_observed_cells = 0L, n_extrapolated_cells = 0L,
+      total_unique_donors = 0L,
+      C_obs = 0, C_k = 0, extrapolation_weight = 0
+    ))
+  }
+  tibble(
+    n_target_cells = nrow(weights_df),
+    n_observed_cells = sum(weights_df$direct_empirical_support),
+    n_extrapolated_cells = sum(weights_df$requires_extrapolation),
+    total_unique_donors = sum(weights_df$n_donor_keys),
+    C_obs = sum(weights_df$marginal_weight[weights_df$direct_empirical_support]),
+    C_k = sum(weights_df$marginal_weight[weights_df$n_donor_keys >= k]),
+    extrapolation_weight = sum(
+      weights_df$marginal_weight[weights_df$requires_extrapolation]
+    )
+  )
+}
+
+## Summarise a design-based group
+
+summarise_design_draw <- function(
+    logmu, hv_draws, threshold, seed,
+    dimension, cells, fix_cols, min_donors, profiles, k
+) {
+  if (length(fix_cols)) {
+    key <- cells |>
+      mutate(across(all_of(fix_cols), as.character)) |>
+      group_by(across(all_of(fix_cols))) |>
+      group_split()
+  } else {
+    key <- list(cells)
+  }
+
+  map2_dfr(key, seq_along(key), function(group_cells, group_number) {
+    if (identical(dimension, "comprehensive")) {
+      tissues <- sort(unique(group_cells$tissue_groups))
+      tissue_draws_list <- map(tissues, ~ tissue_baseline_draw(logmu, group_cells, .x))
+      tissue_draws_list <- tissue_draws_list[lengths(tissue_draws_list) > 0L]
+      if (!length(tissue_draws_list)) return(tibble())
+      hca_draws <- Reduce(`+`, tissue_draws_list) / length(tissue_draws_list)
+    } else {
+      hca_draws <- nested_marginal_draws(logmu, group_cells)
+      if (!length(hca_draws)) return(tibble())
+    }
+
+    pick <- function(name) {
+      if (name %in% fix_cols) as.character(group_cells[[name]][[1]]) else NA_character_
+    }
+
+    wts <- compute_marginalisation_weights(group_cells)
+    support <- compute_support_diagnostics(wts, k = k)
+
+    n_donor_keys <- profiles |>
+      semi_join(
+        group_cells |> filter(direct_empirical_support),
+        by = c("tissue_groups", "sex", "age_decade", "ethnicity_groups")
+      ) |>
+      pull(donor_key) |>
+      n_distinct()
+
+    paired <- pair_log2_contrast(
+      hca_draws, hv_draws,
+      n = max(length(hv_draws), length(hca_draws)),
+      seed = seed + group_number
+    )
+
+    tibble(
+      dimension,
+      tissue_groups = pick("tissue_groups"),
+      sex = pick("sex"),
+      age_decade = pick("age_decade"),
+      ethnicity_groups = pick("ethnicity_groups"),
+      n_target_cells = support$n_target_cells,
+      n_observed_cells = support$n_observed_cells,
+      n_extrapolated_cells = support$n_extrapolated_cells,
+      n_unique_donor_keys = n_donor_keys,
+      C_obs = support$C_obs,
+      C_k = support$C_k,
+      extrapolation_weight = support$extrapolation_weight,
+      median_log_mu = median(hca_draws),
+      lower_log_mu = quantile(hca_draws, 0.025),
+      upper_log_mu = quantile(hca_draws, 0.975),
+      threshold_log_mu = threshold,
+      probability_above_threshold = mean(hca_draws >= threshold),
+      probability_hca_ge_random_hv = mean(ecdf(hv_draws)(hca_draws)),
+      estimate_log2_vs_hv = paired$estimate_log2,
+      lower_log2_vs_hv = paired$lower_log2,
+      upper_log2_vs_hv = paired$upper_log2,
+      supported = dimension == "comprehensive" | n_donor_keys >= min_donors
+    )
+  })
+}
+
+summarise_design_groups <- function(
+    logmu, cells, profiles, dimension, fix_cols, hv_draws,
+    threshold, min_donors, seed, k
+) {
+  if (identical(dimension, "tissue_sex")) {
+    both_sex <- unique(cells$tissue_groups[
+      vapply(cells$tissue_groups, reports_both_sexes, logical(1))
+    ])
+    cells <- dplyr::filter(cells, tissue_groups %in% both_sex)
+  }
+  summarise_design_draw(
+    logmu, hv_draws, threshold, seed,
+    dimension, cells, fix_cols, min_donors, profiles, k
+  )
+}
+
+compute_tissue_rule_sensitivity <- function(
+    logmu, cells, profiles, hv_draws, cell_type,
+    threshold_quantiles = c(0.01, 0.05, 0.10),
+    minimum_donor_keys = c(5L, 10L, 20L),
+    alert_probabilities = c(0.50, 0.80, 0.95)
+) {
+  tissues <- sort(unique(cells$tissue_groups))
+  tissue_draws <- setNames(
+    map(tissues, ~ tissue_baseline_draw(logmu, cells, .x)),
+    tissues
+  )
+  tissue_support <- map_int(tissues, function(tissue) {
+    profiles |>
+      semi_join(
+        dplyr::filter(cells, tissue_groups == tissue, direct_empirical_support),
+        by = c("tissue_groups", "sex", "age_decade", "ethnicity_groups")
+      ) |>
+      pull(donor_key) |>
+      n_distinct()
+  })
+
+  crossing(
+    threshold_quantile = threshold_quantiles,
+    minimum_donor_keys = minimum_donor_keys,
+    alert_probability_cutoff = alert_probabilities
+  ) |>
+    pmap_dfr(function(
+        threshold_quantile, minimum_donor_keys, alert_probability_cutoff
+    ) {
+      threshold <- unname(quantile(hv_draws, threshold_quantile))
+      exceedance <- map_dbl(tissue_draws, ~ mean(.x >= threshold))
+      tibble(
+        cell_type,
+        threshold_quantile,
+        threshold_log_mu = threshold,
+        minimum_donor_keys,
+        alert_probability_cutoff,
+        supported_tissues = sum(tissue_support >= minimum_donor_keys),
+        prototype_tissue_candidates = sum(
+          tissue_support >= minimum_donor_keys &
+            exceedance >= alert_probability_cutoff
+        )
+      )
+    })
+}
+```
+
+## One cell-type model
+
+```{r}
+#| label: run-one-model-helper
+
+run_one_cell_type <- function(cell_type, study, params, model_root) {
+  bundle <- read_hca_bundle(cell_type, model_root, tm4_id)
+  aligned <- align_to_hca_reference(
+    study$counts, bundle$reference_counts, bundle$reference_name
+  )
+  dispersion <- fit_shared_dispersion(
+    aligned$counts, study$metadata, aligned$offset, tm4_id
+  )
+
+  groups <- list(
+    "HV tumour epithelial" = which(
+      study$metadata$study_state == "tumour epithelial" &
+        study$metadata$histology_group == "HV"
+    ),
+    "UC tumour epithelial (3 published IDs)" = which(
+      study$metadata$study_state == "tumour epithelial" &
+        study$metadata$histology_group == "UC"
+    ),
+    "UC tumour epithelial (2 public-DGE >=150)" = which(
+      study$metadata$study_state == "tumour epithelial" &
+        study$metadata$histology_group == "UC" &
+        study$metadata$strict_n150
+    ),
+    "paired-normal epithelial (>=20 cells)" = which(
+      study$metadata$study_state == "paired-normal epithelial"
+    )
+  )
+
+  study_draws <- imap_dfr(groups, function(index, group_name) {
+    draws <- bootstrap_cohort_logmu(
+      aligned$counts,
+      aligned$offset,
+      dispersion,
+      colnames(aligned$counts)[index],
+      params$n_boot,
+      params$seed + which(names(groups) == group_name)
+    )
+    tibble(
+      cell_type, group = group_name,
+      draw = seq_along(draws), log_mu = draws,
+      n_patients = length(index)
+    )
+  })
+
+  hv_draws <- study_draws |>
+    filter(group == "HV tumour epithelial") |>
+    pull(log_mu)
+  threshold <- unname(quantile(hv_draws, params$threshold_quantile))
+
+  target_grid <- build_target_grid(bundle$profiles, params$min_donor_keys)
+  tissue_sex_rules <- build_tissue_sex_rules(
+    unique(bundle$profiles$tissue_groups), bundle$profiles
+  )
+  prediction_newdata <- design_cells_to_newdata(target_grid)
+
+  hca_logmu <- posterior_hca_logmu(
+    bundle$fit, prediction_newdata,
+    seed = params$seed + match(cell_type, params$model_cell_types) * 100L
+  )
+  cells <- target_grid |>
+    mutate(row_idx = row_number())
+
+  k <- params$well_supported_k
+
+  group_specs <- list(
+    comprehensive = list(vars = character(), seed = params$seed + 1000L),
+    tissue = list(vars = "tissue_groups", seed = params$seed + 2000L),
+    tissue_sex = list(vars = c("tissue_groups", "sex"), seed = params$seed + 3000L),
+    tissue_age = list(
+      vars = c("tissue_groups", "age_decade"), seed = params$seed + 4000L
+    ),
+    tissue_ethnicity = list(
+      vars = c("tissue_groups", "ethnicity_groups"), seed = params$seed + 5000L
+    )
+  )
+
+  profile_summary <- imap_dfr(group_specs, function(spec, dimension) {
+    summarise_design_groups(
+      hca_logmu, cells, bundle$profiles, dimension, spec$vars, hv_draws,
+      threshold, params$min_donor_keys, spec$seed, k
+    )
+  }) |>
+    mutate(
+      cell_type = cell_type,
+      baseline_method = params$baseline_method,
+      model_ready = bundle$diagnostics$model_ready[[1]],
+      interpretable_for_demographic_alert = !(
+        dimension == "tissue_ethnicity" & ethnicity_groups == "Other/Unknown"
+      ),
+      prototype_overlap_candidate = supported &
+        interpretable_for_demographic_alert &
+        probability_above_threshold >= params$alert_probability,
+      expression_overlap_alert = prototype_overlap_candidate & model_ready,
+      .before = 1
+    )
+
+  marginalisation_weights <- map_dfr(
+    sort(unique(cells$tissue_groups)),
+    ~ compute_marginalisation_weights(cells, .x) |> mutate(cell_type = cell_type)
+  )
+
+  level_audit <- target_grid |>
+    mutate(cell_type = cell_type) |>
+    select(
+      cell_type, tissue_groups, sex, age_decade, ethnicity_groups,
+      n_donor_keys, direct_empirical_support, requires_extrapolation,
+      restriction_type
+    )
+
+  hca_comprehensive <- {
+    tissues <- sort(unique(cells$tissue_groups))
+    tissue_draws_list <- map(tissues, ~ tissue_baseline_draw(hca_logmu, cells, .x))
+    tissue_draws_list <- tissue_draws_list[lengths(tissue_draws_list) > 0L]
+    if (length(tissue_draws_list)) {
+      Reduce(`+`, tissue_draws_list) / length(tissue_draws_list)
+    } else {
+      numeric()
+    }
+  }
+
+  hca_renal <- tissue_baseline_draw(hca_logmu, cells, "renal system")
+
+  rule_sensitivity <- compute_tissue_rule_sensitivity(
+    hca_logmu, cells, bundle$profiles, hv_draws, cell_type
+  ) |>
+    mutate(
+      model_ready = bundle$diagnostics$model_ready[[1]],
+      analysis_id = analysis_id,
+      .after = cell_type
+    )
+
+  contrast_draws <- study_draws
+  if (cell_type != "epithelial") {
+    contrast_draws <- filter(
+      contrast_draws, group != "paired-normal epithelial (>=20 cells)"
+    )
+  }
+
+  cohort_contrasts <- contrast_draws |>
+    group_split(group) |>
+    map_dfr(function(group_data) {
+      comparison_draws <- hca_comprehensive
+      comparator <- paste0(
+        "posteriorHCA Normal/10x3-supported comprehensive ", cell_type
+      )
+      if (
+        cell_type == "epithelial" &&
+          unique(group_data$group) == "paired-normal epithelial (>=20 cells)" &&
+          length(hca_renal)
+      ) {
+        comparison_draws <- hca_renal
+        comparator <- paste(
+          "posteriorHCA Normal/10x3-supported renal-system",
+          "epithelial proxy"
+        )
+      }
+      pair_log2_contrast(
+        group_data$log_mu, comparison_draws,
+        n = params$n_boot,
+        seed = params$seed + 6000L + match(unique(group_data$group), names(groups))
+      ) |>
+        mutate(
+          cell_type,
+          study_group = unique(group_data$group),
+          comparator,
+          n_study_patients = unique(group_data$n_patients),
+          .before = 1
+        )
+    })
+
+  threshold_registry <- tibble(
+    gene_symbol = tm4_symbol,
+    ensembl_id = tm4_id,
+    cell_type_model = cell_type,
+    model_store = bundle$model_store,
+    model_target = bundle$target_name,
+    normalization_reference = bundle$reference_name,
+    normalization_method = "TMMwsp; reference-anchored offset=log(1/multiplier)",
+    study_biological_unit = "patient",
+    tumour_expression_anchor = "9-patient HV tumour epithelial cohort location",
+    threshold_quantile = params$threshold_quantile,
+    threshold_log_mu = threshold,
+    n_patient_bootstrap_draws = params$n_boot,
+    random_seed = params$seed,
+    alert_probability_cutoff = params$alert_probability,
+    minimum_donor_keys = params$min_donor_keys,
+    model_ready = bundle$diagnostics$model_ready[[1]],
+    diagnostic_gate = bundle$diagnostics$readiness_policy[[1]],
+    input_and_model_fingerprint = input_fingerprint,
+    shared_feature_count = length(aligned$shared_features),
+    shared_feature_sha256 = digest::digest(sort(aligned$shared_features), algo = "sha256"),
+    profile_weighting = paste(
+      "design-based nested equal weights over biologically admissible",
+      "sex × age × ethnicity cells; equal tissue weighting for comprehensive"
+    ),
+    prediction_policy = paste(
+      "Normal; 10x Genomics 3; offset=0; biologically admissible covariate grid;",
+      "unseen dataset random effect"
+    ),
+    analysis_version,
+    analysis_id
+  )
+
+  list(
+    analysis_version = analysis_version,
+    analysis_id = analysis_id,
+    cell_type = cell_type,
+    study_draws = study_draws,
+    profile_summary = profile_summary,
+    rule_sensitivity = rule_sensitivity,
+    cohort_contrasts = cohort_contrasts,
+    threshold_registry = threshold_registry,
+    diagnostics = bundle$diagnostics,
+    support_profiles = mutate(bundle$profiles, cell_type = cell_type, .before = 1),
+    tissue_sex_rules = tissue_sex_rules,
+    level_audit = level_audit,
+    marginalisation_weights = marginalisation_weights,
+    target_grid = target_grid,
+    reference = tibble(
+      cell_type,
+      reference_sample = bundle$reference_name,
+      shared_features = length(aligned$shared_features),
+      shared_feature_sha256 = digest::digest(sort(aligned$shared_features), algo = "sha256"),
+      tm4sf1_dispersion = dispersion
+    )
+  )
+}
+```
+
+## Build or load the model-aligned results
+
+```{r}
+#| label: build-model-results
+#| include: false
+
+study <- read_study_pseudobulk(case_dir)
+
+model_results <- map(params$model_cell_types, function(cell_type) {
+  cache_file <- file.path(cache_dir, paste0("TM4SF1_", cell_type, "_logmu_analysis.rds"))
+  cached <- if (file.exists(cache_file) && !isTRUE(params$refresh_hca)) {
+    readRDS(cache_file)
+  } else {
+    NULL
+  }
+  cache_ok <- !is.null(cached) &&
+    identical(cached$analysis_id, analysis_id) &&
+    identical(cached$cell_type, cell_type)
+  if (cache_ok) {
+    return(cached)
+  }
+  result <- run_one_cell_type(cell_type, study, params, model_root)
+  saveRDS(result, cache_file, compress = "xz")
+  result
+})
+names(model_results) <- params$model_cell_types
+
+study_draws <- map_dfr(model_results, "study_draws")
+profile_summary <- map_dfr(model_results, "profile_summary")
+rule_sensitivity <- map_dfr(model_results, "rule_sensitivity")
+cohort_contrasts <- map_dfr(model_results, "cohort_contrasts")
+threshold_registry <- map_dfr(model_results, "threshold_registry")
+model_diagnostics <- map_dfr(model_results, "diagnostics")
+support_profiles <- map_dfr(model_results, "support_profiles")
+tissue_sex_rules_all <- map_dfr(model_results, "tissue_sex_rules")
+level_audit_all <- map_dfr(model_results, "level_audit")
+marginalisation_weights_all <- map_dfr(model_results, "marginalisation_weights")
+reference_audit <- map_dfr(model_results, "reference")
+
+load_prior_summary <- function(dir) {
+  f <- file.path(dir, "posteriorHCA_TM4SF1_profile_summary.tsv")
+  if (file.exists(f)) read_tsv(f, show_col_types = FALSE) else tibble()
+}
+load_prior_candidates <- function(dir) {
+  f <- file.path(dir, "TM4SF1_prototype_overlap_candidates.tsv")
+  if (file.exists(f)) read_tsv(f, show_col_types = FALSE) else tibble()
+}
+
+v1_profile_summary <- load_prior_summary(v1_results_dir)
+v2_profile_summary <- load_prior_summary(v2_results_dir)
+v1_candidates <- load_prior_candidates(v1_results_dir)
+v2_candidates <- load_prior_candidates(v2_results_dir)
+
+extract_tissue_view <- function(df, prefix) {
+  sub <- df |> filter(dimension == "tissue", supported)
+  donor_col <- if ("n_unique_donor_keys" %in% names(sub)) {
+    sub$n_unique_donor_keys
+  } else if ("n_donor_keys" %in% names(sub)) {
+    sub$n_donor_keys
+  } else {
+    rep(NA_integer_, nrow(sub))
+  }
+  sub |>
+    transmute(
+      cell_type, tissue_groups,
+      !!paste0(prefix, "_median_log_mu") := median_log_mu,
+      !!paste0(prefix, "_P_above") := probability_above_threshold,
+      !!paste0(prefix, "_candidate") := prototype_overlap_candidate,
+      !!paste0(prefix, "_donors") := donor_col
+    )
+}
+
+baseline_comparison <- profile_summary |>
+  extract_tissue_view("v2.1") |>
+  left_join(
+    profile_summary |>
+      filter(dimension == "tissue") |>
+      transmute(
+        cell_type, tissue_groups,
+        v2.1_C_obs = C_obs,
+        v2.1_C_k = C_k,
+        v2.1_extrapolation_weight = extrapolation_weight
+      ),
+    by = c("cell_type", "tissue_groups")
+  ) |>
+  left_join(extract_tissue_view(v2_profile_summary, "v2"), by = c("cell_type", "tissue_groups")) |>
+  left_join(extract_tissue_view(v1_profile_summary, "v1"), by = c("cell_type", "tissue_groups")) |>
+  mutate(
+    candidate_status = case_when(
+      coalesce(v1_candidate, FALSE) & v2.1_candidate ~ "retained from v1",
+      coalesce(v1_candidate, FALSE) & !v2.1_candidate ~ "lost from v1",
+      !coalesce(v1_candidate, FALSE) & v2.1_candidate ~ "new in v2.1",
+      TRUE ~ "non_candidate"
+    )
+  )
+
+candidate_key <- function(df) {
+  df |>
+    filter(prototype_overlap_candidate) |>
+    transmute(
+      key = paste(
+        cell_type, dimension, tissue_groups, sex, age_decade, ethnicity_groups,
+        sep = " | "
+      )
+    ) |>
+    pull(key)
+}
+
+v1_keys <- candidate_key(v1_candidates)
+v2_keys <- candidate_key(v2_candidates)
+v2.1_keys <- candidate_key(filter(profile_summary, prototype_overlap_candidate))
+candidate_transition <- tibble(
+  key = sort(unique(c(v1_keys, v2_keys, v2.1_keys))),
+  in_v1 = key %in% v1_keys,
+  in_v2 = key %in% v2_keys,
+  in_v2.1 = key %in% v2.1_keys
+) |>
+  mutate(
+    transition = case_when(
+      in_v1 & in_v2.1 ~ "retained",
+      in_v1 & !in_v2.1 ~ "disappeared",
+      !in_v1 & in_v2.1 ~ "newly_appeared",
+      TRUE ~ "none"
+    )
+  )
+
+female_repro_audit <- marginalisation_weights_all |>
+  filter(tissue_groups == "female reproductive system") |>
+  arrange(cell_type, sex, age_decade, ethnicity_groups)
+
+ready_model_names <- model_diagnostics |>
+  filter(model_ready) |>
+  pull(cell_type)
+model_readiness_text <- if (!length(ready_model_names)) {
+  "Neither current fit passes the registered readiness gate."
+} else if (length(ready_model_names) == nrow(model_diagnostics)) {
+  "All current fits pass the registered readiness gate."
+} else {
+  paste0(
+    "Only ", paste(ready_model_names, collapse = ", "),
+    " passes the registered readiness gate."
+  )
+}
+
+prototype_tissue_groups <- profile_summary |>
+  filter(dimension == "tissue", prototype_overlap_candidate) |>
+  arrange(cell_type, desc(probability_above_threshold), tissue_groups) |>
+  group_by(cell_type) |>
+  summarise(tissues = paste(tissue_groups, collapse = ", "), .groups = "drop") |>
+  transmute(label = paste0(cell_type, ": ", tissues)) |>
+  pull(label)
+prototype_tissue_text <- if (length(prototype_tissue_groups)) {
+  paste(prototype_tissue_groups, collapse = "; ")
+} else {
+  "none"
+}
+posterior_draw_text <- paste(sort(unique(model_diagnostics$n_posterior_draws)), collapse = ", ")
+
+write_tsv(profile_summary, file.path(results_dir, "posteriorHCA_TM4SF1_profile_summary.tsv"))
+write_tsv(
+  filter(profile_summary, supported),
+  file.path(results_dir, "posteriorHCA_TM4SF1_supported_profiles.tsv")
+)
+write_tsv(
+  filter(profile_summary, expression_overlap_alert),
+  file.path(results_dir, "TM4SF1_expression_overlap_alerts.tsv")
+)
+write_tsv(
+  filter(profile_summary, prototype_overlap_candidate),
+  file.path(results_dir, "TM4SF1_prototype_overlap_candidates.tsv")
+)
+write_tsv(rule_sensitivity, file.path(results_dir, "TM4SF1_alert_rule_sensitivity.tsv"))
+write_tsv(cohort_contrasts, file.path(results_dir, "TM4SF1_cohort_logmu_contrasts.tsv"))
+write_tsv(threshold_registry, file.path(results_dir, "TM4SF1_threshold_registry.tsv"))
+write_tsv(model_diagnostics, file.path(results_dir, "TM4SF1_model_diagnostics.tsv"))
+write_tsv(reference_audit, file.path(results_dir, "TM4SF1_reference_alignment.tsv"))
+write_tsv(tissue_sex_rules_all, file.path(results_dir, "TM4SF1_tissue_sex_rules_audit.tsv"))
+write_tsv(level_audit_all, file.path(results_dir, "TM4SF1_level_support_audit.tsv"))
+write_tsv(
+  marginalisation_weights_all,
+  file.path(results_dir, "TM4SF1_marginalisation_weights_audit.tsv")
+)
+write_tsv(baseline_comparison, file.path(results_dir, "TM4SF1_baseline_v1_v2_v2.1_comparison.tsv"))
+write_tsv(candidate_transition, file.path(results_dir, "TM4SF1_candidate_transition_audit.tsv"))
+write_tsv(female_repro_audit, file.path(results_dir, "TM4SF1_female_repro_endothelial_audit.tsv"))
+saveRDS(study_draws, file.path(results_dir, "TM4SF1_study_logmu_draws.rds"))
+```
+
+## What the baseline represents (v2.1 corrected)
+
+Normal-tissue predictions were standardised over a prespecified biologically
+admissible target covariate space using design-based weights independent of
+atlas sampling frequency. Donor counts were not used to determine
+marginalisation weights; instead, they quantified empirical support for the
+resulting standardised estimates. Biologically admissible but unobserved
+covariate combinations were retained as model-based extrapolations and
+explicitly flagged. Overall donor breadth and weighted observed-support
+coverage were reported separately from the expression-overlap probability.
+
+Analysis-defining variables were fixed (`disease = Normal`,
+`assay = 10x Genomics 3`, `offset = 0`, evaluated cell type, and tissue when
+estimating a tissue-specific baseline). Biological sex admissibility was
+defined anatomically, independent of the current atlas composition: most
+tissues allow both sexes; only anatomically sex-specific organs (female
+reproductive system, prostate, etc.) are restricted. Breast is restricted to
+female samples as an analysis decision, not a hard biological constraint.
+
+The comprehensive reference is an **equal-weight average of tissue-level
+standardised baselines**, not a direct pool of all donor/profile rows. Epithelial
+and endothelial biology remain separate. Predictions draw a new dataset-level
+random effect as in the SAVI cohort comparison.
+
+The primary safety estimand is **tissue × cell-type overlap** with the
+HV-derived threshold. The comprehensive baseline is retained mainly as a
+calibration/reference quantity. Candidate status requires both overlap
+probability and empirical donor breadth (`n ≥ 10` distinct donor keys);
+observed-weight coverage ($C_\mathrm{obs}$) and well-supported coverage
+($C_k$) are reported as additional support diagnostics.
+
+`posterior_linpred(transform = FALSE)` estimates the conditional latent
+negative-binomial `log(mu)` on the fitted model scale. It is not the marginal
+zero-inflated expected count, detection probability, surface-protein abundance,
+antigen density or toxicity.
+
+```{r}
+#| label: baseline-support-table
+
+support_profiles |>
+  group_by(cell_type) |>
+  summarise(
+    donor_keys = n_distinct(donor_key),
+    donor_tissue_profiles = n(),
+    tissue_groups = n_distinct(tissue_groups),
+    age_decades = n_distinct(age_decade),
+    sexes = n_distinct(sex),
+    ethnicity_groups = n_distinct(ethnicity_groups),
+    .groups = "drop"
+  ) |>
+  kable(
+    caption = paste(
+      "Normal-labelled, 10x3-supported atlas profiles underlying support",
+      "counts for the design grid (not marginalisation weights).",
+      "A donor key is dataset_id × donor_id."
+    )
+  )
+```
+
+```{r}
+#| label: tissue-sex-rules-audit
+
+tissue_sex_rules_all |>
+  kable(
+    caption = paste(
+      "Sex admissibility by tissue (v2.1 corrected).",
+      "Biological admissibility is anatomical; analysis restrictions are noted",
+      "separately. Tissue × sex reported only for both-sex-valid tissues.",
+      "has_unobserved_target_sex flags tissues where the target grid",
+      "includes a sex not observed in the atlas (model extrapolation)."
+    )
+  )
+```
+
+Bladder is not a fitted posteriorHCA tissue level. The few Normal-labelled 10x3
+`bladder organ` profiles are collapsed into `renal system`, together with renal
+tissues. Accordingly, the paired-normal comparison below is a calibration
+against an imperfect renal-system epithelial proxy; this report does not make
+bladder-specific demographic claims.
+
+```{r}
+#| label: paired-normal-calibration-table
+
+retained_tumour_ids <- study$metadata |>
+  filter(
+    study_state == "tumour epithelial",
+    strict_n150,
+    paper_id %in% c(sprintf("VAR%02d", 1:9), sprintf("UC%02d", 1:3))
+  ) |>
+  pull(paper_id)
+
+paired_normal_calibration <- study$metadata |>
+  filter(study_state == "paired-normal epithelial") |>
+  transmute(
+    paper_id,
+    epithelial_cells = n_cells,
+    raw_library_size = library_size,
+    paired_with_retained_tumour = paper_id %in% retained_tumour_ids
+  )
+
+paired_normal_calibration |>
+  kable(
+    caption = paste(
+      "Paired/adjacent-normal epithelial calibration samples with at least",
+      "20 cells. Only VAR07 has a retained tumour-cohort counterpart."
+    )
+  )
+```
+
+## Model-readiness note
+
+```{r}
+#| label: model-diagnostics
+
+model_diagnostics |>
+  mutate(
+    max_rhat = round(max_rhat, 3),
+    min_ess_bulk = round(min_ess_bulk, 1),
+    min_ess_tail = round(min_ess_tail, 1)
+  ) |>
+  kable(caption = "Diagnostics of the current local TM4SF1 posteriorHCA fits.")
+```
+
+The current local fits contain `r posterior_draw_text` retained posterior draws
+per model. **`r model_readiness_text`** `TM4SF1_expression_overlap_alerts.tsv`
+contains only candidates from models that pass this gate and is therefore empty
+when none is ready. The figures and tables below show ungated prototype overlap
+candidates, not translational alerts; failed models must be refitted with
+longer chains before their alerts can be evaluated.
+
+------------------------------------------------------------------------
+
+# 4. Paper cohorts versus posteriorHCA
+
+```{r}
+#| label: cohort-contrast-table
+
+cohort_contrasts |>
+  mutate(
+    across(c(estimate_log2, lower_log2, upper_log2), ~ round(.x, 2)),
+    probability_positive = percent(probability_positive, accuracy = 0.1)
+  ) |>
+  select(
+    cell_type, study_group, comparator, n_study_patients,
+    estimate_log2, lower_log2, upper_log2, probability_positive
+  ) |>
+  kable(
+    caption = paste(
+      "Patient-cohort minus posteriorHCA latent log-mu contrasts on a log2 scale.",
+      "Intervals independently pair study bootstrap and HCA posterior draws."
+    )
+  )
+```
+
+```{r}
+#| label: cohort-contrast-forest
+#| fig-width: 7.2
+#| fig-height: 3.74
+#| fig-cap: "Cohort-level TM4SF1 contrasts. Positive values indicate higher expression in the study group than the model-aligned posteriorHCA comparator. Normal-labelled, 10x3-supported posteriorHCA scale. Full-width panel (183 mm)."
+
+cohort_plot_data <- cohort_contrasts |>
+  filter(
+    study_group != "paired-normal epithelial (>=20 cells)" |
+      cell_type == "epithelial"
+  ) |>
+  mutate(
+    study_label = recode(
+      study_group,
+      "HV tumour epithelial" = "HV tumour (9 patients)",
+      "UC tumour epithelial (2 public-DGE >=150)" =
+        "UC tumour (2 public-DGE patients with >=150 cells)",
+      "UC tumour epithelial (3 published IDs)" =
+        "UC tumour (3 published IDs; UC01 has 90 cells)",
+      "paired-normal epithelial (>=20 cells)" =
+        "paired/adjacent normal (3 patients)"
+    ),
+    reference_label = case_when(
+      str_detect(comparator, "renal-system") ~
+        "HCA renal-system epithelial proxy",
+      cell_type == "epithelial" ~ "HCA comprehensive epithelial reference",
+      TRUE ~ "HCA comprehensive endothelial reference"
+    ),
+    comparison = str_wrap(paste(study_label, "vs", reference_label), 48),
+    comparison = factor(comparison, levels = rev(unique(comparison)))
+  )
+
+cohort_plot <- ggplot(cohort_plot_data, aes(estimate_log2, comparison, colour = cell_type)) +
+  geom_vline(xintercept = 0, linetype = 2, colour = col_other, linewidth = 0.25) +
+  geom_errorbar(
+    aes(xmin = lower_log2, xmax = upper_log2),
+    orientation = "y", width = 0.15, linewidth = 0.3
+  ) +
+  geom_point(size = 1.5) +
+  scale_x_continuous(labels = label_drop_leading_zero()) +
+  scale_colour_manual(values = colmap_cell, name = "posteriorHCA model") +
+  labs(x = "Study minus posteriorHCA log2 latent expression", y = NULL) +
+  theme_multipanel
+
+save_figure(
+  cohort_plot, "05_TM4SF1_cohort_vs_posteriorHCA_logmu",
+  panel_mm$full["w"], panel_mm$full["h"]
+)
+cohort_plot
+```
+
+The three-sample paired/adjacent-normal result is a **diagnostic calibration
+check**, not a healthy-control effect estimate or a matched-pair analysis. A
+material shift from the posteriorHCA renal proxy can arise from adjacent-tissue
+biology, bladder-versus-kidney aggregation, platform composition or study
+effects. Tumour-versus-HCA differences should therefore be read as modular
+cross-study contrasts rather than a jointly fitted causal effect.
+
+------------------------------------------------------------------------
+
+# 5. A reusable threshold contract
+
+The report defines the screening threshold separately for each posteriorHCA
+cell-type model:
+
+$$
+T_c = Q_{q}\!\left\{ \log \mu_{\mathrm{HV},c}^{(b)} \right\}
+$$
+
+where $q =$ `r percent(params$threshold_quantile, accuracy = 1)` and $c$ is
+the posteriorHCA model, and the distribution is the nine-patient HV
+tumour-epithelial Bayesian bootstrap after alignment to that model's TMMwsp
+reference. A supported Normal-labelled profile qualifies as a prototype
+candidate when
+
+$$
+P\!\left( \log \mu_{\mathrm{Normal},c} \geq T_c \mid \mathrm{data} \right) \geq p_{\min}
+$$
+
+with $p_{\min} =$ `r percent(params$alert_probability, accuracy = 1)`. The
+selected $q$ is a lower posterior quantile of uncertainty in the nine-patient
+cohort-location estimator. It is not a quantile of patient expression, a
+minimum antigen-positive level, or a biological or clinical toxicity threshold.
+Both the quantile and probability are report parameters, not hidden constants.
+
+```{r}
+#| label: threshold-registry-table
+
+threshold_registry |>
+  transmute(
+    cell_type_model,
+    normalization_reference,
+    threshold_quantile,
+    threshold_log_mu = round(threshold_log_mu, 3),
+    alert_probability_cutoff,
+    minimum_donor_keys,
+    model_ready,
+    diagnostic_gate,
+    analysis_version
+  ) |>
+  kable(caption = "Model-specific TM4SF1 threshold registry.")
+```
+
+The prototype exceedance-probability and donor-support cutoffs are screening
+choices, so their effect is reported rather than hidden:
+
+```{r}
+#| label: threshold-rule-sensitivity
+
+rule_sensitivity |>
+  mutate(
+    threshold_quantile = percent(threshold_quantile, accuracy = 1),
+    probability_rule = paste0(
+      "candidates at P>=",
+      percent(alert_probability_cutoff, accuracy = 1)
+    )
+  ) |>
+  select(
+    cell_type, model_ready, threshold_quantile, threshold_log_mu,
+    minimum_donor_keys, supported_tissues, probability_rule,
+    prototype_tissue_candidates
+  ) |>
+  pivot_wider(
+    names_from = probability_rule,
+    values_from = prototype_tissue_candidates
+  ) |>
+  kable(
+    caption = paste(
+      "Number of prototype tissue candidates under alternative HV-anchor",
+      "quantiles, support rules and posterior-probability cutoffs."
+    )
+  )
+```
+
+The raw `log(mu)` cutoff is reusable only with the recorded model store,
+feature, reference sample, assay policy, offset-zero convention and new-study
+random-effect policy. Across a different posteriorHCA release or cell-type
+model, the study counts must be realigned and $T_c$ recalibrated. The
+estimand and recomputation procedure are portable; numerical log2 ratios,
+exceedance probabilities and cutoffs must be recomputed for every model or
+baseline release.
+
+------------------------------------------------------------------------
+
+# 6. Standardised tissue baselines and demographic marginals
+
+Demographic outputs are **standardised marginal predictions** over the
+biologically admissible target covariate space, not raw observed-profile
+averages. The target grid is constructed from prespecified admissible levels,
+not only from observed atlas profiles; admissible but unobserved combinations
+are predicted via the posteriorHCA model and flagged as extrapolations.
+
+Tissue rows marginalise admissible sex, age and ethnicity with nested equal
+weights. Tissue × sex is reported only where both sexes are biologically
+meaningful; sex-specific tissues report a single tissue baseline only.
+
+A tissue-demographic result must contain at least `r params$min_donor_keys`
+distinct dataset × donor keys across its contributing cells before it can
+qualify as an ungated prototype candidate. Observed-weight coverage
+($C_\mathrm{obs}$) and well-supported coverage ($C_k$ with $k =
+`r params$well_supported_k`$) quantify empirical support independently of the
+overlap probability. If a profile has strong overlap but limited empirical
+support, it is labelled a model-predicted overlap candidate with limited
+empirical support rather than deleted. `Other/Unknown` ethnicity is excluded
+from the target grid.
+
+## Tissue and cell type
+
+```{r}
+#| label: tissue-profile-plot
+#| fig-width: 4.72
+#| fig-height: 3.74
+#| fig-cap: "Standardised Normal-labelled posteriorHCA tissue baselines relative to the model-specific HV tumour-expression anchor (dashed line). Highlighted points pass the donor-support and posterior-probability rules but remain ungated by model readiness."
+
+tissue_plot_data <- profile_summary |>
+  filter(dimension == "tissue", supported) |>
+  group_by(cell_type) |>
+  mutate(tissue_rank = rank(-median_log_mu, ties.method = "first")) |>
+  ungroup() |>
+  mutate(
+    tissue_label = paste0(tissue_groups, " (n=", n_unique_donor_keys, ")"),
+    tissue_label = reorder(tissue_label, median_log_mu)
+  )
+
+tissue_plot <- ggplot(
+  tissue_plot_data,
+  aes(median_log_mu, tissue_label, colour = prototype_overlap_candidate)
+) +
+  geom_errorbar(
+    aes(xmin = lower_log_mu, xmax = upper_log_mu),
+    orientation = "y", width = 0.12, linewidth = 0.25, colour = col_other
+  ) +
+  geom_point(size = 1.4) +
+  geom_vline(aes(xintercept = threshold_log_mu), linetype = 2, colour = col_hv, linewidth = 0.3) +
+  facet_wrap(~ cell_type, scales = "free_y") +
+  scale_x_continuous(labels = label_drop_leading_zero()) +
+  scale_colour_manual(
+    values = c(`TRUE` = col_candidate, `FALSE` = col_dark),
+    labels = c(`TRUE` = "ungated prototype candidate", `FALSE` = "below prototype rule"),
+    name = NULL
+  ) +
+  labs(x = "Standardised Normal-labelled posteriorHCA latent log(mu), offset 0", y = NULL) +
+  theme_multipanel
+
+save_figure(
+  tissue_plot, "06_posteriorHCA_TM4SF1_tissue_profiles",
+  panel_mm$lg["w"], panel_mm$lg["h"]
+)
+tissue_plot
+```
+
+## Standardised sex marginals within tissue (both-sex tissues only)
+
+```{r}
+#| label: tissue-sex-plot
+#| fig-width: 4.72
+#| fig-height: 3.74
+#| fig-cap: "Standardised tissue × sex marginals for tissues where both sexes are biologically meaningful. Age and ethnicity are marginalised with balanced admissible weights."
+
+sex_plot_data <- profile_summary |>
+  filter(dimension == "tissue_sex", supported) |>
+  mutate(
+    tissue_groups = str_wrap(tissue_groups, 24),
+    tissue_groups = reorder(tissue_groups, median_log_mu)
+  )
+
+sex_plot <- ggplot(sex_plot_data, aes(median_log_mu, tissue_groups, colour = sex)) +
+  geom_errorbar(
+    aes(xmin = lower_log_mu, xmax = upper_log_mu),
+    orientation = "y", width = 0.12, linewidth = 0.25,
+    position = position_dodge(width = 0.5),
+    alpha = 0.7
+  ) +
+  geom_point(position = position_dodge(width = 0.5), size = 1.3) +
+  geom_vline(aes(xintercept = threshold_log_mu), linetype = 2, colour = col_other, linewidth = 0.3) +
+  facet_wrap(~ cell_type, scales = "free_y") +
+  scale_x_continuous(labels = label_drop_leading_zero()) +
+  scale_colour_manual(values = colmap_sex, name = "Sex") +
+  labs(x = "Standardised Normal-labelled posteriorHCA latent log(mu), offset 0", y = NULL) +
+  theme_multipanel
+
+save_figure(
+  sex_plot, "07_posteriorHCA_TM4SF1_tissue_by_sex",
+  panel_mm$lg["w"], panel_mm$lg["h"]
+)
+sex_plot
+```
+
+## Standardised age-decade marginals within tissue
+
+```{r}
+#| label: tissue-age-plot
+#| fig-width: 4.72
+#| fig-height: 3.35
+#| fig-cap: "Standardised tissue × age-decade marginals (sex and ethnicity marginalised with balanced admissible weights). The eight highest aggregate tissues plus every qualifying prototype tissue are shown. Outlined tiles pass the prototype overlap rule."
+
+top_tissues <- profile_summary |>
+  filter(dimension == "tissue", supported) |>
+  group_by(cell_type) |>
+  slice_max(median_log_mu, n = 8, with_ties = FALSE) |>
+  ungroup() |>
+  select(cell_type, tissue_groups)
+
+candidate_tissues <- profile_summary |>
+  filter(prototype_overlap_candidate, !is.na(tissue_groups)) |>
+  select(cell_type, tissue_groups)
+
+display_tissues <- bind_rows(top_tissues, candidate_tissues) |>
+  distinct()
+
+age_plot_data <- profile_summary |>
+  filter(dimension == "tissue_age", supported) |>
+  inner_join(display_tissues, by = c("cell_type", "tissue_groups")) |>
+  mutate(
+    age_decade = factor(
+      age_decade,
+      levels = as.character(sort(unique(as.integer(age_decade))))
+    ),
+    tissue_groups = str_wrap(tissue_groups, 24)
+  )
+
+age_plot <- ggplot(
+  age_plot_data,
+  aes(age_decade, tissue_groups, fill = probability_above_threshold)
+) +
+  geom_tile(colour = "white", linewidth = 0.2) +
+  geom_point(
+    data = filter(age_plot_data, prototype_overlap_candidate),
+    shape = 21, fill = NA, colour = col_dark, size = 1.6, stroke = 0.4
+  ) +
+  facet_wrap(~ cell_type, scales = "free_y") +
+  scale_fill_gradient(
+    low = "white", high = col_uc,
+    limits = c(0, 1), labels = label_percent(),
+    name = "P(Normal profile >= anchor)"
+  ) +
+  labs(x = "Age decade (e.g. 6 = 60-69 years)", y = NULL) +
+  theme_multipanel
+
+save_figure(
+  age_plot, "08_posteriorHCA_TM4SF1_tissue_by_age",
+  panel_mm$heatmap["w"], panel_mm$heatmap["h"]
+)
+age_plot
+```
+
+## Standardised ethnicity marginals within tissue
+
+```{r}
+#| label: tissue-ethnicity-plot
+#| fig-width: 4.72
+#| fig-height: 3.35
+#| fig-cap: "Standardised tissue × ethnicity marginals (sex and age marginalised with balanced admissible weights) for the eight highest aggregate tissues plus every qualifying prototype tissue. Outlined tiles pass the prototype overlap rule."
+
+ethnicity_plot_data <- profile_summary |>
+  filter(dimension == "tissue_ethnicity", supported) |>
+  inner_join(display_tissues, by = c("cell_type", "tissue_groups")) |>
+  mutate(
+    tissue_groups = str_wrap(tissue_groups, 24),
+    ethnicity_groups = str_wrap(ethnicity_groups, 18)
+  )
+
+ethnicity_plot <- ggplot(
+  ethnicity_plot_data,
+  aes(ethnicity_groups, tissue_groups, fill = probability_above_threshold)
+) +
+  geom_tile(colour = "white", linewidth = 0.2) +
+  geom_point(
+    data = filter(ethnicity_plot_data, prototype_overlap_candidate),
+    shape = 21, fill = NA, colour = col_dark, size = 1.6, stroke = 0.4
+  ) +
+  facet_wrap(~ cell_type, scales = "free_y") +
+  scale_fill_gradient(
+    low = "white", high = col_uc,
+    limits = c(0, 1), labels = label_percent(),
+    name = "P(Normal profile >= anchor)"
+  ) +
+  labs(x = "Recorded/harmonised ethnicity group", y = NULL) +
+  theme_multipanel +
+  theme(
+    axis.text.x = element_text(angle = 35, hjust = 1),
+    plot.margin = margin(2, 4, 8, 2)
+  )
+
+save_figure(
+  ethnicity_plot, "09_posteriorHCA_TM4SF1_tissue_by_ethnicity",
+  panel_mm$heatmap["w"], panel_mm$heatmap["h"]
+)
+ethnicity_plot
+```
+
+## Ungated prototype candidates for follow-up
+
+```{r}
+#| label: prototype-candidate-table
+
+candidate_table <- profile_summary |>
+  filter(
+    prototype_overlap_candidate,
+    dimension %in% c("tissue", "tissue_sex", "tissue_age", "tissue_ethnicity")
+  ) |>
+  arrange(cell_type, dimension, desc(probability_above_threshold)) |>
+  transmute(
+    cell_type,
+    dimension,
+    tissue = tissue_groups,
+    sex,
+    age_decade,
+    ethnicity = ethnicity_groups,
+    donor_keys = n_unique_donor_keys,
+    C_obs = round(C_obs, 2),
+    C_k = round(C_k, 2),
+    extrap_wt = round(extrapolation_weight, 2),
+    median_log_mu = round(median_log_mu, 2),
+    log2_vs_HV = round(estimate_log2_vs_hv, 2),
+    P_above_threshold = percent(probability_above_threshold, accuracy = 0.1),
+    P_at_least_random_HV = percent(probability_hca_ge_random_hv, accuracy = 0.1),
+    support_label = case_when(
+      C_obs >= 0.8 ~ "well supported",
+      C_obs >= 0.5 ~ "moderate support",
+      TRUE ~ "limited empirical support"
+    )
+  )
+
+head(candidate_table, 40) |>
+  kable(
+    caption = paste(
+      "First 40 supported prototype overlap candidates, ungated by model",
+      "readiness. The full machine-readable table is written to results/."
+    )
+  )
+```
+
+The tissue, tissue × sex (where reported), tissue × age and tissue × ethnicity
+rows are nested views of the same standardised baseline framework; they should
+not be counted as independent safety findings.
+
+## Baseline audit (v1 → v2 → v2.1 comparison)
+
+```{r}
+#| label: baseline-v1-v2-v2.1-comparison
+
+baseline_comparison |>
+  mutate(across(where(is.numeric), ~ round(.x, 3))) |>
+  kable(
+    caption = paste(
+      "Tissue-level baseline comparison across all three versions.",
+      "v1 = observed-profile; v2 = first design-standardised;",
+      "v2.1 = corrected admissibility with support diagnostics."
+    )
+  )
+```
+
+```{r}
+#| label: candidate-transition-audit
+
+candidate_transition |>
+  filter(transition != "none") |>
+  kable(
+    caption = paste(
+      "Prototype overlap candidates retained, lost or newly appeared",
+      "across v1 → v2 → v2.1."
+    )
+  )
+```
+
+```{r}
+#| label: marginalisation-weights-audit
+
+marginalisation_weights_all |>
+  group_by(cell_type, tissue_groups) |>
+  summarise(
+    n_target_cells = n(),
+    n_observed = sum(direct_empirical_support),
+    n_extrapolated = sum(requires_extrapolation),
+    weight_sum = sum(marginal_weight),
+    sex_levels = paste(sort(unique(sex)), collapse = ", "),
+    .groups = "drop"
+  ) |>
+  kable(
+    caption = paste(
+      "Marginalisation weight summary per tissue.",
+      "n_target_cells is the full admissible design grid;",
+      "n_extrapolated cells lack direct atlas support."
+    )
+  )
+```
+
+```{r}
+#| label: female-repro-endothelial-audit
+
+female_repro_audit |>
+  select(
+    cell_type, sex, age_decade, ethnicity_groups,
+    n_donor_keys, direct_empirical_support, requires_extrapolation,
+    marginal_weight, weight_rule
+  ) |>
+  kable(
+    caption = paste(
+      "Female reproductive system marginalisation weights (v2.1).",
+      "Male sex is structurally excluded. Extrapolated cells are flagged."
+    )
+  )
+```
+
+The motivating respiratory-system example is checked explicitly rather than
+assumed:
+
+```{r}
+#| label: respiratory-sex-check
+
+respiratory_sex <- profile_summary |>
+  filter(
+    dimension == "tissue_sex",
+    tissue_groups == "respiratory system",
+    supported
+  ) |>
+  transmute(
+    cell_type,
+    sex,
+    donor_keys = n_unique_donor_keys,
+    C_obs = round(C_obs, 2),
+    median_log_mu = round(median_log_mu, 2),
+    threshold_log_mu = round(threshold_log_mu, 2),
+    P_above_threshold = percent(probability_above_threshold, accuracy = 0.1),
+    prototype_candidate = prototype_overlap_candidate,
+    model_ready,
+    model_ready_alert = expression_overlap_alert
+  )
+
+respiratory_sex |>
+  kable(caption = "Standardised respiratory-system tissue × sex marginals under v2.1.")
+```
+
+`r if (any(respiratory_sex$prototype_candidate)) paste0("At least one supported respiratory-system sex profile passes the ungated ", percent(params$alert_probability, accuracy = 1), " prototype overlap rule; it still cannot become an alert unless its model passes the readiness gate.") else paste0("No supported respiratory-system sex profile passes the current ", percent(params$alert_probability, accuracy = 1), " prototype-overlap rule. Model readiness is reported separately, so the present analysis supports neither a respiratory-system candidate nor a male-lung alert.")`
+
+------------------------------------------------------------------------
+
+# 7. Conclusions and next decisions
+
+The released DE table ranks TM4SF1 first among HV-enriched genes, and the
+closest public-DGE reconstruction supports HV enrichment, subject to the
+documented 9-HV/2-UC limitation. Its tumour expression is heterogeneous, so a
+target-positive HV label should not be interpreted as uniform antigen
+abundance.
+
+The off-tumour screening conclusion is cell-type specific. Endothelium is a
+necessary sentinel because the bladder dataset itself shows high endothelial
+CPM and near-universal detection. At the registered default settings, the
+ungated tissue-level candidates are `r prototype_tissue_text`. These are
+follow-up candidates, not toxicity calls or model-ready alerts; readiness is
+reported separately above.
+
+A supported **respiratory-system × male** profile could be prioritised for
+off-tumour validation only if it passed the registered probability rule, the
+corresponding female profile were examined, and a refitted posteriorHCA model
+confirmed the result. The current prototype does not pass that rule and cannot
+infer vulnerability. The fitted tissue group combines lung and airway
+compartments and cannot localise risk to a specific pulmonary structure.
+
+The immediate next analysis should be a longer-chain refit of TM4SF1 epithelial
+and endothelial models, followed by protein-level localisation and
+antigen-density calibration in the prototype candidate tissues before any
+toxicity interpretation. This report intentionally stops before defining a
+clinical toxicity threshold.
+
+------------------------------------------------------------------------
+
+# Reproducible outputs
+
+```{r}
+#| label: output-manifest
+
+output_manifest <- tribble(
+  ~file, ~contents,
+  "TM4SF1_paper_DE_replication.tsv", "Released and public-DGE TM4SF1 DE results",
+  "TM4SF1_paper_source_patient_summary.tsv", "Figure5B patient-level source-expression summary",
+  "TM4SF1_study_logmu_draws.rds", "Patient Bayesian-bootstrap cohort log(mu) draws",
+  "TM4SF1_cohort_logmu_contrasts.tsv", "Study-versus-HCA log2 contrasts",
+  "TM4SF1_threshold_registry.tsv", "Cell-type-specific threshold contract and provenance",
+  "TM4SF1_alert_rule_sensitivity.tsv", "Ungated prototype tissue-candidate counts while varying anchor quantile, donor support and exceedance probability",
+  "posteriorHCA_TM4SF1_profile_summary.tsv", "All standardised tissue/demographic posterior summaries with support diagnostics (v2.1)",
+  "posteriorHCA_TM4SF1_supported_profiles.tsv", "Profiles meeting the minimum donor-key rule (v2.1)",
+  "TM4SF1_prototype_overlap_candidates.tsv", "Supported ungated profiles passing the prototype overlap rule (v2.1)",
+  "TM4SF1_expression_overlap_alerts.tsv", "Readiness-gated alerts; empty whenever model_ready is false",
+  "TM4SF1_model_diagnostics.tsv", "Current brms fit convergence diagnostics",
+  "TM4SF1_reference_alignment.tsv", "TMM reference, shared feature count and TM4SF1 dispersion",
+  "TM4SF1_tissue_sex_rules_audit.tsv", "Biological/analysis sex admissibility by tissue (v2.1)",
+  "TM4SF1_level_support_audit.tsv", "Target grid cell-level support audit (v2.1)",
+  "TM4SF1_marginalisation_weights_audit.tsv", "Exact nested marginalisation weights with extrapolation flags (v2.1)",
+  "TM4SF1_baseline_v1_v2_v2.1_comparison.tsv", "Three-way baseline comparison",
+  "TM4SF1_candidate_transition_audit.tsv", "Prototype candidates retained/lost/new across v1/v2/v2.1",
+  "TM4SF1_female_repro_endothelial_audit.tsv", "Female reproductive endothelial weight audit",
+  "TM4SF1_toxicity_case_study_v2.1_corrected.md", "Knitted Markdown preview of v2.1",
+  "output_manifest.tsv", "Machine-readable inventory of report outputs",
+  "sessionInfo.txt", "R session and package versions for this report",
+  "figures/", "Report figures as reusable PDF (Nature) and PNG files",
+  "cache/", "Per-cell-type posterior/cache objects keyed by analysis version"
+) |>
+  mutate(path = file.path(results_dir, file), .before = 1)
+
+write_tsv(output_manifest, file.path(results_dir, "output_manifest.tsv"))
+writeLines(capture.output(sessionInfo()), file.path(results_dir, "sessionInfo.txt"))
+
+output_manifest |>
+  kable(caption = "Files produced by this report.")
+```
+
+Primary provenance: [GEO GSE293189](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE293189),
+the [published study](https://pmc.ncbi.nlm.nih.gov/articles/PMC12174346/), and
+the authors' [public analysis repository](https://github.com/angelussong/Histological_Variant_Bladder_Cancer_Analysis).
+The preprocessing discrepancy and exact 67-library mapping are documented in
+the case-study `results/replication_audit/` and `data/metadata/` directories.
+
+------------------------------------------------------------------------
+
+# Methodological audit (v2.1 corrected)
+
+```{r}
+#| label: methodological-audit-summary
+
+v2.1_tissue_candidates <- profile_summary |>
+  filter(dimension == "tissue", prototype_overlap_candidate) |>
+  arrange(cell_type, desc(probability_above_threshold)) |>
+  transmute(label = paste0(cell_type, ": ", tissue_groups)) |>
+  pull(label)
+
+extrapolation_heavy <- marginalisation_weights_all |>
+  group_by(cell_type, tissue_groups) |>
+  summarise(
+    extrap_wt = sum(marginal_weight[requires_extrapolation]),
+    .groups = "drop"
+  ) |>
+  filter(extrap_wt >= 0.5) |>
+  transmute(label = paste0(cell_type, ": ", tissue_groups, " (", round(extrap_wt * 100), "%)")) |>
+  pull(label)
+
+audit_summary <- tibble(
+  item = c(
+    "Frozen v2 files",
+    "v2.1 working copy",
+    "v2.1 results directory",
+    "Sex registry correction",
+    "Target grid construction",
+    "Donor-support interpretation",
+    "Support metrics introduced",
+    "Marginalisation weights",
+    "Threshold values changed?",
+    "Female reproductive endothelial",
+    "Skin / integumentary",
+    "Respiratory system",
+    "Liver age-4 endothelial",
+    "v2.1 tissue candidates",
+    "Candidates retained from v1",
+    "Candidates lost from v1",
+    "Candidates newly appeared",
+    "Model readiness",
+    "Extrapolation-heavy tissues (>=50%)"
+  ),
+  detail = c(
+    "archive/v2_design_standardised/",
+    "TM4SF1_toxicity_case_study_v2.1_corrected.qmd",
+    "results/tm4sf1_toxicity_report_v2.1_corrected/",
+    paste(
+      "Biological sex defined anatomically (cell-type independent);",
+      "most tissues both-sex; breast = analysis restriction, not structural"
+    ),
+    paste(
+      "Full Cartesian product of admissible sex × observed age × observed",
+      "ethnicity (excl Other/Unknown); unobserved cells predicted and flagged"
+    ),
+    paste(
+      "n_unique_donors >= 10 = empirical breadth gate;",
+      "not a marginalisation weight rule"
+    ),
+    "C_obs, C_k (k=3), extrapolation_weight per result",
+    "w = (1/|S|)(1/|A|)(1/|E|) over full admissible target grid",
+    "No — HV bootstrap threshold contract unchanged",
+    {
+      fr <- profile_summary |>
+        filter(dimension == "tissue", tissue_groups == "female reproductive system",
+               cell_type == "endothelial")
+      if (nrow(fr)) {
+        paste0("P=", percent(fr$probability_above_threshold[[1]], 0.1),
+               ", C_obs=", round(fr$C_obs[[1]], 2),
+               ", candidate=", fr$prototype_overlap_candidate[[1]])
+      } else "not supported"
+    },
+    {
+      sk <- profile_summary |>
+        filter(dimension == "tissue", tissue_groups == "integumentary system (skin)",
+               cell_type == "endothelial")
+      if (nrow(sk)) {
+        paste0("P=", percent(sk$probability_above_threshold[[1]], 0.1),
+               ", C_obs=", round(sk$C_obs[[1]], 2),
+               ", candidate=", sk$prototype_overlap_candidate[[1]])
+      } else "not supported"
+    },
+    {
+      rs <- profile_summary |>
+        filter(dimension == "tissue", tissue_groups == "respiratory system")
+      paste(
+        rs$cell_type,
+        paste0("P=", percent(rs$probability_above_threshold, 0.1)),
+        collapse = "; "
+      )
+    },
+    {
+      lv <- profile_summary |>
+        filter(dimension == "tissue_age", tissue_groups == "liver",
+               age_decade == "4", cell_type == "endothelial")
+      if (nrow(lv)) {
+        paste0("P=", percent(lv$probability_above_threshold[[1]], 0.1),
+               ", candidate=", lv$prototype_overlap_candidate[[1]])
+      } else "not present"
+    },
+    if (length(v2.1_tissue_candidates)) paste(v2.1_tissue_candidates, collapse = "; ") else "none",
+    paste(filter(candidate_transition, transition == "retained")$key, collapse = "; "),
+    paste(filter(candidate_transition, transition == "disappeared")$key, collapse = "; "),
+    paste(filter(candidate_transition, transition == "newly_appeared")$key, collapse = "; "),
+    model_readiness_text,
+    if (length(extrapolation_heavy)) paste(extrapolation_heavy, collapse = "; ") else "none"
+  )
+)
+
+audit_summary |>
+  kable(caption = "v2.1 methodological audit summary.")
+```
+
+Remaining caveats: structurally invalid combinations receive zero weight and
+are never predicted. Admissible but unobserved cells are predicted via model
+extrapolation and flagged; their contribution to each result's weight is
+reported as `extrapolation_weight`. The ≥10-donor rule gates candidate status
+but does not affect marginalisation weights. Comprehensive baselines are
+calibration references; the primary screen remains tissue × cell-type overlap.
+Model-readiness gating is unchanged.
+
+------------------------------------------------------------------------
+
+## Session info
+
+```{r}
+sessionInfo()
+```

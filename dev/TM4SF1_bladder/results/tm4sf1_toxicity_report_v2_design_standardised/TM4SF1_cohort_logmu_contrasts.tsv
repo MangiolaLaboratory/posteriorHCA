@@ -1,0 +1,8 @@
+cell_type	study_group	comparator	n_study_patients	estimate_log2	lower_log2	upper_log2	probability_positive
+epithelial	HV tumour epithelial	posteriorHCA Normal/10x3-supported comprehensive epithelial	9	2.2687547720827843	-4.805708595900297	8.523599009110672	0.7345
+epithelial	UC tumour epithelial (2 public-DGE >=150)	posteriorHCA Normal/10x3-supported comprehensive epithelial	2	-2.3559694290971156	-9.055441914659557	4.853887241667312	0.2395
+epithelial	UC tumour epithelial (3 published IDs)	posteriorHCA Normal/10x3-supported comprehensive epithelial	3	-0.536925993902098	-7.406738811171562	6.173814431303088	0.429
+epithelial	paired-normal epithelial (>=20 cells)	posteriorHCA Normal/10x3-supported renal-system epithelial proxy	3	2.4130690568163207	-4.392864111903612	8.99665883108033	0.7495
+endothelial	HV tumour epithelial	posteriorHCA Normal/10x3-supported comprehensive endothelial	9	0.6855177410709881	-3.008597427795058	4.809975411257328	0.6315
+endothelial	UC tumour epithelial (2 public-DGE >=150)	posteriorHCA Normal/10x3-supported comprehensive endothelial	2	-3.76720406920745	-7.711864995103567	0.37706559525793276	0.0445
+endothelial	UC tumour epithelial (3 published IDs)	posteriorHCA Normal/10x3-supported comprehensive endothelial	3	-1.9511624782245791	-5.922177193577721	2.1967334577611233	0.191

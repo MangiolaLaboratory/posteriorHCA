@@ -1,0 +1,10 @@
+patient_id	stage	n_cells
+UC01	deposited_barcodes	1373
+UC01	pass_gene	1224
+UC01	pass_umi	1198
+UC01	pass_mito	1153
+UC01	after_doublet	1142
+UC01	retained_bladder_cells	1142
+UC01	broad_epithelial	90
+UC01	candidate_tumour_epithelial	90
+UC01	final_tumour_epithelial	90

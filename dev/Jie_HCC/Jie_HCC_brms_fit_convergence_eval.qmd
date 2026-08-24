@@ -1,0 +1,756 @@
+---
+title: "HCC pilot — brms fit convergence evaluation"
+subtitle: "RE vs interaction formulas, shape variants, and MCMC hyperparameters"
+date: today
+date-format: "DD MMM YYYY"
+title-block-banner: true
+author:
+  - name: Chen Zhan
+    orcid: 0000-0002-4794-8339
+    email: chen.zhan@adelaide.edu.au
+    affiliation:
+      - id: sgc
+        name: SAiGENCI, The University of Adelaide
+format:
+  html:
+    theme: minty
+    df-print: paged
+    code-line-numbers: true
+    embed-resources: true
+    code-fold: true
+    code-fold-default: true
+    toc: true
+    toc-location: left
+    toc-title: "Contents"
+knitr:
+  opts_chunk:
+    message: false
+    warning: false
+editor: source
+abstract: |
+  Diagnostic audit of every brms fit produced for the TIMES HCC
+  random-effect vs interaction pilot on four V1_nk biomarkers (SPON2,
+  ZFP36L2, ZFP36, VIM). For each gene × family × shape variant we report
+  Stan settings, R̂ / ESS, divergences, treedepth saturation, and
+  chain-wise agreement of the comprehensive healthy liver baseline. Trace,
+  density-overlay and rank plots highlight whether chains mixed. The goal
+  is operational: choose the tissue formula that best serves posteriorHCA
+  liver baselines, and set MCMC hyperparameters (chains, warmup, iter,
+  adapt_delta, max_treedepth) that keep that formula properly converged.
+params:
+  case_dir: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC"
+  model_store_root: "/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/HPC_posterior/NEW_CELL_TYPE"
+  target_cell_type: "nk"
+  out_dir: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/re_vs_interaction_pilot"
+  diagnostics_csv: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/re_vs_interaction_pilot/fit_convergence_diagnostics.csv"
+  refresh_diagnostics: false
+  n_baseline_draws: 400
+  # Genes / cells to show detailed MCMC plots for (worst cases + one strong refit)
+  plot_cells: "ZFP36|interaction|rich;ZFP36|interaction|simple;ZFP36|re|simple;SPON2|re|rich;VIM|interaction|simple"
+---
+
+# Motivation
+
+The HCC case study needs a **comprehensive healthy liver NK baseline**
+from posteriorHCA `V1_nk`. Two mean formulas are under consideration:
+
+- **Random effect (RE):** tissue slopes as `(1 + age * sex + ethnicity | tissue)`
+- **Interaction:** the same structure expanded as fixed `tissue × covariate` terms
+
+Each is also fit under **rich** and **simple** shape (dispersion) formulas.
+Short pilot fits (2 chains × 600 iterations) were enough to compare
+baselines for most genes, but at least one interaction fit (ZFP36 rich)
+showed **chain disagreement** that changed the baseline curve between
+reports. Before choosing a production formula we therefore need a
+systematic convergence audit:
+
+1. Which fits actually converged under the pilot hyperparameters?
+2. When they did not, was the failure formula-specific or setting-specific?
+3. What formula + MCMC settings should posteriorHCA use for liver baselines?
+
+This report **only reads cached fits** (local pilot RDS + production RE-rich
+store). It does not refit models.
+
+------------------------------------------------------------------------
+
+# Library setup
+
+```{r}
+#| label: setup
+
+suppressPackageStartupMessages({
+  library(tibble)
+  library(tidyr)
+  library(dplyr)
+  library(readr)
+  library(ggplot2)
+  library(forcats)
+  library(scales)
+  library(glue)
+  library(stringr)
+  library(posterior)
+  library(bayesplot)
+  library(brms)
+  library(targets)
+})
+
+source(file.path(params$case_dir, "R", "re_vs_interaction_helpers.R"))
+source(file.path(params$case_dir, "R", "fit_convergence_helpers.R"))
+
+theme_set(theme_minimal(base_size = 11))
+bayesplot::color_scheme_set("brightblue")
+
+model_labels <- c(re = "Random effect", interaction = "Interaction")
+shape_labels <- c(simple = "Simple shape", rich = "Rich shape")
+gate_colours <- c(PASS = "#2D8B57", WARN = "#E08A2E", FAIL = "#C23B4A")
+```
+
+------------------------------------------------------------------------
+
+# Fit inventory
+
+Local pilot artefacts live under `r params$out_dir`. The RE **rich**
+reference reuses the production `V1_nk` store (same as the pilot report).
+
+```{r}
+#| label: inventory
+
+meta <- pilot_fit_inventory(
+  out_dir = params$out_dir,
+  case_dir = params$case_dir,
+  model_store_root = params$model_store_root,
+  target_cell_type = params$target_cell_type
+)
+
+meta$inventory |>
+  mutate(
+    model = recode(model, !!!model_labels),
+    shape_variant = recode(shape_variant, !!!shape_labels),
+    status = if_else(available, source, "MISSING")
+  ) |>
+  select(gene, model, shape_variant, role, status, file_name) |>
+  arrange(gene, model, shape_variant)
+```
+
+Expected grid: **4 genes × 2 families × 2 shapes = 16 cells**.
+
+------------------------------------------------------------------------
+
+# Diagnostics (all fits)
+
+Gates used in this report (applied jointly):
+
+| Gate | PASS rule |
+|------|-----------|
+| R̂ | `max_rhat ≤ 1.05` |
+| Divergences | `< 1%` of post-warmup transitions |
+| Treedepth | `< 10%` of transitions hit `max_treedepth` |
+| Baseline chains | range of chain-mean liver `log(μ)` `< 1` (when all draws available) |
+
+`WARN` = soft violations; `FAIL` = `max_rhat > 1.5` or `≥ 50%` divergences.
+
+```{r}
+#| label: diagnostics-table
+#| cache: false
+
+diag_path <- params$diagnostics_csv
+need_refresh <- isTRUE(params$refresh_diagnostics) || !file.exists(diag_path)
+
+if (need_refresh) {
+  diag_bundle <- diagnose_all_fits(
+    out_dir = params$out_dir,
+    case_dir = params$case_dir,
+    model_store_root = params$model_store_root,
+    target_cell_type = params$target_cell_type,
+    compute_baseline = TRUE,
+    n_baseline_draws = params$n_baseline_draws,
+    cache_csv = diag_path
+  )
+  diag <- diag_bundle$diagnostics
+} else {
+  diag <- read_csv(diag_path, show_col_types = FALSE)
+}
+
+diag_view <- diag |>
+  mutate(
+    model_label = factor(recode(model, !!!model_labels), levels = model_labels),
+    shape_label = factor(recode(shape_variant, !!!shape_labels), levels = shape_labels),
+    gate = case_when(
+      gate_pass ~ "PASS",
+      max_rhat > 1.5 | pct_divergent >= 50 ~ "FAIL",
+      TRUE ~ "WARN"
+    ),
+    gate = factor(gate, levels = c("PASS", "WARN", "FAIL")),
+    settings = glue("{chains}×{warmup}/{iter}; δ={adapt_delta}; td={max_treedepth}")
+  )
+
+diag_view |>
+  transmute(
+    gene, model = model_label, shape = shape_label, source, settings,
+    max_rhat = round(max_rhat, 3),
+    n_rhat_gt_1_1,
+    pct_divergent = round(pct_divergent, 2),
+    pct_max_treedepth = round(pct_max_treedepth, 1),
+    min_ess_bulk = round(min_ess_bulk, 0),
+    baseline_mean = round(baseline_mean, 2),
+    baseline_sd = round(baseline_sd, 2),
+    chain_mean_range = round(baseline_chain_mean_range, 2),
+    gate
+  ) |>
+  arrange(gate, gene, model, shape)
+```
+
+## Gate summary
+
+```{r}
+#| label: gate-summary
+
+gate_counts <- diag_view |>
+  count(model_label, shape_label, gate) |>
+  pivot_wider(names_from = gate, values_from = n, values_fill = 0)
+
+gate_counts
+```
+
+```{r}
+#| label: plot-max-rhat
+#| fig-width: 9
+#| fig-height: 4.5
+#| fig-align: center
+
+ggplot(diag_view, aes(x = gene, y = max_rhat, fill = gate)) +
+  geom_col(width = 0.7) +
+  geom_hline(yintercept = 1.05, linetype = 2, colour = "grey40") +
+  geom_hline(yintercept = 1.1, linetype = 3, colour = "grey60") +
+  facet_grid(shape_label ~ model_label) +
+  scale_fill_manual(values = gate_colours) +
+  labs(
+    title = "Maximum R̂ by gene × formula × shape",
+    subtitle = "Dashed = 1.05 (PASS gate); dotted = 1.1",
+    x = NULL, y = "max R̂", fill = "Gate"
+  ) +
+  theme(legend.position = "bottom")
+```
+
+```{r}
+#| label: plot-divergences
+#| fig-width: 9
+#| fig-height: 4.5
+#| fig-align: center
+
+ggplot(diag_view, aes(x = gene, y = pct_divergent, fill = gate)) +
+  geom_col(width = 0.7) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "grey40") +
+  facet_grid(shape_label ~ model_label) +
+  scale_fill_manual(values = gate_colours) +
+  labs(
+    title = "Divergent transitions (% of post-warmup)",
+    subtitle = "Dashed = 1% PASS gate",
+    x = NULL, y = "% divergent", fill = "Gate"
+  ) +
+  theme(legend.position = "bottom")
+```
+
+```{r}
+#| label: plot-baseline-sd
+#| fig-width: 9
+#| fig-height: 4.5
+#| fig-align: center
+
+ggplot(diag_view, aes(x = gene, y = baseline_sd, fill = model_label)) +
+  geom_col(position = position_dodge(width = 0.75), width = 0.7) +
+  facet_wrap(~ shape_label) +
+  scale_fill_manual(values = c("Random effect" = "#4DBBD5", "Interaction" = "#E64B35")) +
+  labs(
+    title = "Comprehensive liver baseline posterior SD",
+    subtitle = "Wider bars = more uncertain healthy liver log(μ)",
+    x = NULL, y = "SD of baseline log(μ)", fill = NULL
+  ) +
+  theme(legend.position = "bottom")
+```
+
+```{r}
+#| label: settings-vs-gate
+#| results: asis
+
+n_pass <- sum(diag_view$gate == "PASS")
+n_warn <- sum(diag_view$gate == "WARN")
+n_fail <- sum(diag_view$gate == "FAIL")
+n_tot <- nrow(diag_view)
+re_pass <- diag_view |> filter(model == "re") |> summarise(p = mean(gate == "PASS")) |> pull(p)
+int_pass <- diag_view |> filter(model == "interaction") |> summarise(p = mean(gate == "PASS")) |> pull(p)
+
+cat(glue(
+  "Across **{n_tot}** available fits: **{n_pass} PASS**, **{n_warn} WARN**, **{n_fail} FAIL**. ",
+  "Random-effect pass rate: **{scales::percent(re_pass, accuracy = 1)}**; ",
+  "interaction pass rate: **{scales::percent(int_pass, accuracy = 1)}**."
+))
+```
+
+------------------------------------------------------------------------
+
+# MCMC settings actually used
+
+```{r}
+#| label: settings-table
+
+diag_view |>
+  distinct(
+    model_label, shape_label, gene, source,
+    chains, warmup, iter, adapt_delta, max_treedepth, seed
+  ) |>
+  arrange(model_label, shape_label, gene)
+```
+
+Typical **pilot** settings (most local RDS files):
+
+- `chains = 2`, `warmup = 400`, `iter = 600`
+- `adapt_delta = 0.95`, `max_treedepth = 12`, `seed = 42`
+
+The **ZFP36 interaction / rich** cell may differ if it was the strong refit
+(`chains = 4`, `warmup = 1500`, `iter = 3000`, `adapt_delta = 0.99`,
+`max_treedepth = 15`, `seed = 43`). Production RE-rich settings come from the
+V1_nk atlas pipeline and can differ from the pilot.
+
+------------------------------------------------------------------------
+
+# Detailed MCMC plots
+
+Selected cells (worst failures + a strong / production reference):
+
+```{r}
+#| label: parse-plot-cells
+
+plot_specs <- str_split(params$plot_cells, ";", simplify = FALSE)[[1]] |>
+  str_trim() |>
+  str_split("\\|", simplify = TRUE) |>
+  as_tibble(.name_repair = ~ c("gene", "model", "shape_variant"))
+
+plot_specs
+```
+
+For each selected fit we show:
+
+1. **Trace** of Intercept / shape intercept / worst-R̂ parameters  
+2. **Density overlay** across chains  
+3. **Rank overlay** (cleaner than raw traces for many parameters)  
+4. **Baseline `log(μ)` by chain** — the quantity used in HCC proximity tests
+
+```{r}
+#| label: mcmc-plots
+#| results: asis
+#| fig-width: 10
+#| fig-height: 7
+#| fig-align: center
+
+plot_one_cell <- function(gene, model, shape_variant) {
+  row <- meta$inventory |>
+    filter(
+      .data$gene == .env$gene,
+      .data$model == .env$model,
+      .data$shape_variant == .env$shape_variant,
+      available
+    )
+  if (!nrow(row)) {
+    cat("\n**Not available.**\n\n")
+    return(invisible(NULL))
+  }
+  fit <- load_pilot_fit(row[1, ], meta)
+  vars <- select_plot_variables(fit, n_worst = 4L)
+  draws <- as_draws_array(fit, variable = vars)
+
+  print(
+    mcmc_trace(draws) +
+      labs(title = glue("{gene} — {model_labels[[model]]} / {shape_labels[[shape_variant]]}: trace"))
+  )
+  print(mcmc_dens_overlay(draws) + labs(title = "Density overlay by chain"))
+  print(mcmc_rank_overlay(draws) + labs(title = "Rank overlay by chain"))
+
+  bl <- tryCatch(
+    baseline_draws_by_chain(fit, ndraws_cap = 8000L),
+    error = function(e) NULL
+  )
+  if (!is.null(bl) && all(!is.na(bl$chain))) {
+    print(
+      ggplot(bl, aes(x = iteration, y = baseline_log_mu, colour = factor(chain))) +
+        geom_line(alpha = 0.7, linewidth = 0.35) +
+        labs(
+          title = "Comprehensive liver baseline log(μ) by chain",
+          x = "Post-warmup iteration", y = "baseline log(μ)", colour = "Chain"
+        ) +
+        theme(legend.position = "bottom")
+    )
+  } else if (!is.null(bl)) {
+    print(
+      ggplot(bl, aes(x = baseline_log_mu)) +
+        geom_density(fill = "#4DBBD5", alpha = 0.5, colour = NA) +
+        labs(
+          title = "Comprehensive liver baseline log(μ) (subsampled draws)",
+          x = "baseline log(μ)", y = "Density"
+        )
+    )
+  }
+  invisible(NULL)
+}
+
+for (i in seq_len(nrow(plot_specs))) {
+  cat(
+    "\n\n### ", plot_specs$gene[i], " / ",
+    model_labels[[plot_specs$model[i]]], " / ",
+    shape_labels[[plot_specs$shape_variant[i]]], "\n\n",
+    sep = ""
+  )
+  plot_one_cell(
+    plot_specs$gene[i],
+    plot_specs$model[i],
+    plot_specs$shape_variant[i]
+  )
+}
+```
+
+------------------------------------------------------------------------
+
+# Why is interaction harder to sample and wider?
+
+The diagnostics above show two linked facts under matched fitting effort:
+
+1. **Interaction is harder to sample** — more WARN/FAIL gates, more divergences,
+   and at least one gene (ZFP36 simple) with chain disagreement.
+2. **Interaction liver baselines are much wider** — systematically larger
+   posterior SD of comprehensive healthy liver `log(μ)`.
+
+A natural question for posteriorHCA is whether this is explained by the
+**parameter space that actually enters hypothesis testing** for the
+comprehensive liver estimand.
+
+## Parameters that matter for posteriorHCA testing
+
+The HCC case study sets `tissue_groups = liver`, `disease = Normal`,
+`offset = 0`, then **marginalises** over sex × age × ethnicity × assay via
+`posterior_linpred(..., re_formula = NULL)`.
+
+So the coefficients that move the tested baseline are:
+
+| Formula | What enters the liver linear predictor |
+|---|---|
+| **Random effect** | Global **fixed effects** (age, sex, ethnicity, assay, disease, …) **plus** the **tissue random effects for the liver level** (intercept and age/sex/ethnicity slopes at `tissue = liver`) |
+| **Interaction** | **Fixed** tissue and tissue × covariate terms for liver (no tissue RE) |
+
+We **do** count liver tissue `r_` effects for RE, because conditioning on
+`tissue = liver` uses them. We still **ignore**:
+
+- `sd_` / `cor_` — covariance hyperparameters (they regularise RE, but are not
+  themselves the liver coefficients we read off)
+- `r_` for **other tissues** — not used once tissue is fixed to liver
+- dataset `r_` — new level / nuisance for the comprehensive baseline
+
+```{r}
+#| label: fe-geometry-detail
+
+ex_re <- meta$inventory |>
+  filter(model == "re", shape_variant == "simple", available) |>
+  slice(1)
+ex_int <- meta$inventory |>
+  filter(model == "interaction", shape_variant == "rich", available) |>
+  slice(1)
+
+stopifnot(nrow(ex_re) == 1, nrow(ex_int) == 1)
+fit_re_ex <- load_pilot_fit(ex_re, meta)
+fit_int_ex <- load_pilot_fit(ex_int, meta)
+d <- droplevels(fit_int_ex$data)
+
+re_mu <- ~ age_decade * sex + disease_groups_altered + ethnicity_groups +
+  assay_groups_altered
+int_mu <- ~ disease_groups_altered + assay_groups_altered + tissue_groups +
+  age_decade:tissue_groups + sex:tissue_groups +
+  age_decade:sex:tissue_groups + ethnicity_groups:tissue_groups
+
+Xre <- model.matrix(re_mu, d)
+Xint <- model.matrix(int_mu, d)
+
+# Tissue RE effects used when tissue = liver (from the fitted RE model)
+rn <- brms::ranef(fit_re_ex)
+n_tissue_re_effects <- if ("tissue_groups" %in% names(rn)) {
+  # ranef array: levels x summary x effects
+  dim(rn$tissue_groups)[3]
+} else {
+  NA_integer_
+}
+n_liver_re <- n_tissue_re_effects  # one level (liver) × M effects
+
+term_breakdown <- function(X, form) {
+  tt <- terms(form)
+  asgn <- attr(X, "assign")
+  labs <- c("(Intercept)", attr(tt, "term.labels"))
+  tibble(
+    term = labs,
+    n_cols = as.integer(table(factor(asgn, levels = seq_along(labs) - 1L)))
+  )
+}
+
+# Predictive coefficients for the liver estimand (testing-relevant)
+pred_summary <- tibble(
+  formula = c("Random effect", "Interaction"),
+  global_fe = c(ncol(Xre), NA_integer_),
+  liver_tissue_re = c(n_liver_re, 0L),
+  liver_tissue_fe = c(0L, NA_integer_),
+  n_fe_columns = c(ncol(Xre), ncol(Xint)),
+  fe_rank = c(qr(Xre)$rank, qr(Xint)$rank),
+  fe_rank_deficit = c(ncol(Xre) - qr(Xre)$rank, ncol(Xint) - qr(Xint)$rank)
+)
+
+# For interaction, "liver tissue FE" is not a separate block in model.matrix
+# (it is entangled in tissue / tissue×cov columns); report full FE size + rank.
+pred_summary <- pred_summary |>
+  mutate(
+    testing_relevant_note = case_when(
+      formula == "Random effect" ~
+        glue("global FE ({global_fe}) + liver tissue RE ({liver_tissue_re})"),
+      TRUE ~
+        glue("all tissue×metadata FE ({n_fe_columns} cols, rank {fe_rank})")
+    )
+  )
+
+pred_summary |>
+  select(formula, n_fe_columns, fe_rank, fe_rank_deficit, liver_tissue_re, testing_relevant_note)
+
+bind_rows(
+  term_breakdown(Xre, re_mu) |> mutate(formula = "Random effect (global FE)"),
+  term_breakdown(Xint, int_mu) |> mutate(formula = "Interaction (all FE)")
+) |>
+  select(formula, term, n_cols) |>
+  arrange(formula, desc(n_cols))
+```
+
+```{r}
+#| label: plot-fe-space
+#| fig-width: 8.5
+#| fig-height: 4.2
+#| fig-align: center
+
+plot_df <- bind_rows(
+  tibble(
+    formula = "Random effect",
+    component = c("Global FE", "Liver tissue RE"),
+    value = c(ncol(Xre), n_liver_re)
+  ),
+  tibble(
+    formula = "Interaction",
+    component = c("FE columns", "FE rank (identifiable)"),
+    value = c(ncol(Xint), qr(Xint)$rank)
+  )
+) |>
+  mutate(
+    formula = factor(formula, levels = c("Random effect", "Interaction")),
+    component = factor(
+      component,
+      levels = c("Global FE", "Liver tissue RE", "FE columns", "FE rank (identifiable)")
+    )
+  )
+
+ggplot(plot_df, aes(x = formula, y = value, fill = component)) +
+  geom_col(position = position_dodge(width = 0.72), width = 0.68) +
+  scale_fill_manual(
+    values = c(
+      "Global FE" = "#4DBBD5",
+      "Liver tissue RE" = "#3C5488",
+      "FE columns" = "#E64B35",
+      "FE rank (identifiable)" = "#F39B7F"
+    )
+  ) +
+  labs(
+    title = "Testing-relevant mean parameters for tissue = liver",
+    subtitle = "RE uses global FE + liver tissue RE; interaction expands tissue×metadata as FE",
+    x = NULL, y = "Count", fill = NULL
+  ) +
+  theme(legend.position = "bottom")
+```
+
+```{r}
+#| label: fe-geometry-text
+#| results: asis
+
+cat(glue(
+  "On the V1_nk design (example gene **{ex_re$gene}**):\n\n",
+  "- **RE** testing path: **{ncol(Xre)}** global FE (rank **{qr(Xre)$rank}**) ",
+  "+ **{n_liver_re}** liver tissue random effects ",
+  "(intercept and covariate slopes at `tissue = liver`).\n",
+  "- **Interaction** testing path: **{ncol(Xint)}** FE columns ",
+  "(rank only **{qr(Xint)$rank}**; deficit **{ncol(Xint) - qr(Xint)$rank}**), ",
+  "with tissue biology entirely in unpooled fixed interactions.\n\n",
+  "Shared nuisance blocks (disease, assay) are similar in both formulas. ",
+  "The decisive gap is how tissue-specific age/sex/ethnicity structure is ",
+  "represented when we fix tissue to liver and marginalise the other metadata."
+))
+```
+
+## Possible reason: how tissue×metadata enters the liver estimand
+
+Yes — **parameter-space geometry remains a primary reason**, once we count
+the coefficients that actually enter `tissue = liver` prediction.
+
+| | Random effect | Interaction |
+|---|---|---|
+| Global metadata FE | ~40, full rank | disease/assay only (age/sex/ethnicity absorbed into tissue interactions) |
+| Tissue-specific part used for liver | **~26 liver `r_` effects**, partially pooled across tissues via the RE prior | **Hundreds of tissue×covariate FE**, no pooling |
+| Effective identified tissue×metadata space | Small, regularised | Large and rank-deficient (~560 cols / ~180 rank) |
+| Liver data support | Liver RE borrows strength from other tissues | Liver FE estimated mainly from liver rows (n = 71) |
+
+So under the same chains / iterations / `adapt_delta`:
+
+1. **Harder sampling.** Interaction asks HMC to explore a high-dimensional,
+   correlated, rank-deficient **fixed** tissue×metadata posterior. Many of
+   those directions are weakly identified from sparse liver combinations →
+   divergences, treedepth hits, occasional chain disagreement.
+2. **Wider liver baseline.** With `tissue = liver` fixed and other metadata
+   marginalised, interaction still has to average uncertain unpooled FE over
+   unsupported age/sex/ethnicity/assay combinations. RE instead uses a
+   **shrunk liver RE vector** plus a small global FE, so baseline `log(μ)`
+   stays tighter.
+
+This is **not only** an “insufficient MCMC” story. The strong ZFP36
+interaction/rich refit (4 chains, 1500/3000, `adapt_delta = 0.99`) can
+pass R̂ gates and still keep a much wider baseline than RE — consistent with
+structural expansion of unpooled tissue×metadata effects.
+
+```{r}
+#| label: width-vs-formula
+#| fig-width: 8
+#| fig-height: 4.2
+#| fig-align: center
+
+diag_view |>
+  ggplot(aes(x = gene, y = baseline_sd, fill = model_label)) +
+  geom_col(position = position_dodge(width = 0.75), width = 0.7) +
+  facet_wrap(~ shape_label) +
+  scale_fill_manual(values = c("Random effect" = "#4DBBD5", "Interaction" = "#E64B35")) +
+  labs(
+    title = "Liver baseline SD stays higher for interaction across genes",
+    subtitle = "Consistent with unpooled tissue×metadata FE vs pooled liver RE",
+    x = NULL, y = "SD of comprehensive liver log(μ)", fill = NULL
+  ) +
+  theme(legend.position = "bottom")
+```
+
+## What this does *not* claim
+
+- It does **not** say interaction is misspecified for every scientific question —
+  only that, for the **current posteriorHCA liver estimand** (`tissue = liver`,
+  marginalise other metadata), the unpooled FE expansion is poorly supported
+  by liver sample size.
+- Ignoring `sd_` / `cor_` does **not** mean RE has no random effects in the
+  test — liver tissue `r_` **are** part of the estimand; we only omit
+  hyperparameters and non-liver / dataset group effects from the count.
+- Shape-formula complexity can add width, but the mean-structure gap
+  (pooled liver RE vs large tissue×metadata FE) is already enough to explain
+  the dominant RE-vs-interaction SD difference.
+
+**Bottom line for posteriorHCA:** yes — for testing with `tissue = liver` and
+marginalised covariates, interaction’s much larger **unpooled**
+tissue×metadata fixed-effect space (versus RE’s global FE + **pooled liver
+tissue random effects**) is a sufficient reason for both harder MCMC and
+wider liver-baseline posteriors under the same fitting conditions.
+
+------------------------------------------------------------------------
+
+# Decision: formula + hyperparameters for posteriorHCA
+
+```{r}
+#| label: decision-tables
+
+formula_score <- diag_view |>
+  group_by(model_label, shape_label) |>
+  summarise(
+    n = n(),
+    n_pass = sum(gate == "PASS"),
+    n_warn = sum(gate == "WARN"),
+    n_fail = sum(gate == "FAIL"),
+    median_max_rhat = median(max_rhat),
+    median_baseline_sd = median(baseline_sd, na.rm = TRUE),
+    median_pct_div = median(pct_divergent, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  arrange(desc(n_pass), median_max_rhat, median_baseline_sd)
+
+formula_score
+```
+
+```{r}
+#| label: decision-text
+#| results: asis
+
+best <- formula_score |> slice(1)
+re_simple <- formula_score |> filter(model_label == "Random effect", shape_label == "Simple shape")
+re_rich <- formula_score |> filter(model_label == "Random effect", shape_label == "Rich shape")
+int_simple <- formula_score |> filter(model_label == "Interaction", shape_label == "Simple shape")
+int_rich <- formula_score |> filter(model_label == "Interaction", shape_label == "Rich shape")
+
+cat(glue(
+  "## Recommended formula\n\n",
+  "For the **comprehensive healthy liver NK baseline** used by posteriorHCA / TIMES HCC, ",
+  "prefer the **random-effect tissue formula**. Relative to interaction it has:\n\n",
+  "- smaller mean fixed-effect space with partial pooling across tissues,\n",
+  "- systematically narrower liver baseline SDs under matched settings,\n",
+  "- fewer catastrophic chain-disagreement failures (interaction ZFP36 simple is the ",
+  "clearest FAIL in this audit).\n\n",
+  "Best cell among currently cached fits: **{best$model_label} / {best$shape_label}** ",
+  "({best$n_pass}/{best$n} hard PASS under the strict gates below; ",
+  "median max R̂ = {round(best$median_max_rhat, 3)}; ",
+  "median baseline SD = {round(best$median_baseline_sd, 2)}).\n\n",
+  "Interaction remains useful as a **sensitivity analysis**, but should not be the ",
+  "default production baseline unless every gene is refit with stronger MCMC **and** ",
+  "stronger FE regularization or a liver-supported covariate grid.\n\n",
+  "## Recommended MCMC hyperparameters\n\n",
+  "Pilot defaults (`2` chains, `400/600`, `adapt_delta = 0.95`, `max_treedepth = 12`) ",
+  "are **too short for a hard PASS** on most cells here: several RE fits sit in WARN ",
+  "because of a few percent divergences even when R̂ is near 1.05. The only hard PASS ",
+  "among interaction fits is the **strong ZFP36 rich refit** (4×1500/3000).\n\n",
+  "| Use case | chains | warmup | iter | adapt_delta | max_treedepth |\n",
+  "|----------|-------:|-------:|-----:|------------:|--------------:|\n",
+  "| RE production / atlas | 4 | 1000 | 2000 | 0.95–0.99 | 12–14 |\n",
+  "| Interaction pilot / stress test | 4 | 1500 | 3000 | 0.99 | 15 |\n",
+  "| Interaction production (if retained) | ≥4 | ≥2000 | ≥4000 | 0.99 | 15 |\n\n",
+  "Always gate fits before using baselines: reject or refit if `max_rhat > 1.05`, ",
+  "divergences ≥ 1%, or chain-mean baseline range ≥ 1 log unit.\n"
+))
+```
+
+------------------------------------------------------------------------
+
+# Interpretation checklist for future atlas runs
+
+1. **Formula first.** Choose RE for operational liver baselines; keep interaction as a diagnostic alternative.
+2. **Parameter space explains width.** For `tissue = liver`, RE uses global FE + **pooled liver tissue RE**; interaction expands the same biology as a large unpooled tissue×metadata FE space (~560 cols / rank ~180). That is a sufficient reason for harder sampling and wider baselines.
+3. **Hyperparameters second.** Match MCMC length to formula complexity — interaction needs longer / more chains.
+4. **Gate every gene.** Do not pool multimodal chain mixtures into a published density.
+5. **Report baseline SD with formula.** Wider interaction SD is expected from FE expansion even under good R̂.
+6. **Shape is secondary here.** Shape changes SD modestly once the mean formula and sampling quality are fixed; do not attribute all width to shape alone.
+
+------------------------------------------------------------------------
+
+# Saved artefacts
+
+| File | Description |
+|------|-------------|
+| `fit_re_<GENE>.rds` | RE + simple shape (pilot) |
+| `fit_interaction_<GENE>.rds` | Interaction + simple shape (pilot) |
+| `fit_interaction_rich_<GENE>.rds` | Interaction + rich shape (pilot / strong refit) |
+| production `V1_nk` store | RE + rich shape reference |
+| `fit_convergence_diagnostics.csv` | Per-fit gate metrics used by this report |
+| `R/fit_convergence_helpers.R` | Inventory + diagnostic helpers |
+
+Render:
+
+```bash
+module load R/4.5.3-gfbf-2025b
+export PATH="$HOME/.local/quarto/bin:$PATH"   # or any working Quarto ≥1.4
+export QUARTO_R="$(which R)"
+quarto render Jie_HCC_brms_fit_convergence_eval.qmd
+```
+
+Refresh diagnostics cache:
+
+```bash
+# in QMD YAML: refresh_diagnostics: true
+# or delete fit_convergence_diagnostics.csv and re-render
+```

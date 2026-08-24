@@ -1,0 +1,15 @@
+check	category	observed	expected	pass	evidence
+expected_patients_present	cohort_logic	UC01,UC02,UC03,VAR01,VAR02,VAR03,VAR04,VAR05,VAR06,VAR07,VAR08,VAR09	UC01,UC02,UC03,VAR01,VAR02,VAR03,VAR04,VAR05,VAR06,VAR07,VAR08,VAR09	TRUE	all_patient_cell_flow.tsv contains one row for each expected published ID
+VAR01_to_VAR09_retained	cohort_logic	VAR01,VAR02,VAR03,VAR04,VAR05,VAR06,VAR07,VAR08,VAR09	VAR01,VAR02,VAR03,VAR04,VAR05,VAR06,VAR07,VAR08,VAR09	TRUE	retention recomputed from final tumour-epithelial counts >=150
+VAR10_excluded	cohort_logic	97	<150	TRUE	final tumour-epithelial count evaluated against the published threshold
+VAR11_excluded	cohort_logic	38	<150	TRUE	final tumour-epithelial count evaluated against the published threshold
+UC04_excluded	cohort_logic	24	<150	TRUE	final tumour-epithelial count evaluated against the published threshold
+UC01_retained	cohort_logic	90	>=150	FALSE	final tumour-epithelial count evaluated against the published threshold
+UC02_retained	cohort_logic	388	>=150	TRUE	final tumour-epithelial count evaluated against the published threshold
+UC03_retained	cohort_logic	193	>=150	TRUE	final tumour-epithelial count evaluated against the published threshold
+all_reconstructed_retained_patients_ge150	cohort_logic	193	>=150	TRUE	retained set is recomputed from biological patient counts, not library IDs
+published_9HV_3UC_structure	publication_target	9,2	9,3	FALSE	patient-level counts; UC01 is not promoted by lowering the threshold
+published_tumour_cell_total	publication_target	7862	8553	FALSE	sum over the same 12 published patient IDs
+UC01_published_barcodes_in_current_12049_DGE	data_provenance	0	605	FALSE	exact Figure5B source-data barcodes compared to the deposited 12049 DGE header
+no_library_treated_as_independent_patient	pseudobulk_logic	12,12	12,12	TRUE	tumour pseudobulk colData has exactly one column per biological patient
+raw_count_accounting_preserved	count_integrity	TRUE	TRUE	TRUE	canonical structural validation compares processed count sum to QC bladder count sum

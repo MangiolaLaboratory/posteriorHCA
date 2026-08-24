@@ -1,0 +1,18 @@
+patient_id	original_patient_id	paper_id	histology	histology_group	tumour_cohort_status	n_libraries	n_tumour_libraries	n_paired_normal_libraries
+VAR06	20847	VAR06	lymphoepithelioma-like	HV	published_retained	8	6	2
+UC04	21032	UC04	CIS	UC	published_excluded_lt150	4	1	3
+VAR11	21217	VAR11	squamous + sarcomatoid differentiation	HV	published_excluded_lt150	5	4	1
+VAR01	21222	VAR01	micropapillary	HV	published_retained	7	5	2
+VAR07	21226	VAR07	squamous differentiation	HV	published_retained	6	4	2
+VAR09	21262	VAR09	small cell + micropapillary	HV	published_retained	2	2	0
+VAR05	FG	VAR05	nested	HV	published_retained	9	8	1
+UC03	HG	UC03	pure UC	UC	published_retained	3	3	0
+VAR03	JM	VAR03	pleomorphic giant cell-like + micropapillary	HV	published_retained	3	2	1
+PG_M	PG_M		paraganglioma	other	not_in_published_15_tumour_cohort	4	2	2
+PG_S	PG_S		paraganglioma	other	not_in_published_15_tumour_cohort	4	2	2
+VAR02	PS	VAR02	micropapillary	HV	published_retained	4	4	0
+VAR08	11734	VAR08	plasmacytoid	HV	published_retained	1	1	0
+VAR04	12041	VAR04	nested	HV	published_retained	1	1	0
+UC01	12049	UC01	pure UC	UC	published_retained	1	1	0
+VAR10	12050	VAR10	pure squamous	HV	published_excluded_lt150	3	2	1
+UC02	SG	UC02	pure UC	UC	published_retained	2	2	0

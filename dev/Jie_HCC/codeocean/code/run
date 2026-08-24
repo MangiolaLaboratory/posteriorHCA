@@ -1,0 +1,14 @@
+echo "options(repos ='https://cran.rstudio.com/', \
+  unzip = 'internal', \
+  download.file.method ='libcurl', \
+  Ncpus = parallel::detectCores() )" >> /etc/R/Rprofile.site 
+#!/usr/bin/env bash
+set -ex
+
+# This is the master script for the capsule. When you click "Reproducible Run", the code in this file will execute.
+Rscript 2_TIMES_development_from_mIHC/3_TIMES_score_computation.R "$@"
+
+# The previous version of this file was commented-out and follows below:
+#
+# Rscript 2_TIMES_development_from_mIHC/1_Machine_learning_model_selection.R "$@"
+# 

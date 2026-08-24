@@ -1,0 +1,15 @@
+tissue_groups	sex	age_decade	ethnicity_groups	n_donor_keys	marginal_weight	weight_rule	cell_type
+female reproductive system	female	3	European	1	0.2	equal sex (1/1) × equal age (1/5) × equal ethnicity (1/1)	endothelial
+female reproductive system	female	4	African	1	0.1	equal sex (1/1) × equal age (1/5) × equal ethnicity (1/2)	endothelial
+female reproductive system	female	4	European	1	0.1	equal sex (1/1) × equal age (1/5) × equal ethnicity (1/2)	endothelial
+female reproductive system	female	5	European	1	0.2	equal sex (1/1) × equal age (1/5) × equal ethnicity (1/1)	endothelial
+female reproductive system	female	6	European	2	0.2	equal sex (1/1) × equal age (1/5) × equal ethnicity (1/1)	endothelial
+female reproductive system	female	7	East Asian	1	0.1	equal sex (1/1) × equal age (1/5) × equal ethnicity (1/2)	endothelial
+female reproductive system	female	7	European	3	0.1	equal sex (1/1) × equal age (1/5) × equal ethnicity (1/2)	endothelial
+female reproductive system	female	3	European	1	0.2	equal sex (1/1) × equal age (1/5) × equal ethnicity (1/1)	epithelial
+female reproductive system	female	4	African	1	0.1	equal sex (1/1) × equal age (1/5) × equal ethnicity (1/2)	epithelial
+female reproductive system	female	4	European	1	0.1	equal sex (1/1) × equal age (1/5) × equal ethnicity (1/2)	epithelial
+female reproductive system	female	5	European	1	0.2	equal sex (1/1) × equal age (1/5) × equal ethnicity (1/1)	epithelial
+female reproductive system	female	6	European	2	0.2	equal sex (1/1) × equal age (1/5) × equal ethnicity (1/1)	epithelial
+female reproductive system	female	7	East Asian	1	0.1	equal sex (1/1) × equal age (1/5) × equal ethnicity (1/2)	epithelial
+female reproductive system	female	7	European	3	0.1	equal sex (1/1) × equal age (1/5) × equal ethnicity (1/2)	epithelial

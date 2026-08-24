@@ -1,0 +1,6 @@
+item	finding	reproducible
+paper_settings	InferCNV 1.4.0; non-tumour references; genes in >=5 cells; cutoff 0.1; HMM	TRUE
+public_code_preparation	Private merged object and Final_ID labels; code downsamples 500 per active identity	FALSE
+public_runtime_output	No InferCNV result, gene-order file, HMM calls, or epithelial keep/drop list released	FALSE
+current_reconstruction	Input prepared only; exact old InferCNV stack and hg19 gene-order input unavailable	FALSE
+UC01_interpretability	Published 12923/UC01 cells are absent from deposited DGE matrices, so their CNV cannot be rerun	FALSE

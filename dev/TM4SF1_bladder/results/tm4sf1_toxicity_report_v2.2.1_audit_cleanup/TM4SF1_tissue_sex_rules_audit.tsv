@@ -1,0 +1,51 @@
+cell_type	tissue_groups	biologically_allowed_sex	analysis_allowed_sex	atlas_observed_sex	n_biologically_allowed	n_analysis_allowed	reports_tissue_sex	restriction_type	has_unobserved_target_sex
+epithelial	brainstem and cerebellar structures	female, male	female, male	male	2	2	TRUE	both sexes biologically valid	TRUE
+epithelial	breast	female, male	female	female	2	1	FALSE	analysis restriction (not structural)	FALSE
+epithelial	cardiovascular system	female, male	female, male	female	2	2	TRUE	both sexes biologically valid	TRUE
+epithelial	cerebral lobes and cortical areas	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+epithelial	digestive system (general)	female, male	female, male	female	2	2	TRUE	both sexes biologically valid	TRUE
+epithelial	female reproductive system	female	female	female	1	1	FALSE	hard structural constraint	FALSE
+epithelial	general brain and major structures	female, male	female, male	male	2	2	TRUE	both sexes biologically valid	TRUE
+epithelial	integumentary system (skin)	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+epithelial	large intestine	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+epithelial	limbic and basal systems	female, male	female, male	male	2	2	TRUE	both sexes biologically valid	TRUE
+epithelial	liver	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+epithelial	miscellaneous glands	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+epithelial	nasal, oral, and pharyngeal regions	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+epithelial	prostate	male	male	male	1	1	FALSE	hard structural constraint	FALSE
+epithelial	renal system	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+epithelial	respiratory system	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+epithelial	sensory-related structures	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+epithelial	small intestine	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+epithelial	thymus	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+epithelial	trachea	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+epithelial	vasculature	female, male	female, male	female	2	2	TRUE	both sexes biologically valid	TRUE
+endothelial	adipose tissue	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+endothelial	brainstem and cerebellar structures	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+endothelial	breast	female, male	female	female	2	1	FALSE	analysis restriction (not structural)	FALSE
+endothelial	cardiovascular system	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+endothelial	cerebral lobes and cortical areas	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+endothelial	digestive system (general)	female, male	female, male	female	2	2	TRUE	both sexes biologically valid	TRUE
+endothelial	endocrine system	female, male	female, male	female	2	2	TRUE	both sexes biologically valid	TRUE
+endothelial	female reproductive system	female	female	female	1	1	FALSE	hard structural constraint	FALSE
+endothelial	general brain and major structures	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+endothelial	integumentary system (skin)	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+endothelial	large intestine	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+endothelial	limbic and basal systems	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+endothelial	liver	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+endothelial	lymphatic system	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+endothelial	miscellaneous glands	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+endothelial	muscular system (skeletal muscles)	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+endothelial	nasal, oral, and pharyngeal regions	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+endothelial	oesophagus	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+endothelial	ovary	female	female	female	1	1	FALSE	hard structural constraint	FALSE
+endothelial	pancreas	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+endothelial	prostate	male	male	male	1	1	FALSE	hard structural constraint	FALSE
+endothelial	renal system	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+endothelial	respiratory system	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+endothelial	sensory-related structures	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+endothelial	small intestine	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+endothelial	spleen	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+endothelial	thymus	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+endothelial	trachea	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+endothelial	vasculature	female, male	female, male	male	2	2	TRUE	both sexes biologically valid	TRUE

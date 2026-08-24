@@ -8,7 +8,7 @@ get_file_ready(
   cache_directory = get_default_cache_dir(),
   use_cache = TRUE,
   container,
-  prefix,
+  prefix = "",
   filename
 )
 }
@@ -19,7 +19,7 @@ get_file_ready(
 
 \item{container}{Character. Name of the container in Nectar object storage.}
 
-\item{prefix}{Character. Prefix (folder name) in the container.}
+\item{prefix}{Character. Prefix (folder path) in the container. Use \code{""} for files at the container root.}
 
 \item{filename}{Character. Name of the file to download.}
 }

@@ -1,0 +1,9 @@
+"Supplementary Table 1：Patient information","...2","...3","...4","...5","...6","...7","...8","...9","...10","...11","...12"
+NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA
+"Donor","Classification","Age","Gendar","BMI (kg/m2)","Pack-years","Smoking cessation","FEV1/FVC (%)","FEV1","%FEV1","Pathological Stage of Lung Cancer","Cormobidities"
+"JKPF1","IPF","76","Male","25.83","5","41 years","90.8","2.27","71.5","IB","Hypertension"
+"JKPF2","IPF","69","Male","26.6","47","2 years","73","2","85.1","IA","Hypertension"
+"JKPF3","IPF","80","Male","25.3","35","25  years","82.9","1.74","94.6","IA","Hypertension, glaucoma"
+"JK06","Non-smoker","58","Male","19.247015610651975","0","Never","76.599999999999994","3.15","100.3","IA","-"
+"JK11","Non-smoker","56","Female","24.606858903443928","0","Never","79.599999999999994","2.09","100.9","IB","-"
+"JK12","Non-smoker","33","Male","23.243801652892564","0","Never","80.400000000000006","3.73","88.1","IA","-"

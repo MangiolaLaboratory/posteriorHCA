@@ -1,0 +1,5541 @@
+---
+title: "SAVI case study — personalised posteriorHCA baseline"
+subtitle: "STING signature against donor-matched healthy monocytic references"
+date: today
+date-format: "DD MMM YYYY"
+title-block-banner: true
+author:
+  - name: Chen Zhan
+    orcid: 0000-0002-4794-8339
+    email: chen.zhan@adelaide.edu.au
+    affiliation:
+      - id: sgc
+        name: SAiGENCI, The University of Adelaide
+format:
+  html:
+    theme: minty
+    df-print: paged
+    code-line-numbers: true
+    embed-resources: true
+    code-fold: true
+    code-fold-default: true
+    toc: true
+    toc-location: left
+    toc-title: "Contents"
+knitr:
+  opts_chunk:
+    message: false
+    warning: false
+editor: source
+abstract: |
+  This notebook treats the SAVI cohort as a personalised posteriorHCA baseline
+  case study. We take a literature-defined STING activation gene set, align it
+  to Ensembl gene ids present in the posterior HCA monocytic `targets` store,
+  optionally re-fit and compress `brms` models with `poco`, then compare each
+  SAVI pseudobulk against a donor-matched healthy monocytic counterfactual. The
+  statistical layer follows the HCC personalised baseline report: primary
+  posterior predictive count checks are paired with offset-centred log(mu)
+  tests from `posterior_linpred(transform = FALSE)`.
+params:
+  run_fits: false
+  n_components: 5
+  corr_threshold: 0.15
+  target_cell_type: "monocytic"
+  estimates_rds: "/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/dev/SAVI/data/SAVI_estimates_chunk.rds"
+  savi_pseudobulk_rds: "/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/dev/SAVI/data/GSE226598_SAVI_pseudobulk_Sample_CellType.rds"
+  savi_seurat_gz: "/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/dev/SAVI/data/GSE226598_SeuratObject_SAVI.rds.gz"
+  savi_sc_celltype: "17. Disease-associated monocytes"
+  pseudobulk_h5ad: "/home/a1237163/lab/Mangiola_ImmuneAtlas/zenodo/pseudobulk_se.h5ad"
+  composition_predict_rds: "/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/dev/SAVI/data/SAVI_composition_predict_res.rds"
+  sccomp_estimates_rds: "/home/a1237163/lab/Mangiola_ImmuneAtlas/taskforce_shared_folder/sccomp_on_cellNexus_1_0_12/estimates_age_decade___L3___disease_TRUE___immune_only_TRUE.rds"
+  model_store_root: "/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/HPC_posterior/NEW_CELL_TYPE"
+---
+
+# Introduction
+
+[STING](https://en.wikipedia.org/wiki/Stimulator_of_interferon_genes)-associated vasculopathy with onset in infancy (**SAVI**) is caused by gain-of-function mutations in *STING1*. De Cevins *et al.* performed single-cell RNA-seq of PBMCs from SAVI patients and healthy controls, and an IFN-β time-course in healthy PBMCs, to dissect IFN-dependent and IFN-independent programmes. They highlight disease-associated monocytes and propose a **21-gene** transcriptomic signature of STING activation that is **enriched for TNF-α / NF-κB–related biology** and **filtered against IFN-β–induced genes** in monocytes and DCs (Figure 6; Table S6).
+
+**Primary publication (open access):** de Cevins, C., *et al.* (2023). Single-cell RNA-sequencing of PBMCs from SAVI patients reveals disease-associated monocytes with elevated integrated stress response. *Cell Reports Medicine* **4**, 101333. <https://doi.org/10.1016/j.xcrm.2023.101333> — PMC: <https://pmc.ncbi.nlm.nih.gov/articles/PMC10772457/>.
+
+**Data:** scRNA-seq are deposited under superseries [GSE226601](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE226601): SAVI cohort [GSE226598](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE226598), IFN-β dataset [GSE226572](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE226572). Pseudobulk for this notebook is prepared in `dev/SAVI/data/prepare_data.R` from the GEO Seurat object.
+
+**Scope of this document:** We do **not** reproduce the paper’s within-study differential analysis or IFN-β filtering steps here. We use their **published 21-gene symbol list** (Table S6 / Figure 6) as biomarkers, fit or load **monocytic-lineage** reference models from the lab `targets` store, and test each **SAVI sample × cell type** pseudobulk against a **personalised healthy atlas baseline**. The primary test asks whether the observed count is surprising under `posterior_predict()` for a matched healthy monocyte; the secondary test asks whether the sample's offset-centred `log(mu)` differs from the matched healthy `posterior_linpred()` distribution.
+
+------------------------------------------------------------------------
+
+# Library setup
+
+```{r}
+#| label: setup
+# HPC / project R library (adjust if running elsewhere)
+.libPaths("/hpcfs/users/a1237163/R/x86_64-pc-linux-gnu-library/4.5")
+
+library(tibble)
+library(tidyr)
+library(dplyr)
+library(tidySummarizedExperiment)
+library(SummarizedExperiment)
+library(S4Vectors)
+library(AnnotationDbi)
+library(org.Hs.eg.db)
+library(tidybulk)
+library(glue)
+library(purrr)
+library(furrr)
+library(future)
+library(lobstr)
+library(posterior)
+library(progressr)
+library(brms)
+library(poco)
+library(tidyverse)
+library(ggplot2)
+library(forcats)
+library(patchwork)
+library(pheatmap)
+library(RColorBrewer)
+library(targets)
+library(stringr)
+library(Seurat)
+library(tidyseurat)
+```
+
+------------------------------------------------------------------------
+
+# STING activation signature (21 genes)
+
+The symbols below follow **Table S6** / Figure 6 in de Cevins *et al.* (2023). We map HGNC symbols to Ensembl via `org.Hs.eg.db` for overlap with the reference model feature space; **lncRNAs and some readthrough ids** may return `NA` here even when present in the single-cell count matrix — those rows are dropped from the `targets`-based extraction unless you supply Ensembl ids manually.
+
+```{r}
+#| label: sting-signature
+sting_signature_21 <- tibble(
+  gene = c(
+    "AC253572.2",
+    "ADRB2",
+    "ANKRD28",
+    "ANXA1",
+    "AQP9",
+    "AZIN1-AS1",
+    "IL1B",
+    "JARID2",
+    "KLF4",
+    "MIR4435-2HG",
+    "OTUD1",
+    "PLAUR",
+    "PTGS2",
+    "PTX3",
+    "SELENOK",
+    "TGIF1",
+    "TREM1",
+    "TSC22D2",
+    "ZBTB43",
+    "ZFP36L2",
+    "ZNF503"
+  )
+) |>
+  mutate(
+    .feature = AnnotationDbi::mapIds(
+      org.Hs.eg.db::org.Hs.eg.db,
+      keys = gene,
+      column = "ENSEMBL",
+      keytype = "SYMBOL",
+      multiVals = "first"
+    )
+  )
+
+sting_signature_21
+```
+
+------------------------------------------------------------------------
+
+# Reference model store (`targets`)
+
+Posterior HCA models live under `params$model_store_root`, in a subfolder named after the harmonised cell type (here `V1_monocytic` when `params$target_cell_type` is `"monocytic"`). Branch metadata encodes which Ensembl gene each `estimates_chunk_*` target belongs to (`Gene:___ENSG...___` in the recorded warning field).
+
+```{r}
+#| label: model-meta
+model_path <- file.path(
+  params$model_store_root,
+  paste0("V1_", params$target_cell_type)
+)
+
+model_meta <-
+  targets::tar_meta(
+    starts_with("estimates_chunk_"),
+    store = file.path(model_path, "_targets")
+  ) |>
+  dplyr::filter(type == "branch") |>
+  mutate(
+    .feature = stringr::str_extract(
+      warnings,
+      "(?<=Gene:___)ENSG\\d+(?=___)"
+    )
+  )
+
+# How many of the 21 (with successful SYMBOL→ENSEMBL map) appear in the store?
+n_sig_in_store <- sum(sting_signature_21$.feature %in% model_meta$.feature, na.rm = TRUE)
+n_sig_mapped <- sum(!is.na(sting_signature_21$.feature))
+
+tibble(
+  signature_genes = nrow(sting_signature_21),
+  mapped_to_ensembl = n_sig_mapped,
+  present_in_targets_store = n_sig_in_store
+)
+```
+
+------------------------------------------------------------------------
+
+# Fit and compress `brms` models (optional, heavy)
+
+Set **`params$run_fits: true`** when rendering (or in the YAML) to re-run extraction, posterior correlation partitioning, `poco::compress_brmsfit`, and `saveRDS`. By default this chunk is **skipped** and the next section loads `params$estimates_rds`.
+
+For each gene: read the precomputed `estimates_chunk` from disk (`tar_read_raw()` from the **targets** package, same usage as `dev/posteriorHCA_brms_fit_compression_test.qmd`), strip large environments from the fit, optionally compress with `poco`, and record layout / fidelity metrics.
+
+```{r}
+#| label: fit-sting-biomarkers
+#| eval: !expr params$run_fits
+
+# handlers(global = TRUE)
+handlers("progress")
+
+options(future.globals.maxSize = 5 * 1024^3)
+
+n_components <- params$n_components
+corr_threshold <- params$corr_threshold
+
+extract_one_biomarker <- function(ensg) {
+  estimates_chunk <-
+    model_meta |>
+    dplyr::filter(.feature == ensg) |>
+    dplyr::pull(name) |>
+    tar_read_raw(store = file.path(model_path, "_targets")) |>
+    dplyr::select(-tar_group) |>
+    mutate(
+      gene = sting_signature_21 |>
+        dplyr::filter(!is.na(.feature), .feature == ensg) |>
+        dplyr::pull(gene),
+      cell_type = params$target_cell_type,
+      brms_fit = purrr::map(brms_fit, poco::strip_brmsfit_envs)
+    )
+
+  fit_brms <- estimates_chunk$brms_fit[[1]]
+
+  posterior_cor <- poco::posterior_correlation(
+    fit_brms,
+    type = "correlation",
+    method = "pearson"
+  )
+  original_draws <- posterior::as_draws_matrix(fit_brms)
+
+  partition <- poco::partition_parameters_clusters(
+    posterior_cor,
+    threshold = corr_threshold,
+    min_size = 2L,
+    simple_output = FALSE
+  )
+
+  layout_tbl <- tibble(
+    n_components = n_components,
+    corr_threshold = corr_threshold,
+    n_blocks = length(partition$blocks),
+    block_size_max = if (length(partition$blocks)) max(lengths(partition$blocks)) else 0L,
+    block_size_med = if (length(partition$blocks)) {
+      as.integer(stats::median(lengths(partition$blocks)))
+    } else {
+      0L
+    },
+    n_remainder = length(partition$remainder)
+  )
+
+  compress_tic <- Sys.time()
+  compressed_blockwise <- tryCatch(
+    poco::compress_brmsfit(
+      brmsfit = fit_brms,
+      method = "mclust",
+      n_components = n_components,
+      partition = partition,
+      cluster_BPPARAM = 1L,
+      verbose = FALSE
+    ),
+    error = function(e) {
+      warning(
+        "compress_brmsfit failed: ",
+        conditionMessage(e),
+        call. = FALSE,
+        immediate. = TRUE
+      )
+      NULL
+    }
+  )
+  time_used <- as.numeric(difftime(Sys.time(), compress_tic, units = "secs"))
+
+  fid_blockwise <- if (is.null(compressed_blockwise)) {
+    NULL
+  } else {
+    tryCatch(
+      poco::evaluate_compression(
+        compressed_blockwise$compressed,
+        original_draws,
+        seed = 1L
+      ),
+      error = function(e) {
+        warning(
+          "evaluate_compression failed: ",
+          conditionMessage(e),
+          call. = FALSE,
+          immediate. = TRUE
+        )
+        NULL
+      }
+    )
+  }
+
+  if (is.null(compressed_blockwise)) {
+    layout_tbl <- layout_tbl |>
+      mutate(
+        compression_ok = FALSE,
+        time_used = NA_real_,
+        compression_rate = NA_real_,
+        energy_pct = NA_real_,
+        c2st_pct = NA_real_,
+        reproduction_pct = NA_real_
+      )
+  } else {
+    estimates_chunk$brms_fit_compressed <- list(compressed_blockwise)
+    layout_tbl <- layout_tbl |>
+      mutate(
+        compression_ok = TRUE,
+        time_used = time_used,
+        compression_rate =
+          as.numeric(lobstr::obj_size(compressed_blockwise)) /
+            as.numeric(lobstr::obj_size(fit_brms))
+      )
+  }
+
+  if (is.null(fid_blockwise)) {
+    layout_tbl <- layout_tbl |>
+      mutate(
+        energy_pct = NA_real_,
+        c2st_pct = NA_real_,
+        reproduction_pct = NA_real_
+      )
+  } else {
+    en <- fid_blockwise$metrics$energy$reproduction_pct
+    c2 <- fid_blockwise$metrics$c2st$reproduction_pct
+    layout_tbl <- layout_tbl |>
+      mutate(
+        energy_pct = if (is.null(en)) NA_real_ else en,
+        c2st_pct = if (is.null(c2)) NA_real_ else c2,
+        reproduction_pct = fid_blockwise$reproduction_pct
+      )
+  }
+
+  estimates_chunk |> tibble::add_column(layout_tbl)
+}
+
+sting_signature_21 |>
+  dplyr::filter(.feature %in% model_meta$.feature) |>
+  dplyr::pull(.feature) -> biomarkers
+
+with_progress({
+  p <- progressr::progressor(along = biomarkers)
+  sting_estimates_chunk <- purrr::map_dfr(biomarkers, function(ensg) {
+    p(sprintf("Processing %s", ensg))
+    extract_one_biomarker(ensg)
+  })
+})
+
+saveRDS(sting_estimates_chunk, params$estimates_rds)
+```
+
+------------------------------------------------------------------------
+
+# Loaded estimates (preview)
+
+```{r}
+#| label: load-estimates
+sting_estimates_chunk <- readRDS(params$estimates_rds)
+
+sting_estimates_chunk |>
+  dplyr::select(.feature, gene, compression_ok, compression_rate, reproduction_pct) |>
+  head(10)
+```
+
+------------------------------------------------------------------------
+
+# SAVI pseudobulk and healthy reference samples
+
+**SAVI object:** RDS produced by `prepare_data.R` — pseudobulk counts aggregated with Seurat `AggregateExpression` by **`Sample`** and **`CellType`** (see GEO object metadata for treatment and category).
+
+**Reference:** `pseudobulk_sample` from the same monocytic `targets` store is a `SummarizedExperiment` whose count assay is backed by the shared **Zenodo `pseudobulk_se.h5ad`** path. Rows with **`offset == 0`** are interpreted as healthy baseline samples for merge and posterior comparison (analogous to the breast epithelial reference in `pam50_toy_model.qmd`).
+
+**Merge (same idea as `pam50_toy_model.qmd` § merge-se):** `SAVI_pseudobulk_sobj` is a **Seurat** object whose **RNA assay counts are row-named by gene symbol**. We map symbols → **Ensembl** (deduplicated), build a `SummarizedExperiment` with **`sample_role = "savi_pseudobulk"`**, then **column-bind** with reference columns after intersecting **shared Ensembl ids** and **assay names**.
+
+```{r}
+#| label: merge-savi-reference
+
+
+SAVI_pseudobulk_sobj <- 
+  readRDS(params$savi_pseudobulk_rds) %>% 
+  filter(CellType == '17. Disease-associated monocytes')
+
+pseudobulk_sample <- targets::tar_read(
+  pseudobulk_sample,
+  store = file.path(model_path, "_targets")
+)
+
+# Point DelayedArray/HDF5 backend to the local h5ad-backed matrix (path may differ on HPC)
+pseudobulk_sample@assays@data@listData[["counts"]]@seed@seed@seed@filepath <-
+  params$pseudobulk_h5ad
+
+ref_sample <-
+  pseudobulk_sample |>
+  dplyr::filter(offset == 0)
+
+SummarizedExperiment::colData(ref_sample)$sample_role <- "reference"
+
+# --- SAVI: Seurat counts are rownames = gene symbols (see prepare_data.R) ---
+counts_sym <- as.matrix(
+  tryCatch(
+    SeuratObject::LayerData(SAVI_pseudobulk_sobj, assay = "RNA", layer = "counts"),
+    error = function(e) {
+      Seurat::GetAssayData(SAVI_pseudobulk_sobj, assay = "RNA", slot = "counts")
+    }
+  )
+)
+
+sym <- rownames(counts_sym)
+ensg <- AnnotationDbi::mapIds(
+  org.Hs.eg.db::org.Hs.eg.db,
+  keys = sym,
+  column = "ENSEMBL",
+  keytype = "SYMBOL",
+  multiVals = "first"
+)
+keep <- !is.na(ensg) & !duplicated(ensg)
+ensg <- ensg[keep]
+
+counts_ens <- counts_sym[keep, , drop = FALSE]
+rownames(counts_ens) <- ensg
+
+cd_savi <- as.data.frame(SAVI_pseudobulk_sobj@meta.data)
+rownames(cd_savi) <- colnames(counts_ens)
+cd_savi$sample_role <- "savi_pseudobulk"
+cd_savi$offset <- 0L
+if (!"cell_type_unified_ensemble" %in% names(cd_savi)) {
+  cd_savi$cell_type_unified_ensemble <- cd_savi$CellType
+}
+
+se_savi_ensembl <- SummarizedExperiment::SummarizedExperiment(
+  assays = list(counts = counts_ens),
+  colData = S4Vectors::DataFrame(cd_savi, row.names = colnames(counts_ens)),
+  rowData = S4Vectors::DataFrame(
+    gene_symbol = sym[keep],
+    row.names = ensg
+  )
+)
+
+# --- rbind-like merge of SE columns (intersect genes, union colData columns) ---
+merge_summarized_experiments <- function(...) {
+  ses <- list(...)
+  assay_names <- Reduce(intersect, lapply(ses, SummarizedExperiment::assayNames))
+  if (length(assay_names) == 0L) {
+    stop("No shared assays between SummarizedExperiment objects.")
+  }
+
+  genes <- Reduce(intersect, lapply(ses, rownames))
+  if (length(genes) == 0L) {
+    stop("No shared rownames between SummarizedExperiment objects.")
+  }
+
+  ses <- lapply(ses, function(se) se[genes, , drop = FALSE])
+
+  cds <- lapply(ses, function(se) as.data.frame(SummarizedExperiment::colData(se)))
+  all_nms <- Reduce(union, lapply(cds, names))
+  cds <- lapply(cds, function(cd) {
+    missing <- setdiff(all_nms, names(cd))
+    for (nm in missing) cd[[nm]] <- NA
+    cd[, all_nms, drop = FALSE]
+  })
+
+  # Dense coercion: SAVI counts are an ordinary matrix; reference counts are often
+  # HDF5Array/DelayedArray. Mixed cbind() hits bindCOLS() with no suitable method.
+  assays <- stats::setNames(
+    lapply(assay_names, function(an) {
+      mats <- lapply(ses, function(se) {
+        base::as.matrix(SummarizedExperiment::assay(se, an))
+      })
+      do.call(base::cbind, mats)
+    }),
+    assay_names
+  )
+
+  SummarizedExperiment::SummarizedExperiment(
+    assays = assays,
+    colData = S4Vectors::DataFrame(
+      do.call(rbind, cds),
+      row.names = unlist(lapply(ses, colnames), use.names = FALSE)
+    ),
+    rowData = SummarizedExperiment::rowData(ses[[1]])
+  )
+}
+
+se_monocytic <- merge_summarized_experiments(
+  se_savi_ensembl,
+  ref_sample
+)
+
+# Copy abundance flag from reference rowData when a single .abundant* column exists
+rd_ref <- as.data.frame(SummarizedExperiment::rowData(ref_sample))
+abundant_cols <- grep("^\\.abundant", names(rd_ref), value = TRUE)
+if (length(abundant_cols) >= 1L) {
+  ac <- abundant_cols[[1]]
+  SummarizedExperiment::rowData(se_monocytic)$.abundant <-
+    SummarizedExperiment::rowData(ref_sample)[rownames(se_monocytic), ac, drop = TRUE]
+}
+
+tibble::tibble(
+  n_features = nrow(se_monocytic),
+  n_samples = ncol(se_monocytic),
+  n_savi = sum(SummarizedExperiment::colData(se_monocytic)$sample_role == "savi_pseudobulk"),
+  n_reference = sum(SummarizedExperiment::colData(se_monocytic)$sample_role == "reference")
+)
+```
+
+```{r}
+#| label: scale-abundance
+ref_sample_name <-
+  se_monocytic %>%
+  colData() %>%
+  as.data.frame() %>%
+  filter(sample_role == "reference") %>%
+  rownames()
+
+se_monocytic <-
+  se_monocytic %>%
+  tidybulk::scale_abundance(
+    method = "TMMwsp",
+    reference_sample = ref_sample_name
+  ) %>%
+  mutate(offset = log(1 / multiplier))
+```
+
+------------------------------------------------------------------------
+
+# SAVI sample annotations (GEO [GSE226598](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE226598))
+
+Per-sample metadata (age, sex, 10x library batch, GSM accession) is taken from the GEO **series matrix** for GSE226598 (same fields as the GEO web “Sample characteristics” table). Each GSM links to its own GEO sample page.
+
+After `scale_abundance`, we add harmonised columns for downstream models:
+
+- **`tissue_groups`**: `"blood"` for SAVI pseudobulk columns only (PBMC in the study).
+- **`sex`**, **`age_years`**: GEO values; **C1**, **C2** (“Adult”) and **P5_STING** (“Ped”) get **imputed numeric years** (see below) so `age_decade` / models can run without `NA`.
+- **`age_decade`**: `as.character(ceiling(age_years / 10))` for SAVI once **`age_years`** is set (including imputed).
+- **`age_group`**: `"pediatric"` if `age_years < 18`, else `"adult"` (SAVI columns only).
+- **`age_decade_model`**: same as **`age_decade`** here (decade index from imputed / observed years).
+- **`age_imputed`**: `TRUE` when **`age_years`** was filled by the rule below, not present as a number in GEO.
+
+### Interpreting GEO **“Adult”** (C1, C2) and **“Ped”** (P5)
+
+The cohort in de Cevins *et al.* (2023) comprises **five SAVI patients** and **seven healthy controls** (Figure 1A; GEO [GSE226598](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE226598)). GEO lists **“age: Adult”** for **C1** / **C2** and **“age: Ped”** for **P5_STING** without a year.
+
+**Imputation used in this notebook** (rounded integers, documented for reproducibility):
+
+| Sample(s) | GEO label | Imputed `age_years` | Rationale |
+|-------------|-----------|---------------------|-----------|
+| **C1**, **C2** | Adult | **35** | Mean of adult controls with numeric ages in the same series (**C8** 36 y, **C9** 35 y), aligned with matched adult controls. |
+| **P5_STING** | Ped | **8** | Central value among other paediatric SAVI / control ages in GEO for this series (e.g. P1 4 y, P4 7–9 y, P6 8–10 y). |
+
+All other donors keep **GEO-reported** ages. **`age_imputed`** is `TRUE` only for **C1**, **C2**, and **P5_STING**. Replace these constants if you obtain exact ages from authors or supplements.
+
+- **`sex`**, **`assay_groups`**, **`assay_groups___altered`**: after GEO join, values are **harmonised to the Immune Atlas / posteriorHCA vocabulary** (same as `posteriorHCA::expr_predict()` / `Introduction` vignette: **`male`**, **`female`**, **`unknown`**; assay **`10x Genomics 3`**). GEO still uses **M**/**F** and Chromium **3′ v2**/**v3** batches in the series matrix; we do not keep the long Chromium strings in `colData` because the reference model was trained on short **`assay_groups`** labels.
+- **`geo_accession`**, **`geo_sample_url`**: GSM id and direct GEO sample link (same pattern as the series page [GSE226598](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE226598)).
+
+```{r}
+#| label: coldata-gse226598
+# Tibble from GEO series matrix GSE226598_series_matrix.txt.gz (Sample_title,
+# Sample_geo_accession, age / Sex / batch rows). Series:
+# https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE226598
+geo_tbl <- tibble::tribble(
+  ~Sample,              ~gse_accession, ~gse_age_years, ~gse_sex, ~gse_sting_batch,
+  "C10",                "GSM7079979",            10,  "M",  "STING2",
+  "C11",                "GSM7079980",            16,  "M",  "STING2",
+  "C1",                 "GSM7079981",            NA,  "M",  "STING3",
+  "C2",                 "GSM7079982",            NA,  "M",  "STING3",
+  "C7",                 "GSM7079983",             5,  "F",  "STING1",
+  "C8_aunt_P1_STING",   "GSM7079984",            36,  "F",  "STING1",
+  "C9_mother_P1_STING", "GSM7079985",            35,  "F",  "STING1",
+  "P1_STING_ht",        "GSM7079986",             4,  "F",  "STING1",
+  "P1_STING_ht_T",      "GSM7079987",             8,  "F",  "STING1",
+  "P1_STING_ht_T2",     "GSM7079988",             8,  "F",  "STING1",
+  "P2_STING_ht",        "GSM7079989",            31,  "M",  "STING1",
+  "P2_STING_ht_T",      "GSM7079990",            34,  "M",  "STING1",
+  "P4_STING_ht",        "GSM7079991",             7,  "M",  "STING2",
+  "P4_STING_ht_T",      "GSM7079992",             9,  "M",  "STING2",
+  "P5_STING",           "GSM7079993",            NA,  "M",  "STING3",
+  "P6_STING_ht",        "GSM7079994",             8,  "M",  "STING2",
+  "P6_STING_ht_T",      "GSM7079995",            10,  "M",  "STING2"
+) |>
+  dplyr::mutate(
+    # Raw GEO had NA for "Adult" (C1, C2) and "Ped" (P5); impute for modelling (see prose).
+    gse_age_imputed = is.na(.data$gse_age_years),
+    gse_age_years = dplyr::coalesce(
+      .data$gse_age_years,
+      dplyr::case_when(
+        .data$Sample %in% c("C1", "C2") ~ 35,
+        .data$Sample == "P5_STING" ~ 8,
+        TRUE ~ NA_real_
+      )
+    )
+  ) |>
+  dplyr::mutate(
+    gse_geo_sample_url = sprintf(
+      "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=%s",
+      .data$gse_accession
+    )
+  ) |>
+  dplyr::select(
+    "Sample",
+    "gse_accession",
+    "gse_geo_sample_url",
+    "gse_age_years",
+    "gse_age_imputed",
+    "gse_sex"
+  )
+
+cd <- SummarizedExperiment::colData(se_monocytic) |> as.data.frame()
+rn <- rownames(cd)
+
+if (!"Sample" %in% names(cd)) {
+  stop("colData must contain `Sample` (from SAVI pseudobulk) to join GEO metadata.")
+}
+
+if (!"tissue_groups" %in% names(cd)) {
+  cd$tissue_groups <- NA_character_
+}
+if (!"age_years" %in% names(cd)) {
+  cd$age_years <- NA_real_
+}
+if (!"sex" %in% names(cd)) {
+  cd$sex <- NA_character_
+}
+if (!"assay_groups" %in% names(cd)) {
+  cd$assay_groups <- NA_character_
+}
+if (!"assay_groups___altered" %in% names(cd)) {
+  cd$assay_groups___altered <- NA_character_
+}
+
+cd <- cd |>
+  dplyr::left_join(geo_tbl, by = "Sample")
+
+miss_geo <- is.na(cd$gse_accession) & cd$sample_role == "savi_pseudobulk"
+if (any(miss_geo, na.rm = TRUE)) {
+  warning(
+    "SAVI columns with no GEO match (check `Sample` vs GEO Sample_title): ",
+    paste(unique(cd$Sample[miss_geo]), collapse = ", ")
+  )
+}
+
+sex_ref <- if ("Sex" %in% names(cd)) cd$Sex else rep(NA_character_, nrow(cd))
+
+cd <- cd |>
+  dplyr::mutate(
+    tissue_groups = dplyr::if_else(
+      .data$sample_role == "savi_pseudobulk",
+      "blood",
+      .data$tissue_groups
+    ),
+    sex = dplyr::case_when(
+      .data$sample_role == "savi_pseudobulk" ~ .data$gse_sex,
+      TRUE ~ dplyr::coalesce(.data$sex, sex_ref)
+    ),
+    age_years = dplyr::case_when(
+      .data$sample_role == "savi_pseudobulk" ~ .data$gse_age_years,
+      TRUE ~ .data$age_years
+    ),
+    age_decade = dplyr::if_else(
+      is.na(.data$age_years),
+      NA_character_,
+      as.character(ceiling(.data$age_years / 10))
+    ),
+    age_group = dplyr::case_when(
+      .data$sample_role != "savi_pseudobulk" ~ NA_character_,
+      !is.na(.data$age_years) & .data$age_years < 18 ~ "pediatric",
+      !is.na(.data$age_years) & .data$age_years >= 18 ~ "adult",
+      TRUE ~ NA_character_
+    ),
+    age_decade_model = .data$age_decade,
+    age_imputed = dplyr::if_else(
+      .data$sample_role == "savi_pseudobulk",
+      .data$gse_age_imputed,
+      NA
+    ),
+    assay_groups = dplyr::if_else(
+      .data$sample_role == "savi_pseudobulk",
+      "10x Genomics 3",
+      .data$assay_groups
+    ),
+    assay_groups___altered = dplyr::case_when(
+      .data$sample_role == "savi_pseudobulk" ~ "10x Genomics 3",
+      !is.na(.data$assay_groups___altered) ~ .data$assay_groups___altered,
+      !is.na(.data$assay_groups) ~ .data$assay_groups,
+      TRUE ~ NA_character_
+    ),
+    geo_accession = dplyr::if_else(
+      .data$sample_role == "savi_pseudobulk",
+      .data$gse_accession,
+      NA_character_
+    ),
+    geo_sample_url = dplyr::if_else(
+      .data$sample_role == "savi_pseudobulk",
+      .data$gse_geo_sample_url,
+      NA_character_
+    )
+  ) |>
+  dplyr::select(
+    -dplyr::any_of(c(
+      "gse_accession",
+      "gse_geo_sample_url",
+      "gse_age_years",
+      "gse_age_imputed",
+      "gse_sex",
+      "Sex"
+    ))
+  ) |>
+  dplyr::mutate(
+    sex = dplyr::case_when(
+      is.na(.data$sex) ~ NA_character_,
+      .data$sex %in% c("male", "female", "unknown") ~ as.character(.data$sex),
+      toupper(trimws(as.character(.data$sex))) %in% c("M", "MALE") ~ "male",
+      toupper(trimws(as.character(.data$sex))) %in% c("F", "FEMALE") ~ "female",
+      TRUE ~ "unknown"
+    )
+  )
+
+SummarizedExperiment::colData(se_monocytic) <- S4Vectors::DataFrame(cd, row.names = rn)
+
+cd |>
+  dplyr::filter(.data$sample_role == "savi_pseudobulk") |>
+  dplyr::distinct(
+    .data$Sample,
+    .data$tissue_groups,
+    .data$sex,
+    .data$age_years,
+    .data$age_decade,
+    .data$age_group,
+    .data$age_decade_model,
+    .data$age_imputed,
+    .data$assay_groups,
+    .data$assay_groups___altered,
+    .data$geo_accession,
+    .data$geo_sample_url
+  ) |>
+  dplyr::arrange(.data$Sample)
+```
+
+GEO sample pages use the same host as the series record above; each **`geo_sample_url`** points to the corresponding GSM (e.g. patient / control library) listed under [GSE226598](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE226598).
+
+------------------------------------------------------------------------
+
+# Compare samples to personalised healthy baseline
+
+For each **STING signature gene** with a loadable compressed `brms` fit, we build
+a donor-level healthy counterfactual from the sample's known covariates:
+`disease_groups_altered = Normal`, observed `tissue_groups`, observed `offset`,
+and available age/sex/assay metadata. Unknown categorical fixed effects are
+marginalised over fitted atlas levels, and an unseen SAVI dataset level is drawn
+hierarchically.
+
+Following the HCC personalised baseline report, this section computes two
+**separate versions** of the result, each reported and discussed in its own
+section below:
+
+- **Version 1 — predictive count test:** `posterior_predict()` gives replicated
+  healthy counts including model uncertainty, zero-inflation, NB noise, and the
+  unseen dataset effect. The statistic is a **two-tailed posterior predictive
+  p-value** on the observed count.
+- **Version 2 — linear-predictor test:** `posterior_linpred(transform = FALSE)`
+  gives the NB count-component location. We subtract the sample offset to compare
+  on the shared **offset-zero** log-μ scale, then run a **z-test** between the
+  patient log-μ and the matched healthy **grand-mean** log-μ draws. The patient
+  side is a single count, so its log-scale SE uses the full delta-method variance
+  `sqrt(1 / (y + 0.5) + 1 / shape)`: the `+ 0.5` keeps `y = 0` finite (zeros are
+  tested, not dropped) and the overdispersion floor `1 / shape` reflects that one
+  draw cannot pin the sample mean more tightly than `sqrt(1 / shape)`. With one
+  observation this is a Gaussian companion to Version 1, not an independent,
+  more-powerful test.
+
+`posterior_epred()` is retained as an expected-count effect-size summary.
+Tail p-values, Welch p-values, and BH adjustments are exploratory because the
+tests span many genes and donors.
+
+We use **`re_formula = NULL`** with **`allow_new_levels = TRUE`** and
+**`sample_new_levels = "gaussian"`** so that:
+
+- `(1 + age_decade * sex + ethnicity_groups | tissue_groups)` keeps the trained **`blood`** slopes (tissue is observed).
+- `(1 | dataset_id_altered)` is marginalised: a fresh dataset intercept is drawn from `N(0, sd_dataset_id_altered)` for every posterior sample — the correct "new SAVI cohort, exchangeable with the atlas" null.
+- Unknown **`ethnicity_groups`** (and other NA covariates) are marginalised by expanding `newdata` over training-set levels. For the **predictive count** null we **pool** the full finite mixture (every grid profile × every posterior draw, equal weight, `marginalize_method = "pool"`), so single-donor covariate uncertainty stays in the count distribution; setting ethnicity to a single arbitrary value would bias the null toward that group. The **grand-mean log-μ** reference instead **averages** the grid per draw (`rowMeans`, `method = "mean"`) on purpose, to isolate uncertainty in the healthy *mean* rather than the full covariate spread.
+
+```{r}
+#| label: gene-deviation-fn
+#| cache: true
+
+# Categorical levels for any predictor pulled from the brms fit's training
+# frame. Used to expand newdata over training-set values when a covariate is
+# unknown for a test sample.
+fit_levels <- function(fit, var) {
+  d <- fit$data
+  if (is.null(d) || !var %in% names(d)) return(character(0))
+  v <- d[[var]]
+  lv <- if (is.factor(v)) levels(v) else sort(unique(as.character(v)))
+  lv[!is.na(lv) & nzchar(lv)]
+}
+
+# First non-NA, non-empty character among the inputs; NA_character_ otherwise.
+coalesce_char <- function(...) {
+  args <- list(...)
+  for (v in args) {
+    if (length(v) >= 1L) {
+      val <- as.character(v[[1L]])
+      if (!is.na(val) && nzchar(val)) return(val)
+    }
+  }
+  NA_character_
+}
+
+# Build a single-row newdata template from colData. Columns that may be NA are
+# left NA on purpose; build_newdata_grid() will marginalise over training-set
+# levels when the model uses them.
+newdata_for_sample <- function(se, sample_idx) {
+  cd <- SummarizedExperiment::colData(se)[sample_idx, , drop = FALSE] |>
+    as.data.frame()
+
+  tibble::tibble(
+    # Observed when available (may be NA -> marginalise).
+    age_decade = coalesce_char(
+      if ("age_decade_model" %in% names(cd)) cd$age_decade_model,
+      if ("age_decade" %in% names(cd)) cd$age_decade
+    ),
+    sex = coalesce_char(if ("sex" %in% names(cd)) cd$sex),
+    ethnicity_groups = coalesce_char(
+      if ("ethnicity_groups" %in% names(cd)) cd$ethnicity_groups,
+      if ("ethnicity_groups_imputed" %in% names(cd)) cd$ethnicity_groups_imputed
+    ),
+
+    # Counterfactual / required: forced to the healthy baseline so we test
+    # against the atlas null, not the sample's own disease label.
+    disease_groups_altered = "Normal",
+    # disease_groups_altered = coalesce_char(
+    #   if ("disease_groups_altered" %in% names(cd)) cd$disease_groups_altered,
+    #   if ("disease_groups___altered" %in% names(cd)) cd$disease_groups___altered,
+    #   "Normal"
+    # ),
+
+
+    # Required (atlas-defined / technical):
+    assay_groups_altered = coalesce_char(
+      if ("assay_groups_altered" %in% names(cd)) cd$assay_groups_altered,
+      if ("assay_groups___altered" %in% names(cd)) cd$assay_groups___altered,
+      if ("assay_groups" %in% names(cd)) cd$assay_groups,
+      "10x Genomics 3"
+    ),
+    tissue_groups = coalesce_char(if ("tissue_groups" %in% names(cd)) cd$tissue_groups),
+    offset = cd$offset[[1]]
+  )
+}
+
+# Expand a single-row newdata into a prediction grid:
+#   - required cols MUST be non-NA (e.g. tissue_groups)
+#   - marginalize_over cols that are NA in newdata AND present in fit$data
+#     are expanded across the training-set levels.
+#   - new_level_cols (e.g. dataset_id_altered) are stamped with a fresh unique
+#     placeholder so brms (allow_new_levels = TRUE, sample_new_levels =
+#     "gaussian") draws a new group effect from its posterior population.
+build_newdata_grid <- function(
+  fit,
+  newdata,
+  marginalize_over = c("sex", "age_decade", "ethnicity_groups", "assay_groups_altered"),
+  required = c("tissue_groups", "offset", "disease_groups_altered"),
+  new_level_cols = "dataset_id_altered",
+  new_level_tag = NULL
+) {
+  stopifnot(NROW(newdata) == 1L)
+  newdata <- tibble::as_tibble(newdata)
+
+  is_blank <- function(v) {
+    length(v) == 0L ||
+      is.na(v[[1L]]) ||
+      (is.character(v[[1L]]) && !nzchar(v[[1L]]))
+  }
+
+  fit_vars <- colnames(fit$data)
+
+  # Required columns must be present and non-empty.
+  for (col in required) {
+    if (!col %in% fit_vars) next
+    if (!col %in% names(newdata) || is_blank(newdata[[col]])) {
+      stop(sprintf(
+        "Required predictor `%s` is missing or empty in newdata.",
+        col
+      ))
+    }
+  }
+
+  # Decide which columns to expand.
+  to_expand <- character(0)
+  for (col in marginalize_over) {
+    if (!col %in% fit_vars) next
+    if (!col %in% names(newdata) || is_blank(newdata[[col]])) {
+      to_expand <- c(to_expand, col)
+    }
+  }
+
+  if (length(to_expand)) {
+    levels_list <- lapply(to_expand, function(col) fit_levels(fit, col))
+    names(levels_list) <- to_expand
+    keep <- vapply(levels_list, length, integer(1L)) > 0L
+    levels_list <- levels_list[keep]
+    to_expand <- names(levels_list)
+  }
+
+  if (length(to_expand)) {
+    grid <- do.call(tidyr::expand_grid, levels_list)
+    rest <- newdata[, setdiff(names(newdata), to_expand), drop = FALSE]
+    out <- dplyr::bind_cols(
+      rest[rep(1L, nrow(grid)), , drop = FALSE],
+      grid
+    )
+  } else {
+    out <- newdata
+  }
+
+  if (is.null(new_level_tag)) {
+    new_level_tag <- sprintf(
+      "__new__%d_%d",
+      as.integer(Sys.time()),
+      sample.int(1e6, 1L)
+    )
+  }
+  for (col in new_level_cols) {
+    if (col %in% fit_vars) out[[col]] <- new_level_tag
+  }
+
+  tibble::as_tibble(out)
+}
+
+# Collapse the covariate grid (columns) of a draws-by-grid matrix to a marginal
+# sample. "pool" keeps every grid profile x every draw (the full finite mixture,
+# used for the predictive count so single-donor covariate uncertainty is kept);
+# "mean" averages the grid per draw (the grand-mean parameter); "sample" thins to
+# one grid profile per draw.
+marginalize_draw_matrix <- function(draw_mat, method = c("sample", "mean", "pool")) {
+  method <- match.arg(method)
+  if (is.null(dim(draw_mat))) {
+    return(as.numeric(draw_mat))
+  }
+  if (ncol(draw_mat) <= 1L) {
+    return(as.numeric(draw_mat))
+  }
+
+  switch(
+    method,
+    sample = {
+      idx <- sample.int(ncol(draw_mat), nrow(draw_mat), replace = TRUE)
+      draw_mat[cbind(seq_len(nrow(draw_mat)), idx)]
+    },
+    mean = rowMeans(draw_mat),
+    pool = as.numeric(draw_mat)
+  )
+}
+
+# Helper used by the later predictive density audit sections. For a predictive
+# DENSITY we pool the full finite mixture (every posterior draw x every covariate
+# grid profile, equal weight) rather than thinning to one profile per draw. Both
+# target the same marginal predictive distribution, but pooling keeps all the mass
+# and gives a smoother density to plot.
+marginalize_predict_draws <- function(y_rep_mat) {
+  marginalize_draw_matrix(y_rep_mat, method = "pool")
+}
+
+# Welch t-test from two (mean, SE, n) summaries on the log(mu) scale.
+# Same definition as SAVI_case_study_universal_baseline.qmd for cross-report
+# consistency. The pooled SE combines the two standard errors, and the degrees
+# of freedom follow the Welch-Satterthwaite approximation.
+# NOTE: Version 2 below no longer uses this helper. With a single patient
+# observation the patient side is a fixed point estimate with a known
+# delta-method SE, so the Welch-Satterthwaite df (driven by n1 = 1) collapses to
+# ~1 and is meaningless; Version 2 uses an explicit z-test instead. This is kept
+# only for parity with the universal-baseline report.
+welch_t_from_mean_se <- function(mean1, se1, n1, mean2, se2, n2) {
+  n1 <- max(n1, 2)
+  n2 <- max(n2, 2)
+  sd1 <- se1 * sqrt(n1)
+  sd2 <- se2 * sqrt(n2)
+  se_diff <- sqrt(se1^2 + se2^2)
+  t_stat <- (mean1 - mean2) / se_diff
+  df <- (sd1^2 / n1 + sd2^2 / n2)^2 /
+    ((sd1^2 / n1)^2 / (n1 - 1) + (sd2^2 / n2)^2 / (n2 - 1))
+  p_value <- 2 * stats::pt(abs(t_stat), df = df, lower.tail = FALSE)
+  list(
+    mean_diff = mean1 - mean2,
+    se_diff = se_diff,
+    t = t_stat,
+    df = df,
+    p_value = p_value
+  )
+}
+
+# Personalised comparison of one observed count against a brms fit.
+#   - posterior_predict: calibrated new-observation predictive tails.
+#   - posterior_epred: expected-count effect-size summaries.
+#   - posterior_linpred(transform = FALSE): offset-centred log(mu) test.
+#   - re_formula = NULL: keep tissue_groups random slopes (observed level).
+#   - allow_new_levels + sample_new_levels = "gaussian": dataset_id_altered
+#     gets a new draw from its random-intercept population per posterior draw.
+#   - marginalize_over: unknown covariates are integrated by a finite mixture
+#     over the training-set grid.
+gene_deviation_from_fit <- function(
+  fit,
+  newdata,
+  obs,
+  cred_mass = 0.95,
+  alpha = 0.025,
+  marginalize_over = c("sex", "age_decade", "ethnicity_groups", "assay_groups_altered"),
+  required = c("tissue_groups", "offset", "disease_groups_altered"),
+  new_level_cols = "dataset_id_altered",
+  new_level_tag = NULL,
+  marginalize_method = "pool",
+  re_formula = NULL,
+  allow_new_levels = TRUE,
+  sample_new_levels = "gaussian",
+  seed = NULL
+) {
+  nd_grid <- build_newdata_grid(
+    fit,
+    newdata,
+    marginalize_over = marginalize_over,
+    required = required,
+    new_level_cols = new_level_cols,
+    new_level_tag = new_level_tag
+  )
+
+  if (!is.null(seed)) set.seed(seed)
+  predictive_mat <- brms::posterior_predict(
+    fit,
+    newdata = nd_grid,
+    summary = FALSE,
+    re_formula = re_formula,
+    allow_new_levels = allow_new_levels,
+    sample_new_levels = sample_new_levels
+  )
+
+  if (!is.null(seed)) set.seed(seed + 1L)
+  expected_mat <- brms::posterior_epred(
+    fit,
+    newdata = nd_grid,
+    summary = FALSE,
+    re_formula = re_formula,
+    allow_new_levels = allow_new_levels,
+    sample_new_levels = sample_new_levels
+  )
+
+  if (!is.null(seed)) set.seed(seed + 2L)
+  linpred_mat <- brms::posterior_linpred(
+    fit,
+    newdata = nd_grid,
+    summary = FALSE,
+    transform = FALSE,
+    re_formula = re_formula,
+    allow_new_levels = allow_new_levels,
+    sample_new_levels = sample_new_levels
+  )
+
+  if (!is.null(seed)) set.seed(seed + 3L)
+  shape_mat <- tryCatch(
+    brms::posterior_linpred(
+      fit,
+      newdata = nd_grid,
+      summary = FALSE,
+      dpar = "shape",
+      transform = TRUE,
+      re_formula = re_formula,
+      allow_new_levels = allow_new_levels,
+      sample_new_levels = sample_new_levels
+    ),
+    error = function(e) matrix(NA_real_, nrow = nrow(linpred_mat), ncol = ncol(linpred_mat))
+  )
+
+  # Predictive count and expected count: POOL the full finite mixture
+  # (marginalize_method = "pool" -> every grid profile x every draw, equal
+  # weight) so the count-scale null carries covariate-marginalisation +
+  # observation uncertainty.
+  if (!is.null(seed)) set.seed(seed + 4L)
+  y_rep <- marginalize_draw_matrix(predictive_mat, method = marginalize_method)
+  if (!is.null(seed)) set.seed(seed + 4L)
+  epred <- marginalize_draw_matrix(expected_mat, method = marginalize_method)
+
+  # Centre parameter (log mu): collapse the covariate grid with the GRAND MEAN
+  # per draw (rowMeans), NOT the sampled mixture. This yields the posterior of
+  # the healthy grand mean -- the tight null used in mu_test_report.qmd. Using
+  # the sampled mixture here would fold across-grid covariate spread into the SD
+  # and make the mean-parameter Welch test artificially insensitive.
+  linpred_grand <- marginalize_draw_matrix(linpred_mat, method = "mean")
+  shape <- marginalize_draw_matrix(shape_mat, method = "mean")
+
+  hpd <- if (requireNamespace("HDInterval", quietly = TRUE)) {
+    HDInterval::hdi(y_rep, credMass = cred_mass)
+  } else {
+    probs <- c((1 - cred_mass) / 2, 1 - (1 - cred_mass) / 2)
+    stats::quantile(y_rep, probs = probs, names = FALSE)
+  }
+
+  epred_interval <- stats::quantile(epred, probs = c(0.025, 0.975), names = FALSE)
+  offset_value <- newdata$offset[[1]]
+  healthy_log_mu <- linpred_grand - offset_value
+  healthy_log_mu_mean <- mean(healthy_log_mu, na.rm = TRUE)
+  healthy_log_mu_sd <- stats::sd(healthy_log_mu, na.rm = TRUE)
+  healthy_log_mu_interval <- stats::quantile(
+    healthy_log_mu,
+    probs = c(0.025, 0.975),
+    names = FALSE,
+    na.rm = TRUE
+  )
+  healthy_shape_median <- stats::median(shape, na.rm = TRUE)
+
+  predictive_p_upper <- (1 + sum(y_rep >= obs, na.rm = TRUE)) / (length(y_rep) + 1)
+  predictive_p_lower <- (1 + sum(y_rep <= obs, na.rm = TRUE)) / (length(y_rep) + 1)
+  predictive_percentile <- (
+    0.5 +
+      sum(y_rep < obs, na.rm = TRUE) +
+      0.5 * sum(y_rep == obs, na.rm = TRUE)
+  ) / (length(y_rep) + 1)
+  predictive_tail_p <- pmin(1, 2 * pmin(predictive_p_upper, predictive_p_lower))
+  predictive_z <- stats::qnorm(
+    pmin(
+      1 - 0.5 / (length(y_rep) + 1),
+      pmax(0.5 / (length(y_rep) + 1), predictive_percentile)
+    )
+  )
+
+  if (is.finite(obs)) {
+    # Single-observation log(mu) test (honest version).
+    #
+    # Continuity correction obs + 0.5 keeps log() finite at obs == 0 (so zero
+    # counts -- the most "lower-than-healthy" signal -- are tested instead of
+    # dropped) and matches the +0.5 convention used elsewhere in this report.
+    obs_c <- obs + 0.5
+    patient_log_mu <- log(obs_c) - offset_value
+    # Delta-method SE of a SINGLE NB observation on the log scale:
+    #   Var(log Y) ~= Var(Y) / mu^2 = (mu + mu^2 / shape) / mu^2 = 1/mu + 1/shape.
+    # The Poisson/aggregation part is 1 / obs_c; the overdispersion floor
+    # 1 / shape is the irreducible relative noise of a single draw and MUST be
+    # included. A single count can never pin this sample's mean rate tighter than
+    # ~sqrt(1 / shape), no matter how large obs is. (The earlier version dropped
+    # 1 / shape -- treating one overdispersed draw as a Poisson-precise estimate
+    # of the mean -- which was anti-conservative and made Version 2 spuriously
+    # "more sensitive" than the predictive test. With one observation the
+    # mean-parameter test cannot legitimately beat Version 1; including 1/shape
+    # is what makes it agree.)
+    overdisp_term <- if (is.finite(healthy_shape_median) && healthy_shape_median > 0) {
+      1 / healthy_shape_median
+    } else {
+      0
+    }
+    patient_log_mu_se <- sqrt(1 / obs_c + overdisp_term)
+    # The patient side is a fixed point estimate with a known (asymptotic
+    # delta-method) SE, so we use a z-test against the healthy grand-mean log(mu)
+    # posterior (mean healthy_log_mu_mean, SD healthy_log_mu_sd). welch_df is kept
+    # as the healthy-draw count for column continuity, but it is large enough that
+    # the t- and z-references coincide.
+    delta_log_mu_vs_healthy <- patient_log_mu - healthy_log_mu_mean
+    delta_log_mu_se <- sqrt(patient_log_mu_se^2 + healthy_log_mu_sd^2)
+    welch_t <- delta_log_mu_vs_healthy / delta_log_mu_se
+    welch_df <- max(length(healthy_log_mu) - 1L, 1L)
+    welch_p <- 2 * stats::pt(abs(welch_t), df = welch_df, lower.tail = FALSE)
+  } else {
+    patient_log_mu <- NA_real_
+    patient_log_mu_se <- NA_real_
+    delta_log_mu_vs_healthy <- NA_real_
+    delta_log_mu_se <- NA_real_
+    welch_t <- NA_real_
+    welch_df <- NA_real_
+    welch_p <- NA_real_
+  }
+
+  tibble::tibble(
+    observed_count = obs,
+    n_draws = length(y_rep),
+    healthy_median = median(y_rep),
+    healthy_mean = mean(y_rep),
+    healthy_hpd_lo = hpd[1],
+    healthy_hpd_hi = hpd[2],
+    healthy_predictive_median = median(y_rep),
+    healthy_predictive_lo = hpd[1],
+    healthy_predictive_hi = hpd[2],
+    healthy_epred_median = median(epred),
+    healthy_epred_lo = epred_interval[1],
+    healthy_epred_hi = epred_interval[2],
+    obs_percentile = predictive_percentile,
+    predictive_percentile = predictive_percentile,
+    p_above_healthy = predictive_p_upper,
+    p_below_healthy = predictive_p_lower,
+    predictive_p_upper = predictive_p_upper,
+    predictive_p_lower = predictive_p_lower,
+    posterior_tail_p = predictive_tail_p,
+    predictive_tail_p = predictive_tail_p,
+    predictive_z = predictive_z,
+    absolute_predictive_z = abs(predictive_z),
+    log2fc_vs_median = log2((obs + 1) / (median(y_rep) + 1)),
+    log2fc_vs_healthy_epred = log2((obs + 0.5) / (median(epred) + 0.5)),
+    patient_log_mu = patient_log_mu,
+    patient_log_mu_se = patient_log_mu_se,
+    healthy_log_mu_mean = healthy_log_mu_mean,
+    healthy_log_mu_sd = healthy_log_mu_sd,
+    healthy_log_mu_lo = healthy_log_mu_interval[1],
+    healthy_log_mu_hi = healthy_log_mu_interval[2],
+    healthy_nb_shape_median = healthy_shape_median,
+    delta_log_mu_vs_healthy = delta_log_mu_vs_healthy,
+    delta_log_mu_se = delta_log_mu_se,
+    welch_t = welch_t,
+    welch_df = welch_df,
+    welch_p = welch_p,
+    n_grid_rows = NROW(nd_grid),
+    marginalize_method = marginalize_method,
+    direction = dplyr::case_when(
+      predictive_p_upper < alpha ~ "higher_than_healthy",
+      predictive_p_lower < alpha ~ "lower_than_healthy",
+      TRUE ~ "consistent_with_healthy"
+    ),
+    linpred_direction = dplyr::case_when(
+      welch_p < 0.05 & delta_log_mu_vs_healthy > 0 ~ "higher_than_healthy",
+      welch_p < 0.05 & delta_log_mu_vs_healthy < 0 ~ "lower_than_healthy",
+      TRUE ~ "consistent_with_healthy"
+    )
+  )
+}
+```
+
+```{r}
+#| label: comparison-samples
+#| cache: true
+cd_mono <-
+  se_monocytic |>
+  SummarizedExperiment::colData() |>
+  as.data.frame() |>
+  tibble::rownames_to_column("sample")
+
+if (!length(ref_sample_name)) {
+  stop("No reference columns (offset == 0) found; cannot define comparison baseline.")
+}
+
+comparison_samples_tbl <- cd_mono |>
+  dplyr::filter(.data$sample_role == "savi_pseudobulk") |>
+  dplyr::bind_rows(
+    cd_mono |>
+      dplyr::filter(.data$sample == !!ref_sample_name[[1]])
+  ) |>
+  dplyr::distinct(.data$sample, .keep_all = TRUE) |>
+  dplyr::mutate(sample_idx = match(.data$sample, colnames(se_monocytic)))
+
+tibble::tibble(
+  n_genes_fit = sum(sting_estimates_chunk$compression_ok == TRUE, na.rm = TRUE),
+  n_comparison_samples = nrow(comparison_samples_tbl),
+  n_savi = sum(comparison_samples_tbl$sample_role == "savi_pseudobulk"),
+  n_reference = sum(comparison_samples_tbl$sample_role == "reference")
+)
+```
+
+```{r}
+#| label: predict-sting-vs-healthy
+#| cache: true
+#| cache.lazy: false
+#| dependson: ["gene-deviation-fn", "comparison-samples"]
+
+handlers("progress")
+
+sting_fit_rows <- sting_estimates_chunk |>
+  dplyr::filter(.data$compression_ok == TRUE) |>
+  dplyr::filter(lengths(.data$brms_fit_compressed) > 0L) |>
+  dplyr::filter(.data$.feature %in% rownames(se_monocytic))
+
+if (!nrow(sting_fit_rows)) {
+  stop("No compressed biomarker fits available; run with params$run_fits: true or fix estimates_rds.")
+}
+
+with_progress({
+  p <- progressr::progressor(steps = nrow(sting_fit_rows) * nrow(comparison_samples_tbl))
+
+  gene_deviation_all <- purrr::imap_dfr(
+    seq_len(nrow(sting_fit_rows)),
+    function(i, idx) {
+      chunk_row <- sting_fit_rows[i, ]
+      feature_id <- chunk_row$.feature
+      gene_sym <- chunk_row$gene
+      fit <- poco::reconstruct_brmsfit(chunk_row$brms_fit_compressed[[1]])
+
+      purrr::pmap_dfr(
+        comparison_samples_tbl |>
+          dplyr::select("sample", "sample_idx", "sample_role"),
+        function(sample, sample_idx, sample_role) {
+          p()
+
+          newdata <- newdata_for_sample(se_monocytic, sample_idx)
+          obs <-
+            SummarizedExperiment::assay(
+              se_monocytic[feature_id, sample_idx, drop = FALSE],
+              "counts"
+            ) |>
+            as.numeric()
+
+          gene_deviation_from_fit(
+            fit,
+            newdata,
+            obs,
+            new_level_tag = paste0("__savi__", as.character(sample)),
+            seed = 20250625L + 1000L * idx + sample_idx
+          ) |>
+            dplyr::mutate(
+              .feature = feature_id,
+              gene = gene_sym,
+              sample = as.character(sample),
+              sample_role = as.character(sample_role),
+              .before = "observed_count"
+            )
+        }
+      )
+    }
+  )
+})
+
+gene_deviation_all <- gene_deviation_all |>
+  tibble::as_tibble() |>
+  dplyr::select(tidyselect::where(\(x) !is.list(x)))
+
+if (!"sample_role" %in% colnames(gene_deviation_all)) {
+  gene_deviation_all <- gene_deviation_all |>
+    dplyr::left_join(
+      comparison_samples_tbl |>
+        dplyr::select("sample", "sample_role"),
+      by = "sample"
+    )
+}
+
+gene_deviation_all <- gene_deviation_all |>
+  dplyr::mutate(
+    q_value_global = stats::p.adjust(.data$predictive_tail_p, method = "BH"),
+    welch_q_value_global = stats::p.adjust(.data$welch_p, method = "BH")
+  ) |>
+  dplyr::group_by(.data$sample) |>
+  dplyr::mutate(
+    q_value_within_sample = stats::p.adjust(.data$predictive_tail_p, method = "BH"),
+    welch_q_value_within_sample = stats::p.adjust(.data$welch_p, method = "BH")
+  ) |>
+  dplyr::ungroup()
+
+linpred_tests <- gene_deviation_all |>
+  dplyr::filter(.data$sample_role == "savi_pseudobulk") |>
+  dplyr::select(
+    gene, .feature, sample, observed_count, patient_log_mu,
+    patient_log_mu_se, healthy_log_mu_mean, healthy_log_mu_sd,
+    healthy_log_mu_lo, healthy_log_mu_hi, delta_log_mu_vs_healthy,
+    delta_log_mu_se, welch_t, welch_df, welch_p,
+    welch_q_value_global, welch_q_value_within_sample, linpred_direction,
+    n_draws, n_grid_rows, marginalize_method
+  )
+
+personalised_sample_scores <- gene_deviation_all |>
+  dplyr::filter(.data$sample_role == "savi_pseudobulk") |>
+  dplyr::left_join(
+    cd_mono |>
+      dplyr::select(
+        "sample",
+        tidyselect::any_of(c("Sample", "Category", "Treatment"))
+      ) |>
+      dplyr::distinct(),
+    by = "sample"
+  ) |>
+  dplyr::group_by(.data$sample, .data$Sample, .data$Category) |>
+  dplyr::summarise(
+    n_genes = dplyr::n(),
+    mean_absolute_predictive_z = mean(.data$absolute_predictive_z, na.rm = TRUE),
+    mean_signed_predictive_z = mean(.data$predictive_z, na.rm = TRUE),
+    mean_abs_log2fc_vs_epred = mean(abs(.data$log2fc_vs_healthy_epred), na.rm = TRUE),
+    mean_absolute_welch_t = mean(abs(.data$welch_t), na.rm = TRUE),
+    mean_signed_welch_t = mean(.data$welch_t, na.rm = TRUE),
+    n_predictive_outside_95 = sum(.data$direction != "consistent_with_healthy"),
+    n_linpred_welch_p_lt_0_05 = sum(.data$welch_p < 0.05, na.rm = TRUE),
+    n_predictive_global_q_lt_0_05 = sum(.data$q_value_global < 0.05, na.rm = TRUE),
+    n_welch_global_q_lt_0_05 = sum(.data$welch_q_value_global < 0.05, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  dplyr::arrange(.data$Category, .data$Sample)
+
+gene_deviation_all
+```
+
+```{r}
+#| label: deviation-summary-sting
+gene_deviation_all |>
+  dplyr::count(.data$sample_role, .data$direction) |>
+  tidyr::pivot_wider(
+    names_from = "direction",
+    values_from = "n",
+    values_fill = 0L
+  )
+
+gene_deviation_savi <- gene_deviation_all |>
+  dplyr::filter(.data$sample_role == "savi_pseudobulk")
+
+gene_deviation_savi |>
+  dplyr::group_by(.data$gene) |>
+  dplyr::summarise(
+    n_higher = sum(.data$direction == "higher_than_healthy"),
+    n_lower = sum(.data$direction == "lower_than_healthy"),
+    n_consistent = sum(.data$direction == "consistent_with_healthy"),
+    .groups = "drop"
+  ) |>
+  dplyr::arrange(dplyr::desc(.data$n_higher + .data$n_lower))
+```
+
+The two statistical layers below are reported as **separate versions** because
+they answer different questions and use different reference distributions.
+
+------------------------------------------------------------------------
+
+# Version 1 — Predictive count test (two-tailed)
+
+**Primary test.** For each STING gene × SAVI sample we compare the observed
+pseudobulk count to the donor-matched healthy `posterior_predict()`
+distribution. Evidence is a **two-tailed posterior predictive p-value**
+(`predictive_tail_p`) with a finite-draw correction. A small value means the
+observed count is hard to generate from the personalised healthy counterfactual
+after propagating model, covariate-marginalisation, zero-inflation, NB sampling,
+and new-dataset uncertainty. `posterior_epred()` supplies an expected-count
+effect size (`log2fc_vs_healthy_epred`). BH q-values are exploratory.
+
+```{r}
+#| label: personalised-count-test-preview
+
+gene_deviation_savi |>
+  dplyr::select(
+    gene, sample, observed_count, healthy_predictive_median,
+    healthy_predictive_lo, healthy_predictive_hi, healthy_epred_median,
+    log2fc_vs_healthy_epred, predictive_percentile, predictive_tail_p,
+    q_value_global, direction
+  ) |>
+  dplyr::mutate(
+    dplyr::across(dplyr::where(is.numeric), ~round(.x, 4))
+  ) |>
+  dplyr::arrange(.data$sample, .data$gene)
+```
+
+```{r}
+#| label: plot-version1-predictive
+#| fig-width: 8
+#| fig-height: 4.5
+#| fig-align: center
+
+category_cols <- c(
+  CTRL = "#2ca25f",
+  SAVI = "#de2d26",
+  SAVI_treated = "#756bb1"
+)
+
+version1_df <- personalised_sample_scores |>
+  dplyr::mutate(
+    Category = factor(.data$Category, levels = names(category_cols))
+  )
+
+ggplot2::ggplot(
+  version1_df,
+  ggplot2::aes(
+    x = .data$Category,
+    y = .data$mean_absolute_predictive_z,
+    fill = .data$Category
+  )
+) +
+  ggplot2::geom_boxplot(
+    width = 0.55,
+    alpha = 0.30,
+    outlier.shape = NA,
+    colour = "grey35"
+  ) +
+  ggplot2::geom_jitter(
+    ggplot2::aes(colour = .data$Category),
+    width = 0.12,
+    size = 2.6,
+    show.legend = FALSE
+  ) +
+  ggplot2::scale_fill_manual(values = category_cols, drop = FALSE) +
+  ggplot2::scale_colour_manual(values = category_cols, drop = FALSE) +
+  ggplot2::labs(
+    x = NULL,
+    y = "Mean |predictive z| across STING genes",
+    title = "Version 1: predictive-count deviation by SAVI category",
+    subtitle = "Two-tailed posterior predictive test against the personalised healthy baseline"
+  ) +
+  ggplot2::theme_minimal(base_size = 11) +
+  ggplot2::theme(
+    legend.position = "none",
+    panel.grid.minor = ggplot2::element_blank()
+  )
+```
+
+**Reading Version 1.** This test is the conservative, calibrated check for a
+single observation: it includes count-level noise, so only counts that fall in
+the predictive tails are flagged. We expect **SAVI** samples to carry the largest
+mean `|predictive z|`, **CTRL** the smallest, and **SAVI_treated** intermediate.
+
+------------------------------------------------------------------------
+
+# Version 2 — Linear predictor test (single-observation z-test on log μ)
+
+**Secondary test.** Here the estimand is the NB **location parameter** μ on the
+log scale, with both sides centred to **offset = 0**.
+
+The **patient side** is a single observed count, summarised as
+`patient_log_mu = log(y + 0.5) − offset`. The `+ 0.5` continuity correction keeps
+the log finite at `y = 0`, so zero counts (often the strongest
+*lower-than-healthy* signal) are tested rather than silently dropped. Its
+log-scale standard error is the **full single-observation delta-method SE**
+
+$$\operatorname{SE}(\text{patient log}\,\mu) = \sqrt{\tfrac{1}{y + 0.5} + \tfrac{1}{\text{shape}}},$$
+
+because for a negative-binomial draw
+$\operatorname{Var}(\log Y) \approx \operatorname{Var}(Y)/\mu^2 = 1/\mu + 1/\text{shape}$.
+The first term is the Poisson/aggregation precision; the second is the
+**overdispersion floor**. Including `1 / shape` is essential: a single
+overdispersed count can never pin this sample's own mean rate tighter than
+`≈ sqrt(1 / shape)`, regardless of how large `y` is. (An earlier version of this
+report dropped `1 / shape` and treated `sqrt(1 / y)` as the patient-mean SE. That
+made the denominator artificially small and the test *spuriously* more sensitive
+than Version 1 — but with a single observation the mean-parameter test **cannot**
+legitimately be sharper than the predictive test, so the extra "significance" was
+an artifact. Restoring `1 / shape` makes Version 2 a calibrated Gaussian companion
+to Version 1 rather than a second, over-confident test.)
+
+The **healthy side** is the posterior of the **grand mean** from
+`posterior_linpred(transform = FALSE)`: per draw we average the matched covariate
+grid (`rowMeans`), giving `healthy_log_mu_mean` and a tight `healthy_log_mu_sd`
+(uncertainty in the healthy *mean*, not the full covariate-marginalised cloud —
+see `mu_test_report.qmd`).
+
+Because the patient side is a fixed point estimate with a known (asymptotic) SE,
+the two are combined in a **z-test** on the offset-centred log μ with denominator
+
+$$\operatorname{SE}_\text{diff} = \sqrt{\tfrac{1}{y + 0.5} + \tfrac{1}{\text{shape}} + \texttt{healthy\_log\_mu\_sd}^2},$$
+
+`welch_t = delta_log_mu_vs_healthy / SE_diff`, and `welch_p = 2·P(Z > |welch_t|)`.
+The `welch_*` column names are retained for continuity with the universal-baseline
+report; `welch_df` is reported as the healthy-draw count but is large enough that
+the t- and z-references coincide. The p-values remain exploratory.
+
+```{r}
+#| label: personalised-logmu-test-preview
+
+linpred_tests |>
+  dplyr::select(
+    gene, sample, observed_count, patient_log_mu, patient_log_mu_se,
+    healthy_log_mu_mean, healthy_log_mu_sd, delta_log_mu_vs_healthy,
+    welch_t, welch_df, welch_p, welch_q_value_global, linpred_direction
+  ) |>
+  dplyr::mutate(
+    dplyr::across(dplyr::where(is.numeric), ~round(.x, 4))
+  ) |>
+  dplyr::arrange(.data$sample, .data$gene)
+```
+
+```{r}
+#| label: plot-version2-welch
+#| fig-width: 8
+#| fig-height: 4.5
+#| fig-align: center
+
+version2_df <- personalised_sample_scores |>
+  dplyr::mutate(
+    Category = factor(.data$Category, levels = names(category_cols))
+  )
+
+ggplot2::ggplot(
+  version2_df,
+  ggplot2::aes(
+    x = .data$Category,
+    y = .data$mean_absolute_welch_t,
+    fill = .data$Category
+  )
+) +
+  ggplot2::geom_boxplot(
+    width = 0.55,
+    alpha = 0.30,
+    outlier.shape = NA,
+    colour = "grey35"
+  ) +
+  ggplot2::geom_jitter(
+    ggplot2::aes(colour = .data$Category),
+    width = 0.12,
+    size = 2.6,
+    show.legend = FALSE
+  ) +
+  ggplot2::scale_fill_manual(values = category_cols, drop = FALSE) +
+  ggplot2::scale_colour_manual(values = category_cols, drop = FALSE) +
+  ggplot2::labs(
+    x = NULL,
+    y = "Mean |Welch t| across STING genes",
+    title = "Version 2: log(mu) z-deviation by SAVI category",
+    subtitle = "Offset-centred posterior_linpred mean-parameter test"
+  ) +
+  ggplot2::theme_minimal(base_size = 11) +
+  ggplot2::theme(
+    legend.position = "none",
+    panel.grid.minor = ggplot2::element_blank()
+  )
+```
+
+**Reading Version 2.** This test targets the mean parameter on the log scale, but
+because the patient side is a single observation its SE carries the full NB
+delta-method variance (`1/(y + 0.5) + 1/shape`), including the overdispersion
+floor. It is therefore a Gaussian companion to the predictive count test and is
+expected to track Version 1 closely rather than out-resolve it; any large
+discrepancy between the two points to non-NB tail behaviour for that gene × sample.
+As in Version 1, the paper-consistent ordering is **SAVI > SAVI_treated > CTRL** on
+the mean `|Welch t|`.
+
+------------------------------------------------------------------------
+
+# Comparing the two versions
+
+The predictive-count test (Version 1) asks whether the **whole observed count**
+is surprising, including count-level noise; it is the calibrated reference test
+for one observation. The log μ test (Version 2) targets the **mean parameter** on
+the log scale, but its patient SE now carries the full single-observation NB
+variance (`1/(y + 0.5) + 1/shape`), so it is a Gaussian companion that should
+track Version 1 closely rather than out-resolve it. Genes and samples flagged by
+**both** versions are the most defensible personalised SAVI signals; a gene
+flagged by Version 2 but not Version 1 mostly reflects the Gaussian-vs-exact-NB
+tail approximation and should be treated with caution.
+
+```{r}
+#| label: personalised-sample-score-preview
+
+personalised_sample_scores |>
+  dplyr::mutate(
+    dplyr::across(dplyr::where(is.numeric), ~round(.x, 4))
+  )
+```
+
+```{r}
+#| label: plot-personalised-baseline-scores
+#| fig-width: 11
+#| fig-height: 5
+#| fig-align: center
+
+score_plot_df <- personalised_sample_scores |>
+  dplyr::mutate(
+    Category = factor(.data$Category, levels = names(category_cols))
+  ) |>
+  dplyr::select(
+    sample, Sample, Category,
+    `Predictive count (|z|)` = mean_absolute_predictive_z,
+    `log(mu) z (|z|)` = mean_absolute_welch_t
+  ) |>
+  tidyr::pivot_longer(
+    cols = c(`Predictive count (|z|)`, `log(mu) z (|z|)`),
+    names_to = "test_version",
+    values_to = "score"
+  )
+
+ggplot2::ggplot(
+  score_plot_df,
+  ggplot2::aes(
+    x = .data$Category,
+    y = .data$score,
+    fill = .data$Category,
+    colour = .data$Category
+  )
+) +
+  ggplot2::geom_boxplot(
+    width = 0.55,
+    alpha = 0.28,
+    outlier.shape = NA,
+    colour = "grey35"
+  ) +
+  ggplot2::geom_jitter(
+    width = 0.11,
+    height = 0,
+    size = 2.6,
+    show.legend = FALSE
+  ) +
+  ggplot2::facet_wrap(~test_version, scales = "free_y") +
+  ggplot2::scale_fill_manual(values = category_cols, drop = FALSE) +
+  ggplot2::scale_colour_manual(values = category_cols, drop = FALSE) +
+  ggplot2::labs(
+    x = NULL,
+    y = "Mean absolute deviation across STING genes",
+    title = "Two personalised-baseline test versions side by side",
+    subtitle = "Left: two-tailed predictive count test. Right: offset-centred log(mu) z-test."
+  ) +
+  ggplot2::theme_minimal(base_size = 11) +
+  ggplot2::theme(
+    legend.position = "none",
+    panel.grid.minor = ggplot2::element_blank(),
+    strip.text = ggplot2::element_text(face = "bold")
+  )
+```
+
+## E2 / E3 diagnostic: a tighter log μ null does not help a single observation
+
+**E2** claims the **mean-parameter** law (grand-mean log μ) is narrower than the
+**predictive count** law. That is true and is shown directly below (blue vs
+orange density). **E3** — that this narrowness should make the log μ test more
+powerful for a disease sample — does **not** follow, and the same figure shows
+why.
+
+A tail/rank p-value is invariant under the monotonic `log` transform, so
+"convert the count to log μ and read off its location" is *not* a new test: it is
+fully determined by **which null** we rank the single observation against.
+
+- **Predictive null** (orange, `log(posterior_predict)` carrying NB noise,
+  `1/shape`, and the unseen-dataset effect): ranking the observation here is
+  **identical to Version 1** (same ordering ⇒ same tail p).
+- **Mean-parameter null** (blue, grand-mean `posterior_linpred`): the observation
+  is a single draw from the *orange* law, so scoring it against the *blue* law is
+  **anti-conservative**. Below, `p(mean-null) ≪ p(pred-null)`, and even healthy
+  **CTRL** observations are pushed into the blue tails — i.e. specificity
+  collapses. This is exactly the artifact removed last session, re-expressed as a
+  tail test.
+
+```{r}
+#| label: e2e3-diagnostic-draws
+#| cache: true
+#| cache.lazy: false
+#| dependson: ["gene-deviation-fn", "predict-sting-vs-healthy"]
+
+# Overlay the NARROW mean-parameter null (grand-mean log mu) and the WIDE
+# predictive null (log of posterior_predict counts) on one offset-centred
+# log-rate axis, and show where a single observation lands under each.
+sample_category <- cd_mono |>
+  dplyr::select("sample", "Category") |>
+  dplyr::distinct()
+
+# One representative gene: strongest mean |predictive z| across SAVI samples.
+e2e3_example_gene <- gene_deviation_all |>
+  dplyr::left_join(sample_category, by = "sample") |>
+  dplyr::filter(.data$Category == "SAVI", is.finite(.data$predictive_z)) |>
+  dplyr::group_by(.data$gene) |>
+  dplyr::summarise(signal = mean(abs(.data$predictive_z), na.rm = TRUE), .groups = "drop") |>
+  dplyr::slice_max(.data$signal, n = 1, with_ties = FALSE) |>
+  dplyr::pull(.data$gene)
+
+# One example sample per Category. comparison_samples_tbl is derived from cd_mono,
+# so it already carries Category -- use it directly (joining sample_category here
+# would create Category.x / Category.y).
+e2e3_samples <- comparison_samples_tbl |>
+  dplyr::filter(.data$sample_role == "savi_pseudobulk") |>
+  dplyr::filter(!is.na(.data$Category)) |>
+  dplyr::group_by(.data$Category) |>
+  dplyr::slice(1) |>
+  dplyr::ungroup() |>
+  dplyr::select("sample", "sample_idx", "Category")
+
+logmu_vs_predictive_for_gene <- function(gene_sym, samples_tbl, ndraws = 400L) {
+  chunk_row <- sting_fit_rows |>
+    dplyr::filter(.data$gene == .env$gene_sym) |>
+    dplyr::slice(1)
+  fit <- poco::reconstruct_brmsfit(chunk_row$brms_fit_compressed[[1]])
+  feature_id <- chunk_row$.feature
+  # Compressed fits may hold fewer draws than requested; cap to what exists.
+  ndraws <- min(ndraws, brms::ndraws(fit))
+
+  purrr::pmap_dfr(
+    samples_tbl |> dplyr::select("sample", "sample_idx", "Category"),
+    function(sample, sample_idx, Category) {
+      newdata <- newdata_for_sample(se_monocytic, sample_idx)
+      nd_grid <- build_newdata_grid(
+        fit, newdata,
+        new_level_tag = paste0("__savi__", as.character(sample))
+      )
+      offset_value <- newdata$offset[[1]]
+
+      predictive_mat <- brms::posterior_predict(
+        fit, newdata = nd_grid, summary = FALSE,
+        re_formula = NULL, allow_new_levels = TRUE,
+        sample_new_levels = "gaussian", ndraws = ndraws
+      )
+      linpred_mat <- brms::posterior_linpred(
+        fit, newdata = nd_grid, summary = FALSE, transform = FALSE,
+        re_formula = NULL, allow_new_levels = TRUE,
+        sample_new_levels = "gaussian", ndraws = ndraws
+      )
+      shape_mat <- tryCatch(
+        brms::posterior_linpred(
+          fit, newdata = nd_grid, summary = FALSE, dpar = "shape",
+          transform = TRUE, re_formula = NULL, allow_new_levels = TRUE,
+          sample_new_levels = "gaussian", ndraws = ndraws
+        ),
+        error = function(e) {
+          matrix(NA_real_, nrow = nrow(linpred_mat), ncol = ncol(linpred_mat))
+        }
+      )
+
+      y_rep <- marginalize_predict_draws(predictive_mat)   # pooled predictive counts
+      mean_logmu <- rowMeans(linpred_mat) - offset_value   # narrow mean-parameter null
+      pred_logmu <- log(y_rep + 0.5) - offset_value        # wide predictive null (log scale)
+      shape_med <- stats::median(
+        marginalize_draw_matrix(shape_mat, method = "mean"),
+        na.rm = TRUE
+      )
+
+      obs <- SummarizedExperiment::assay(
+        se_monocytic[feature_id, sample_idx, drop = FALSE], "counts"
+      ) |>
+        as.numeric()
+      patient_log_mu <- log(obs + 0.5) - offset_value
+      overdisp <- if (is.finite(shape_med) && shape_med > 0) 1 / shape_med else 0
+      patient_se <- sqrt(1 / (obs + 0.5) + overdisp)
+
+      # Same observation, two different nulls.
+      p_mean_two <- 2 * min(
+        mean(mean_logmu >= patient_log_mu),
+        mean(mean_logmu <= patient_log_mu)
+      )
+      p_pred_two <- 2 * min(mean(y_rep >= obs), mean(y_rep <= obs))
+
+      dplyr::bind_rows(
+        tibble::tibble(null_type = "Mean parameter (log mu)", value = mean_logmu),
+        tibble::tibble(null_type = "Predictive (log count)", value = pred_logmu)
+      ) |>
+        dplyr::mutate(
+          gene = gene_sym,
+          sample = as.character(sample),
+          Category = as.character(Category),
+          observed_count = obs,
+          observed_log_rate = patient_log_mu,
+          patient_se = patient_se,
+          p_meannull_two = p_mean_two,
+          p_prednull_two = p_pred_two
+        )
+    }
+  )
+}
+
+e2e3_draws <- logmu_vs_predictive_for_gene(e2e3_example_gene, e2e3_samples)
+
+e2e3_labels <- e2e3_draws |>
+  dplyr::distinct(
+    gene, sample, Category, observed_count, observed_log_rate,
+    patient_se, p_meannull_two, p_prednull_two
+  )
+
+e2e3_labels
+```
+
+```{r}
+#| label: plot-e2e3-diagnostic
+#| fig-width: 11
+#| fig-height: 4.5
+#| fig-align: center
+
+e2e3_null_cols <- c(
+  "Mean parameter (log mu)" = "#2C7FB8",
+  "Predictive (log count)" = "#D95F0E"
+)
+
+e2e3_draws_plot <- e2e3_draws |>
+  dplyr::mutate(
+    Category = factor(.data$Category, levels = names(category_cols)),
+    panel = paste0(.data$Category, " | ", .data$sample)
+  )
+
+e2e3_labels_plot <- e2e3_labels |>
+  dplyr::mutate(
+    Category = factor(.data$Category, levels = names(category_cols)),
+    panel = paste0(.data$Category, " | ", .data$sample),
+    lab = sprintf(
+      "obs = %g\np(mean-null) = %.2g\np(pred-null) = %.2g",
+      .data$observed_count, .data$p_meannull_two, .data$p_prednull_two
+    )
+  )
+
+ggplot2::ggplot(
+  e2e3_draws_plot,
+  ggplot2::aes(x = .data$value, fill = .data$null_type, colour = .data$null_type)
+) +
+  ggplot2::geom_density(alpha = 0.30) +
+  ggplot2::geom_vline(
+    data = e2e3_labels_plot,
+    ggplot2::aes(xintercept = .data$observed_log_rate),
+    linetype = 2, colour = "black", inherit.aes = FALSE
+  ) +
+  ggplot2::geom_text(
+    data = e2e3_labels_plot,
+    ggplot2::aes(x = -Inf, y = Inf, label = .data$lab),
+    hjust = -0.05, vjust = 1.2, size = 3, inherit.aes = FALSE
+  ) +
+  ggplot2::facet_wrap(~panel, scales = "free", ncol = 3) +
+  ggplot2::scale_fill_manual(values = e2e3_null_cols) +
+  ggplot2::scale_colour_manual(values = e2e3_null_cols) +
+  ggplot2::labs(
+    x = "Offset-centred log rate (log μ at offset 0)",
+    y = "Density",
+    fill = NULL, colour = NULL,
+    title = sprintf(
+      "E2/E3 diagnostic for %s: mean-parameter null vs predictive null",
+      e2e3_example_gene
+    ),
+    subtitle = paste0(
+      "Dashed line = observed log rate. The mean-parameter null (blue) is far ",
+      "narrower (E2), but the observation is a draw from the predictive null ",
+      "(orange). Ranking it against the blue null over-states significance ",
+      "(p mean-null ≪ p pred-null = Version 1)."
+    )
+  ) +
+  ggplot2::theme_minimal(base_size = 11) +
+  ggplot2::theme(
+    legend.position = "top",
+    panel.grid.minor = ggplot2::element_blank()
+  )
+```
+
+**Reading the diagnostic.** The blue (mean-parameter) density is much tighter than
+the orange (predictive) density — **E2 confirmed**. But the dashed observed value
+sits in the body of the *orange* law: that is the law a single count is actually
+drawn from. `p(pred-null)` (= Version 1) treats it correctly; `p(mean-null)`
+divides the same distance by the artificially small blue width and so reports a
+much smaller p, including for CTRL. This is **E3 as a test-construction error**,
+not evidence that the log μ test should win. The honest options remain: rank
+against the predictive law (≡ Version 1) or add the `1/shape` floor back onto the
+patient point (the Version 2 z-test) — the two agree by construction.
+
+## Experiment: dataset random effect IN vs OUT (both tests) + CTRL calibration
+
+The CSV audit of `gene_deviation_all` showed the log μ null width
+(`healthy_log_mu_sd`, median ≈ 1.2 on the log scale) is **dominated by the
+unseen-dataset random intercept** `(1 | dataset_id_altered)`, not by epistemic
+uncertainty about the atlas mean — the same component the comprehensive baseline
+also injects (`re_formula = NULL`, `sample_new_levels = "gaussian"`). That single
+term is why even ~70–300× elevations (IL1B, PTX3) are called *consistent*.
+
+This section runs **both** tests with the dataset RE **in** (current) and **out**
+(dropped from `re_formula`, keeping the tissue RE), and reports the **CTRL
+false-positive rate** alongside the SAVI sensitivity. The dataset RE is a
+**cohort-level** quantity shared by SAVI *and* CTRL samples, so dropping it from
+the null only removes a *real* confound if the SAVI cohort's healthy baseline
+equals the atlas mean. The CTRL false-positive rate is the direct test of that
+assumption. The **CTRL-calibrated** mean test is the symmetric alternative:
+centre each SAVI sample on the cohort's own CTRL grand mean (removing the dataset
+offset from *both* sides), which is the valid way to "remove the same thing from
+the test sample."
+
+```{r}
+#| label: dataset-re-experiment
+#| cache: true
+#| cache.lazy: false
+#| dependson: ["gene-deviation-fn", "predict-sting-vs-healthy"]
+
+# re_formula keeping every group-level term EXCEPT the dataset random intercept.
+re_formula_drop_group <- function(fit, drop_group = "dataset_id_altered") {
+  fstr <- paste(deparse(stats::formula(fit$formula)), collapse = " ")
+  bars <- regmatches(fstr, gregexpr("\\([^|()]*\\|[^()]*\\)", fstr))[[1]]
+  keep <- bars[!grepl(drop_group, bars, fixed = TRUE)]
+  if (!length(keep)) return(NA)
+  stats::as.formula(paste("~", paste(keep, collapse = " + ")))
+}
+
+# Full deviation pass for a given re_formula. re_formula = "drop_dataset" derives
+# the no-dataset formula per fit; otherwise the value is passed through verbatim.
+run_deviation_grid <- function(re_formula = NULL) {
+  purrr::imap_dfr(
+    seq_len(nrow(sting_fit_rows)),
+    function(i, idx) {
+      chunk_row <- sting_fit_rows[i, ]
+      feature_id <- chunk_row$.feature
+      gene_sym <- chunk_row$gene
+      fit <- poco::reconstruct_brmsfit(chunk_row$brms_fit_compressed[[1]])
+      rf <- if (is.character(re_formula) && identical(re_formula, "drop_dataset")) {
+        re_formula_drop_group(fit, "dataset_id_altered")
+      } else {
+        re_formula
+      }
+      purrr::pmap_dfr(
+        comparison_samples_tbl |>
+          dplyr::select("sample", "sample_idx", "sample_role"),
+        function(sample, sample_idx, sample_role) {
+          newdata <- newdata_for_sample(se_monocytic, sample_idx)
+          obs <- SummarizedExperiment::assay(
+            se_monocytic[feature_id, sample_idx, drop = FALSE], "counts"
+          ) |>
+            as.numeric()
+          gene_deviation_from_fit(
+            fit, newdata, obs,
+            new_level_tag = paste0("__savi__", as.character(sample)),
+            re_formula = rf,
+            seed = 20250625L + 1000L * idx + sample_idx
+          ) |>
+            dplyr::mutate(
+              .feature = feature_id, gene = gene_sym,
+              sample = as.character(sample),
+              sample_role = as.character(sample_role),
+              .before = "observed_count"
+            )
+        }
+      )
+    }
+  ) |>
+    tibble::as_tibble() |>
+    dplyr::select(tidyselect::where(\(x) !is.list(x)))
+}
+
+# Dataset RE OUT: drop (1|dataset_id_altered) from BOTH the predictive and the
+# log-mu computations. (RE IN = the existing gene_deviation_all.)
+gene_deviation_out <- run_deviation_grid("drop_dataset")
+```
+
+```{r}
+#| label: dataset-re-experiment-summary
+
+sample_cat <- cd_mono |>
+  dplyr::select("sample", "Category") |>
+  dplyr::distinct()
+
+summarise_variant <- function(df, variant) {
+  df |>
+    dplyr::filter(.data$sample_role == "savi_pseudobulk") |>
+    dplyr::left_join(sample_cat, by = "sample") |>
+    dplyr::filter(!is.na(.data$Category)) |>
+    dplyr::group_by(.data$Category) |>
+    dplyr::summarise(
+      n = dplyr::n(),
+      pct_higher_predictive = 100 * mean(.data$direction == "higher_than_healthy"),
+      pct_higher_logmu = 100 * mean(.data$linpred_direction == "higher_than_healthy"),
+      .groups = "drop"
+    ) |>
+    dplyr::mutate(dataset_RE = variant, .before = 1)
+}
+
+# CTRL rows are expected consistent -> pct_higher there is the FALSE-POSITIVE rate.
+# SAVI rows -> pct_higher is sensitivity.
+dataset_re_compare <- dplyr::bind_rows(
+  summarise_variant(gene_deviation_all, "IN (current)"),
+  summarise_variant(gene_deviation_out, "OUT (dropped)")
+) |>
+  dplyr::arrange(.data$Category, .data$dataset_RE)
+
+dataset_re_compare
+```
+
+```{r}
+#| label: ctrl-calibrated-logmu
+
+# patient_log_mu / its SE do not depend on re_formula, so reuse the current run.
+logmu_tbl <- gene_deviation_all |>
+  dplyr::select(
+    gene, sample, sample_role, observed_count,
+    patient_log_mu, patient_log_mu_se, healthy_nb_shape_median
+  ) |>
+  dplyr::left_join(sample_cat, by = "sample")
+
+# Cohort CTRL reference per gene (the within-cohort healthy baseline).
+ctrl_ref <- logmu_tbl |>
+  dplyr::filter(.data$Category == "CTRL", is.finite(.data$patient_log_mu)) |>
+  dplyr::group_by(.data$gene) |>
+  dplyr::summarise(
+    ctrl_mean = mean(.data$patient_log_mu),
+    ctrl_sd = stats::sd(.data$patient_log_mu),
+    n_ctrl = dplyr::n(),
+    .groups = "drop"
+  )
+
+# SAVI / treated vs their own cohort CTRL mean: removes the dataset offset from
+# BOTH sides. Single SAVI observation (patient SE) vs CTRL mean (sd / sqrt(n)).
+ctrl_calibrated <- logmu_tbl |>
+  dplyr::filter(
+    .data$Category %in% c("SAVI", "SAVI_treated"),
+    is.finite(.data$patient_log_mu)
+  ) |>
+  dplyr::left_join(ctrl_ref, by = "gene") |>
+  dplyr::mutate(
+    delta_cal = .data$patient_log_mu - .data$ctrl_mean,
+    se_cal = sqrt(
+      .data$patient_log_mu_se^2 + .data$ctrl_sd^2 / pmax(.data$n_ctrl, 1)
+    ),
+    t_cal = .data$delta_cal / .data$se_cal,
+    df_cal = pmax(.data$n_ctrl - 1, 1),
+    p_cal = 2 * stats::pt(abs(.data$t_cal), df = .data$df_cal, lower.tail = FALSE),
+    higher_cal = .data$p_cal < 0.05 & .data$delta_cal > 0
+  )
+
+ctrl_calibrated |>
+  dplyr::group_by(.data$Category) |>
+  dplyr::summarise(
+    n = dplyr::n(),
+    median_n_ctrl = stats::median(.data$n_ctrl, na.rm = TRUE),
+    pct_higher_ctrl_calibrated = 100 * mean(.data$higher_cal, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+**Reading the experiment.** In `dataset_re_compare`, compare the `IN` vs `OUT`
+rows: dropping the dataset RE should sharply raise SAVI `pct_higher` (more power)
+**but also raise the CTRL `pct_higher`** (false positives) if the cohort sits
+above the atlas. If CTRL false positives jump, the unconfounded read is the
+**CTRL-calibrated** table: SAVI / SAVI_treated elevation measured against the
+cohort's own controls, which is the statistically clean "mean test with the
+dataset effect removed from both sides." Watch `median_n_ctrl` — with few
+controls the calibrated SE is noisy and the test is conservative.
+
+------------------------------------------------------------------------
+
+# Evaluate deviations against the published STING signature
+
+De Cevins *et al.* (2023) define a **21-gene STING-activation module** that is **up in disease-associated monocytes from SAVI patients relative to healthy controls** in the same cohort (Figure 6; Table S6)—after removing IFN-β–inducible genes. Our posterior test asks a **different** question: whether each pseudobulk count lies above the **Immune Atlas healthy predictive** distribution for monocytic cells, given donor metadata. We still expect:
+
+| `Category` (study cohort) | Paper-consistent expectation for signature genes |
+|---------------------------|---------------------------------------------------|
+| **`SAVI`** | Mostly **`higher_than_healthy`** vs atlas baseline |
+| **`CTRL`** | Mostly **`consistent_with_healthy`** (study controls without STING activation) |
+| **`SAVI_treated`** | Intermediate—treatment samples often move toward baseline (we score **`consistent_with_healthy`** as the nominal match, same as controls) |
+
+Sample **`Category`** comes from the GEO Seurat object (`prepare_data.R`) and is carried in **`colData(se_monocytic)`** (`CTRL`, `SAVI`, `SAVI_treated`; reference columns are **`NA`**).
+
+**Two versions.** Deviation is evaluated separately for each test method, both at a **0.05 p-value threshold**:
+
+- **Version 1 (predictive count):** a gene × sample is `higher_than_healthy` / `lower_than_healthy` when the two-tailed posterior predictive p-value `predictive_tail_p < 0.05` (sign from the predictive percentile), otherwise `consistent_with_healthy`.
+- **Version 2 (log μ z-test):** a gene × sample is `higher_than_healthy` / `lower_than_healthy` when `welch_p < 0.05` (sign from the offset-centred log μ difference), otherwise `consistent_with_healthy`.
+
+```{r}
+#| label: sting-literature-eval
+sample_annotations <- cd_mono |>
+  dplyr::filter(.data$sample_role == "savi_pseudobulk") |>
+  dplyr::select(
+    "sample",
+    "Sample",
+    "Category",
+    tidyselect::any_of("Treatment")
+  ) |>
+  dplyr::distinct() |>
+  dplyr::mutate(
+    Category = factor(
+      .data$Category,
+      levels = c("CTRL", "SAVI", "SAVI_treated")
+    )
+  )
+
+category_expected <- tibble::tribble(
+  ~Category,        ~expected_deviation,
+  "CTRL",           "consistent_with_healthy",
+  "SAVI",           "higher_than_healthy",
+  "SAVI_treated",   "consistent_with_healthy"
+) |>
+  dplyr::mutate(Category = factor(.data$Category, levels = levels(sample_annotations$Category)))
+
+# Both deviation directions are already classified at p < 0.05 upstream:
+#   `direction`         = predictive count (predictive_tail_p < 0.05)
+#   `linpred_direction` = log(mu) z-test (welch_p < 0.05)
+evaluate_signature <- function(df, direction_col) {
+  df |>
+    dplyr::left_join(sample_annotations, by = "sample") |>
+    dplyr::left_join(category_expected, by = "Category") |>
+    dplyr::mutate(
+      eval_direction = .data[[direction_col]],
+      deviation_score = dplyr::case_when(
+        .data$eval_direction == "higher_than_healthy" ~ 1L,
+        .data$eval_direction == "lower_than_healthy" ~ -1L,
+        TRUE ~ 0L
+      ),
+      matches_literature = dplyr::case_when(
+        is.na(.data$expected_deviation) ~ NA,
+        .data$expected_deviation == .data$eval_direction ~ TRUE,
+        TRUE ~ FALSE
+      ),
+      signature_up = .data$eval_direction == "higher_than_healthy"
+    )
+}
+
+summarise_by_sample <- function(eval_df) {
+  eval_df |>
+    dplyr::group_by(.data$sample, .data$Sample, .data$Category) |>
+    dplyr::summarise(
+      n_genes = dplyr::n(),
+      n_higher = sum(.data$signature_up),
+      n_lower = sum(.data$eval_direction == "lower_than_healthy"),
+      n_consistent = sum(.data$eval_direction == "consistent_with_healthy"),
+      pct_higher = 100 * .data$n_higher / .data$n_genes,
+      pct_match = 100 * mean(.data$matches_literature, na.rm = TRUE),
+      mean_log2fc = mean(.data$log2fc_vs_median, na.rm = TRUE),
+      signature_score = mean(.data$deviation_score, na.rm = TRUE),
+      .groups = "drop"
+    )
+}
+
+summarise_agreement <- function(eval_df) {
+  eval_df |>
+    dplyr::filter(!is.na(.data$Category), !is.na(.data$expected_deviation)) |>
+    dplyr::group_by(.data$Category, .data$expected_deviation) |>
+    dplyr::summarise(
+      n_tests = dplyr::n(),
+      n_match = sum(.data$matches_literature, na.rm = TRUE),
+      pct_match = 100 * .data$n_match / .data$n_tests,
+      pct_higher = 100 * mean(.data$signature_up),
+      pct_consistent = 100 * mean(.data$eval_direction == "consistent_with_healthy"),
+      .groups = "drop"
+    )
+}
+
+# Version 1 — predictive count (two-tailed p < 0.05). Kept as the primary object
+# consumed by the downstream biomarker, IL1B, and ADRB2 sections.
+gene_deviation_eval <- evaluate_signature(gene_deviation_savi, "direction")
+signature_by_sample <- summarise_by_sample(gene_deviation_eval)
+agreement_by_category <- summarise_agreement(gene_deviation_eval)
+
+# Version 2 — log(mu) z-test (welch_p < 0.05).
+gene_deviation_eval_linpred <- evaluate_signature(gene_deviation_savi, "linpred_direction")
+signature_by_sample_linpred <- summarise_by_sample(gene_deviation_eval_linpred)
+agreement_by_category_linpred <- summarise_agreement(gene_deviation_eval_linpred)
+
+method_levels <- c(
+  "Predictive count (p < 0.05)",
+  "log(mu) z-test (p < 0.05)"
+)
+
+signature_by_sample_both <- dplyr::bind_rows(
+  signature_by_sample |> dplyr::mutate(method = method_levels[[1]]),
+  signature_by_sample_linpred |> dplyr::mutate(method = method_levels[[2]])
+) |>
+  dplyr::mutate(method = factor(.data$method, levels = method_levels))
+
+agreement_both <- dplyr::bind_rows(
+  agreement_by_category |> dplyr::mutate(method = method_levels[[1]], .before = 1),
+  agreement_by_category_linpred |> dplyr::mutate(method = method_levels[[2]], .before = 1)
+) |>
+  dplyr::mutate(method = factor(.data$method, levels = method_levels))
+
+agreement_both
+```
+
+The plots below show both versions side by side (faceted by method). The
+downstream biomarker-quality, *IL1B*, and *ADRB2* falsification analyses use
+**Version 1 (predictive count)** as the primary deviation call; Version 2 is the
+log μ z-test companion for the same 0.05 threshold.
+
+```{r}
+#| label: plot-signature-by-category
+#| fig-width: 12
+#| fig-height: 9
+#| fig-align: center
+
+category_cols <- c(
+  CTRL = "#2ca25f",
+  SAVI = "#de2d26",
+  SAVI_treated = "#756bb1"
+)
+
+p_pct_higher <- ggplot2::ggplot(
+  signature_by_sample_both,
+  ggplot2::aes(
+    x = .data$Category,
+    y = .data$pct_higher,
+    fill = .data$Category
+  )
+) +
+  ggplot2::geom_boxplot(
+    outlier.shape = NA,
+    alpha = 0.35,
+    width = 0.55,
+    colour = "grey30"
+  ) +
+  ggplot2::geom_jitter(
+    ggplot2::aes(colour = .data$Category),
+    width = 0.12,
+    size = 2.5,
+    show.legend = FALSE
+  ) +
+  ggplot2::facet_wrap(~method) +
+  ggplot2::scale_fill_manual(values = category_cols) +
+  ggplot2::scale_colour_manual(values = category_cols) +
+  ggplot2::labs(
+    x = NULL,
+    y = "% signature genes higher than atlas baseline",
+    title = "STING signature enrichment by study Category",
+    subtitle = "Both versions at p < 0.05. Paper: up in SAVI monocytes vs controls (Figure 6)"
+  ) +
+  ggplot2::theme_minimal(base_size = 11) +
+  ggplot2::theme(
+    legend.position = "none",
+    strip.text = ggplot2::element_text(face = "bold")
+  )
+
+p_signature_score <- ggplot2::ggplot(
+  signature_by_sample_both,
+  ggplot2::aes(
+    x = .data$Category,
+    y = .data$signature_score,
+    fill = .data$Category
+  )
+) +
+  ggplot2::geom_boxplot(
+    outlier.shape = NA,
+    alpha = 0.35,
+    width = 0.55,
+    colour = "grey30"
+  ) +
+  ggplot2::geom_jitter(
+    ggplot2::aes(colour = .data$Category),
+    width = 0.12,
+    size = 2.5,
+    show.legend = FALSE
+  ) +
+  ggplot2::geom_hline(yintercept = 0, linetype = 2, colour = "grey50") +
+  ggplot2::facet_wrap(~method) +
+  ggplot2::scale_fill_manual(values = category_cols) +
+  ggplot2::scale_colour_manual(values = category_cols) +
+  ggplot2::labs(
+    x = NULL,
+    y = "Mean deviation score\n(−1 lower, 0 consistent, +1 higher)",
+    title = "Per-sample composite STING deviation score"
+  ) +
+  ggplot2::theme_minimal(base_size = 11) +
+  ggplot2::theme(
+    legend.position = "none",
+    strip.text = ggplot2::element_text(face = "bold")
+  )
+
+p_pct_higher / p_signature_score
+```
+
+```{r}
+#| label: plot-literature-agreement-sting
+#| fig-width: 11
+#| fig-height: 4.5
+#| fig-align: center
+
+ggplot2::ggplot(
+  agreement_both,
+  ggplot2::aes(
+    x = .data$Category,
+    y = .data$pct_match,
+    fill = .data$Category
+  )
+) +
+  ggplot2::geom_col(width = 0.65, colour = "white") +
+  ggplot2::geom_text(
+    ggplot2::aes(
+      label = sprintf(
+        "%.0f%% match\n(%.0f%% higher)",
+        .data$pct_match,
+        .data$pct_higher
+      )
+    ),
+    vjust = -0.15,
+    size = 3.0
+  ) +
+  ggplot2::facet_wrap(~method) +
+  ggplot2::scale_fill_manual(values = category_cols) +
+  ggplot2::scale_y_continuous(limits = c(0, 115), expand = c(0, 0)) +
+  ggplot2::labs(
+    x = NULL,
+    y = "% gene × sample tests matching category expectation",
+    title = "Posterior deviation vs paper-consistent expectation",
+    subtitle = "Two versions at p < 0.05. Bars = % of gene × sample tests matching expected direction, pooled within each Category."
+  ) +
+  ggplot2::theme_minimal(base_size = 11) +
+  ggplot2::theme(
+    legend.position = "none",
+    strip.text = ggplot2::element_text(face = "bold")
+  )
+```
+
+```{r}
+#| label: heatmap-sting-category
+#| fig-width: 15
+#| fig-height: 12
+#| fig-align: center
+
+heatmap_df <- gene_deviation_eval |>
+  dplyr::filter(!is.na(.data$Category)) |>
+  dplyr::mutate(
+    Category = factor(.data$Category, levels = names(category_cols))
+  )
+
+mat_log2fc <- heatmap_df |>
+  dplyr::select("gene", "sample", "log2fc_vs_median") |>
+  tidyr::pivot_wider(names_from = "sample", values_from = "log2fc_vs_median") |>
+  tibble::column_to_rownames("gene") |>
+  as.matrix()
+
+score_mat <- heatmap_df |>
+  dplyr::select("gene", "sample", "deviation_score") |>
+  tidyr::pivot_wider(names_from = "sample", values_from = "deviation_score") |>
+  tibble::column_to_rownames("gene") |>
+  as.matrix()
+
+# Category only in annotation_col: pheatmap draws one legend per annotated
+# column; adding Sample (~17 levels, no ann_colors) stacks a second legend and
+# the "Category" title overlaps the colour keys (see pheatmap issue with multi-legends).
+annotation_col <- heatmap_df |>
+  dplyr::distinct(.data$sample, .data$Category) |>
+  tibble::column_to_rownames("sample") |>
+  dplyr::select("Category")
+
+sample_labels <- heatmap_df |>
+  dplyr::distinct(.data$sample, .data$Sample) |>
+  tibble::deframe()
+
+labels_col <- unname(sample_labels[colnames(mat_log2fc)])
+
+ann_colors <- list(Category = category_cols)
+
+lim_log2 <- max(abs(mat_log2fc), na.rm = TRUE)
+if (!is.finite(lim_log2) || lim_log2 == 0) lim_log2 <- 1
+
+pheatmap::pheatmap(
+  mat_log2fc,
+  annotation_col = annotation_col,
+  annotation_colors = ann_colors,
+  labels_col = labels_col,
+  cluster_rows = TRUE,
+  cluster_cols = TRUE,
+  clustering_method = "ward.D2",
+  color = grDevices::colorRampPalette(rev(RColorBrewer::brewer.pal(11, "RdBu")))(100),
+  breaks = seq(-lim_log2, lim_log2, length.out = 101),
+  border_color = NA,
+  fontsize_row = 8,
+  fontsize_col = 7,
+  angle_col = 45,
+  main = "log2(obs / healthy predictive median)\nSTING genes × SAVI pseudobulk (Category annotated)"
+)
+
+pheatmap::pheatmap(
+  score_mat,
+  annotation_col = annotation_col,
+  annotation_colors = ann_colors,
+  labels_col = labels_col,
+  cluster_rows = TRUE,
+  cluster_cols = TRUE,
+  clustering_method = "ward.D2",
+  color = grDevices::colorRampPalette(c("#2166ac", "#f7f7f7", "#b2182b"))(3),
+  breaks = c(-1.5, -0.5, 0.5, 1.5),
+  legend_breaks = c(-1, 0, 1),
+  legend_labels = c("lower", "consistent", "higher"),
+  border_color = NA,
+  fontsize_row = 8,
+  fontsize_col = 7,
+  angle_col = 45,
+  main = "Deviation direction vs Immune Atlas baseline\n(Category = CTRL / SAVI / SAVI_treated)"
+)
+```
+
+```{r}
+#| label: plot-gene-match-by-category
+#| fig-width: 10
+#| fig-height: 6
+#| fig-align: center
+
+gene_match_summary <- gene_deviation_eval |>
+  dplyr::filter(!is.na(.data$Category)) |>
+  dplyr::group_by(.data$gene, .data$Category, .data$expected_deviation) |>
+  dplyr::summarise(
+    n = dplyr::n(),
+    pct_higher = 100 * mean(.data$signature_up),
+    pct_match = 100 * mean(.data$matches_literature, na.rm = TRUE),
+    mean_log2fc = mean(.data$log2fc_vs_median, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  dplyr::mutate(
+    gene = forcats::fct_reorder(.data$gene, .data$mean_log2fc, .fun = mean, .desc = TRUE)
+  )
+
+ggplot2::ggplot(
+  gene_match_summary,
+  ggplot2::aes(
+    x = .data$gene,
+    y = .data$Category,
+    fill = .data$mean_log2fc
+  )
+) +
+  ggplot2::geom_tile(colour = "white", linewidth = 0.3) +
+  ggplot2::scale_fill_gradient2(
+    low = "#2166ac",
+    mid = "#f7f7f7",
+    high = "#b2182b",
+    midpoint = 0,
+    name = "Mean log2 FC\nvs baseline"
+  ) +
+  ggplot2::labs(
+    x = NULL,
+    y = NULL,
+    title = "STING signature genes × study Category",
+    subtitle = "Tile = mean log2(obs / healthy predictive median) across samples in each Category"
+  ) +
+  ggplot2::theme_minimal(base_size = 10) +
+  ggplot2::theme(
+    axis.text.x = ggplot2::element_text(angle = 45, hjust = 1, size = 7),
+    panel.grid = ggplot2::element_blank()
+  )
+```
+
+```{r}
+#| label: eval-summary-table
+gene_deviation_eval |>
+  dplyr::filter(!is.na(.data$Category)) |>
+  dplyr::group_by(.data$Category, .data$gene) |>
+  dplyr::summarise(
+    n_samples = dplyr::n_distinct(.data$sample),
+    n_higher = sum(.data$signature_up),
+    pct_higher = 100 * mean(.data$signature_up),
+    matches_paper = all(.data$matches_literature %in% TRUE),
+    .groups = "drop"
+  ) |>
+  dplyr::group_by(.data$Category) |>
+  dplyr::summarise(
+    n_genes_tested = dplyr::n(),
+    n_genes_all_higher = sum(.data$n_higher == .data$n_samples),
+    n_genes_majority_higher = sum(.data$pct_higher > 50),
+    n_genes_paper_perfect = sum(.data$matches_paper),
+    .groups = "drop"
+  ) |>
+  dplyr::left_join(
+    agreement_by_category |>
+      dplyr::select("Category", "pct_match", "pct_higher"),
+    by = "Category"
+  )
+```
+
+------------------------------------------------------------------------
+
+# Biomarker quality check (atlas-based falsification)
+
+De Cevins *et al.* (2023) propose the **21-gene signature** by **within-cohort comparison** (5 SAVI vs 7 in-study controls). With only seven matched donors, a gene that is simply **variable in healthy people** but happened to be low in their controls can pass that filter. We can sanity-check each signature gene against a much broader **healthy reference** (Immune Atlas monocytic posteriors), which is the kind of falsification their paper could not do. The expected pattern under a true SAVI biomarker is:
+
+- **SAVI** samples → consistently **higher** than the atlas healthy distribution
+- **SAVI_treated** samples → **intermediate** (attenuated by treatment)
+- **CTRL** samples → **consistent with healthy** (atlas baseline matches the in-cohort controls)
+
+A gene fails the check (paper-supported but **not** atlas-supported) when:
+
+- **CTRL drifts up** vs atlas (gene is high in many healthy people, not just SAVI),
+- **No SAVI lift** vs CTRL (paper effect is within healthy variability),
+- **SAVI_treated ≥ SAVI** (no treatment effect even though paper claims one).
+
+```{r}
+#| label: biomarker-per-category
+biomarker_per_category <- gene_deviation_eval |>
+  dplyr::filter(!is.na(.data$Category)) |>
+  dplyr::group_by(.data$gene, .data$Category) |>
+  dplyr::summarise(
+    n_samples = dplyr::n_distinct(.data$sample),
+    mean_log2fc = mean(.data$log2fc_vs_median, na.rm = TRUE),
+    median_log2fc = stats::median(.data$log2fc_vs_median, na.rm = TRUE),
+    pct_higher = 100 * mean(.data$direction == "higher_than_healthy"),
+    pct_lower = 100 * mean(.data$direction == "lower_than_healthy"),
+    pct_consistent = 100 * mean(.data$direction == "consistent_with_healthy"),
+    mean_p_above_healthy = mean(.data$p_above_healthy, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+biomarker_per_category |>
+  dplyr::arrange(.data$gene, .data$Category)
+```
+
+```{r}
+#| label: biomarker-quality-score
+biomarker_quality <- biomarker_per_category |>
+  dplyr::select(
+    "gene",
+    "Category",
+    "mean_log2fc",
+    "pct_higher",
+    "pct_consistent"
+  ) |>
+  tidyr::pivot_wider(
+    names_from = "Category",
+    values_from = c("mean_log2fc", "pct_higher", "pct_consistent"),
+    values_fill = NA_real_,
+    names_sep = "."
+  ) |>
+  dplyr::mutate(
+    savi_lift = .data$mean_log2fc.SAVI,
+    ctrl_drift = .data$mean_log2fc.CTRL,
+    treated_lift = .data$mean_log2fc.SAVI_treated,
+
+    # SAVI vs in-cohort controls' atlas-corrected position (paper's main claim).
+    savi_vs_ctrl = .data$savi_lift - .data$ctrl_drift,
+
+    # Treatment effect: positive means SAVI_treated drops back toward baseline.
+    treatment_attenuation = .data$savi_lift - .data$treated_lift,
+
+    # Atlas baseline agreement of in-study controls (closer to 0 = better).
+    abs_ctrl_drift = abs(.data$ctrl_drift),
+
+    # Composite quality: reward SAVI > CTRL, reward treatment drop,
+    # penalise CTRL drift from atlas. Weights chosen so all three terms are on
+    # the log2 scale; tweak if needed.
+    quality_score = .data$savi_vs_ctrl +
+      0.5 * .data$treatment_attenuation -
+      0.5 * .data$abs_ctrl_drift,
+
+    biomarker_class = dplyr::case_when(
+      .data$pct_higher.SAVI >= 60 &
+        .data$pct_consistent.CTRL >= 50 &
+        .data$treatment_attenuation > 0 ~ "validated",
+      .data$pct_higher.SAVI >= 60 &
+        .data$treatment_attenuation > 0 &
+        .data$pct_consistent.CTRL < 50 ~ "validated_ctrl_drifts",
+      .data$pct_higher.SAVI >= 60 &
+        .data$treatment_attenuation <= 0 ~ "savi_up_no_treatment_effect",
+      .data$pct_higher.SAVI < 30 &
+        .data$ctrl_drift > 0.5 ~ "falsified_baseline_high",
+      .data$pct_higher.SAVI < 30 ~ "falsified_no_savi_signal",
+      TRUE ~ "ambiguous"
+    )
+  ) |>
+  dplyr::arrange(dplyr::desc(.data$quality_score))
+
+biomarker_quality |>
+  dplyr::select(
+    "gene",
+    "biomarker_class",
+    "quality_score",
+    "savi_vs_ctrl",
+    "treatment_attenuation",
+    "abs_ctrl_drift",
+    dplyr::starts_with("pct_higher."),
+    dplyr::starts_with("pct_consistent.")
+  )
+```
+
+```{r}
+#| label: plot-biomarker-ranking
+#| fig-width: 9
+#| fig-height: 7
+#| fig-align: center
+
+gene_order <- biomarker_quality$gene
+
+biomarker_long <- biomarker_per_category |>
+  dplyr::filter(.data$gene %in% gene_order) |>
+  dplyr::mutate(
+    gene = factor(.data$gene, levels = rev(gene_order)),
+    Category = factor(
+      .data$Category,
+      levels = c("CTRL", "SAVI_treated", "SAVI")
+    )
+  )
+
+ggplot2::ggplot(
+  biomarker_long,
+  ggplot2::aes(
+    x = .data$mean_log2fc,
+    y = .data$gene,
+    colour = .data$Category
+  )
+) +
+  ggplot2::geom_vline(xintercept = 0, linetype = 2, colour = "grey60") +
+  ggplot2::geom_line(
+    ggplot2::aes(group = .data$gene),
+    colour = "grey80",
+    linewidth = 0.4
+  ) +
+  ggplot2::geom_point(size = 3, alpha = 0.85) +
+  ggplot2::scale_colour_manual(values = category_cols) +
+  ggplot2::labs(
+    x = "Mean log2(obs / healthy predictive median)",
+    y = NULL,
+    title = "Biomarker ranking vs Immune Atlas baseline",
+    subtitle = "Genes ranked by quality_score; ideal pattern: SAVI > SAVI_treated > CTRL ≈ 0"
+  ) +
+  ggplot2::theme_minimal(base_size = 11)
+```
+
+```{r}
+#| label: plot-biomarker-ranking2
+#| fig-width: 9
+#| fig-height: 7
+#| fig-align: center
+
+
+ggplot2::ggplot(
+  biomarker_long,
+  ggplot2::aes(
+    x = .data$median_log2fc,
+    y = .data$gene,
+    colour = .data$Category
+  )
+) +
+  ggplot2::geom_vline(xintercept = 0, linetype = 2, colour = "grey60") +
+  ggplot2::geom_line(
+    ggplot2::aes(group = .data$gene),
+    colour = "grey80",
+    linewidth = 0.4
+  ) +
+  ggplot2::geom_point(size = 3, alpha = 0.85) +
+  ggplot2::scale_colour_manual(values = category_cols) +
+  ggplot2::labs(
+    x = "Median log2(obs / healthy predictive median)",
+    y = NULL,
+    title = "Biomarker ranking vs Immune Atlas baseline",
+    subtitle = "Genes ranked by quality_score; ideal pattern: SAVI > SAVI_treated > CTRL ≈ 0"
+  ) +
+  ggplot2::theme_minimal(base_size = 11)
+```
+
+```{r}
+#| label: plot-biomarker-class
+#| fig-width: 9
+#| fig-height: 6
+#| fig-align: center
+
+class_levels <- c(
+  "validated",
+  "validated_ctrl_drifts",
+  "savi_up_no_treatment_effect",
+  "ambiguous",
+  "falsified_baseline_high",
+  "falsified_no_savi_signal"
+)
+
+class_cols <- c(
+  validated = "#1a9850",
+  validated_ctrl_drifts = "#66bd63",
+  savi_up_no_treatment_effect = "#fee08b",
+  ambiguous = "#bdbdbd",
+  falsified_baseline_high = "#762a83",
+  falsified_no_savi_signal = "#d73027"
+)
+
+ggplot2::ggplot(
+  biomarker_quality |>
+    dplyr::mutate(
+      gene = factor(.data$gene, levels = rev(gene_order)),
+      biomarker_class = factor(
+        .data$biomarker_class,
+        levels = class_levels
+      )
+    ),
+  ggplot2::aes(
+    x = .data$quality_score,
+    y = .data$gene,
+    fill = .data$biomarker_class
+  )
+) +
+  ggplot2::geom_col() +
+  ggplot2::geom_vline(xintercept = 0, linetype = 2, colour = "grey50") +
+  ggplot2::scale_fill_manual(values = class_cols, drop = FALSE) +
+  ggplot2::labs(
+    x = "Quality score = (SAVI − CTRL) + 0.5 × (SAVI − treated) − 0.5 × |CTRL drift|",
+    y = NULL,
+    title = "STING signature biomarker quality",
+    subtitle = "Top: best match to expected pattern; bottom: atlas-falsified candidates",
+    fill = NULL
+  ) +
+  ggplot2::theme_minimal(base_size = 11) +
+  ggplot2::theme(legend.position = "right")
+```
+
+```{r}
+#| label: biomarker-class-summary
+biomarker_quality |>
+  dplyr::count(.data$biomarker_class, name = "n_genes") |>
+  dplyr::arrange(dplyr::desc(.data$n_genes))
+```
+
+```{r}
+#| label: biomarker-falsified-genes
+biomarker_quality |>
+  dplyr::filter(.data$biomarker_class %in% c(
+    "falsified_no_savi_signal",
+    "falsified_baseline_high",
+    "savi_up_no_treatment_effect"
+  )) |>
+  dplyr::select(
+    "gene",
+    "biomarker_class",
+    "savi_lift",
+    "ctrl_drift",
+    "treated_lift",
+    "pct_higher.SAVI",
+    "pct_higher.CTRL",
+    "pct_consistent.CTRL"
+  ) |>
+  dplyr::arrange(.data$biomarker_class, .data$gene)
+```
+
+**Interpretation:**
+
+- **`validated`** — gene behaves as the paper claims and is **also** consistent with the atlas (high in SAVI, attenuated by treatment, in-cohort controls match atlas baseline). Strong biomarker.
+- **`validated_ctrl_drifts`** — gene goes up in SAVI and drops with treatment, but the paper's controls are already above the atlas baseline. The within-cohort effect is real; absolute reference value should be interpreted with care.
+- **`savi_up_no_treatment_effect`** — SAVI lift exists but treatment doesn't move it. The gene may be a state marker rather than an activity readout.
+- **`ambiguous`** — borderline; needs more samples.
+- **`falsified_baseline_high`** — gene reads as high in study controls *and* in the broader atlas, and SAVI doesn't add much on top. The paper's "up in SAVI" is likely a baseline artefact.
+- **`falsified_no_savi_signal`** — no SAVI lift vs atlas at all. Strong falsification candidate.
+
+This is the kind of cross-study check the original paper could not perform because of the small healthy-cohort size.
+
+------------------------------------------------------------------------
+
+# Case study: falsifying *IL1B*
+
+**IL1B** is the clearest atlas-falsified gene in this cohort: study **controls sit above** the Immune Atlas healthy predictive distribution, while **SAVI samples do not sit higher still**. That pattern breaks the signature logic (“up in patients vs healthy”) when “healthy” is the atlas rather than seven matched donors.
+
+To make the falsification auditable we show:
+
+1. **Per-sample posterior predictive checks** — observed count vs healthy HPD (already computed).
+2. **Predictive densities** — draw-level `posterior_predict` for IL1B vs a **validated** contrast gene (**TSC22D2**).
+3. **Three reference frames** — atlas-corrected mean log2 FC vs **within-cohort** category means (raw and TMM-scaled counts averaged over donors in each `Category` only; no atlas comparison on the paper panels).
+
+```{r}
+#| label: il1b-falsify-helpers
+falsify_contrast_genes <- c("IL1B", "TSC22D2")
+
+scaled_counts_assay_name <- function(se) {
+  nms <- SummarizedExperiment::assayNames(se)
+  if ("counts_scaled" %in% nms) {
+    return("counts_scaled")
+  }
+  stop(
+    "Assay `counts_scaled` not found on `se_monocytic`. ",
+    "Run the `scale-abundance` chunk first."
+  )
+}
+
+il1b_ensembl <- sting_signature_21 |>
+  dplyr::filter(.data$gene == "IL1B") |>
+  dplyr::pull(.feature)
+
+il1b_scaled_obs <- tibble::tibble(sample = colnames(se_monocytic)) |>
+  dplyr::mutate(
+    sample_idx = match(.data$sample, colnames(se_monocytic)),
+    observed_scaled = as.numeric(
+      SummarizedExperiment::assay(
+        se_monocytic[il1b_ensembl, .data$sample_idx, drop = FALSE],
+        scaled_counts_assay_name(se_monocytic)
+      )
+    )
+  )
+
+il1b_sample_tbl <- gene_deviation_eval |>
+  dplyr::filter(.data$gene == "IL1B", !is.na(.data$Category)) |>
+  dplyr::left_join(
+    sample_annotations |>
+      dplyr::select("sample", tidyselect::any_of("Treatment")),
+    by = "sample"
+  ) |>
+  dplyr::left_join(il1b_scaled_obs, by = "sample") |>
+  dplyr::mutate(
+    Category = factor(.data$Category, levels = names(category_cols)),
+    # Map count-scale predictive summaries to TMM-scaled scale (per-sample ratio).
+    scale_ratio = .data$observed_scaled / pmax(.data$observed_count, 1e-9),
+    healthy_median_scaled = .data$healthy_median * .data$scale_ratio,
+    healthy_hpd_lo_scaled = .data$healthy_hpd_lo * .data$scale_ratio,
+    healthy_hpd_hi_scaled = .data$healthy_hpd_hi * .data$scale_ratio,
+    above_hpd = .data$observed_scaled > .data$healthy_hpd_hi_scaled,
+    below_hpd = .data$observed_scaled < .data$healthy_hpd_lo_scaled,
+    in_hpd = !.data$above_hpd & !.data$below_hpd
+  ) |>
+  dplyr::arrange(.data$Category, .data$Sample)
+
+il1b_sample_tbl |>
+  dplyr::select(
+    "Sample",
+    "Category",
+    "observed_scaled",
+    "healthy_median_scaled",
+    "healthy_hpd_lo_scaled",
+    "healthy_hpd_hi_scaled",
+    "obs_percentile",
+    "direction",
+    "log2fc_vs_median"
+  )
+```
+
+```{r}
+#| label: plot-il1b-obs-vs-hpd
+#| fig-width: 11
+#| fig-height: 7
+#| fig-align: center
+
+il1b_plot_df <- il1b_sample_tbl |>
+  dplyr::mutate(
+    sample_label = factor(
+      Sample,
+      levels = il1b_sample_tbl |>
+        dplyr::arrange(Category, Sample) |>
+        dplyr::pull(Sample) |>
+        unique()
+    )
+  )
+
+log1p_trans <- scales::trans_new(
+  name = "log1p",
+  transform = function(x) log1p(pmax(x, 0)),
+  inverse = function(x) expm1(x),
+  domain = c(0, Inf)
+)
+
+ggplot2::ggplot(il1b_plot_df) +
+  ggplot2::geom_linerange(
+    ggplot2::aes(
+      x = sample_label,
+      ymin = healthy_hpd_lo,
+      ymax = healthy_hpd_hi
+    ),
+    colour = "grey45",
+    linewidth = 0.7
+  ) +
+  ggplot2::geom_point(
+    ggplot2::aes(x = sample_label, y = healthy_median),
+    shape = 4,
+    size = 2.2,
+    colour = "grey55",
+    stroke = 0.9
+  ) +
+  ggplot2::geom_point(
+    ggplot2::aes(x = sample_label, y = observed_count, colour = Category),
+    size = 3.5
+  ) +
+  ggplot2::scale_y_continuous(trans = log1p_trans) +
+  ggplot2::scale_colour_manual(values = category_cols) +
+  ggplot2::labs(
+    x = NULL,
+    y = expression(log[1 + p]("raw pseudobulk count")),
+    title = expression(italic("IL1B") * ": raw counts vs atlas healthy predictive interval"),
+    subtitle = "Each point = one donor; x-axis sorted by Category (CTRL, SAVI_treated, SAVI). Grey bar = 95% atlas predictive HPD; + = predictive median."
+  ) +
+  ggplot2::theme_minimal(base_size = 11) +
+  ggplot2::theme(
+    axis.text.x = ggplot2::element_text(angle = 45, hjust = 1),
+    legend.position = "top"
+  )
+```
+
+```{r}
+#| label: plot-il1b-percentile
+#| fig-width: 14
+#| fig-height: 6
+#| fig-align: center
+
+il1b_counts_long <- il1b_sample_tbl |>
+  dplyr::mutate(
+    sample_label = factor(
+      Sample,
+      levels = il1b_sample_tbl |>
+        dplyr::arrange(Category, Sample) |>
+        dplyr::pull(Sample) |>
+        unique()
+    )
+  ) |>
+  tidyr::pivot_longer(
+    cols = c("observed_count", "observed_scaled"),
+    names_to = "measure",
+    values_to = "abundance"
+  ) |>
+  dplyr::mutate(
+    measure = dplyr::recode(
+      .data$measure,
+      observed_count = "Raw pseudobulk counts",
+      observed_scaled = "TMM-scaled counts"
+    ),
+    measure = factor(
+      .data$measure,
+      levels = c("Raw pseudobulk counts", "TMM-scaled counts")
+    )
+  )
+
+log1p_trans <- scales::trans_new(
+  name = "log1p",
+  transform = function(x) log1p(pmax(x, 0)),
+  inverse = function(x) expm1(x),
+  domain = c(0, Inf)
+)
+
+ggplot2::ggplot(
+  il1b_counts_long,
+  ggplot2::aes(
+    x = sample_label,
+    y = abundance,
+    colour = Category
+  )
+) +
+  ggplot2::geom_point(size = 3.5) +
+  ggplot2::facet_wrap(~measure, scales = "free_y", ncol = 2) +
+  ggplot2::scale_y_continuous(trans = log1p_trans) +
+  ggplot2::scale_colour_manual(values = category_cols) +
+  ggplot2::labs(
+    x = NULL,
+    y = expression(log[1 + p]("count")),
+    title = expression(italic("IL1B") * ": per-donor abundance (raw vs TMM-scaled)"),
+    subtitle = paste0(
+      "Each point = one donor pseudobulk in the GSE226598 cohort (not a category mean). ",
+      "Atlas percentile is identical on both scales (linear TMM rescaling); ",
+      "see obs_percentile in the table above."
+    )
+  ) +
+  ggplot2::theme_minimal(base_size = 11) +
+  ggplot2::theme(
+    axis.text.x = ggplot2::element_text(angle = 45, hjust = 1, size = 8),
+    legend.position = "top",
+    strip.text = ggplot2::element_text(size = 10)
+  )
+```
+
+```{r}
+#| label: plot-il1b-two-nulls
+#| fig-width: 14
+#| fig-height: 4.5
+#| fig-align: center
+
+# Three reference frames for IL1B:
+#   Atlas  — mean log2(obs / healthy predictive median) across donors in each Category.
+#   Paper  — mean abundance within the GSE226598 cohort only (no atlas); bars = cohort mean
+#            per Category (CTRL n≈7, SAVI n≈5, SAVI_treated n varies), not individual donors.
+paper_null <- il1b_sample_tbl |>
+  dplyr::group_by(Category) |>
+  dplyr::summarise(
+    mean_obs = mean(observed_count),
+    mean_scaled = mean(observed_scaled),
+    mean_log1p_scaled = mean(log1p(pmax(observed_scaled, 0))),
+    .groups = "drop"
+  )
+
+atlas_null <- il1b_sample_tbl |>
+  dplyr::group_by(Category) |>
+  dplyr::summarise(
+    mean_log2fc = mean(log2fc_vs_median),
+    .groups = "drop"
+  )
+
+two_nulls_long <- dplyr::bind_rows(
+  atlas_null |>
+    dplyr::mutate(
+      metric = "Atlas: mean log2 FC vs healthy baseline",
+      value = .data$mean_log2fc,
+      y_label = "Mean log2(obs / healthy median)"
+    ) |>
+    dplyr::select("Category", "metric", "value", "y_label"),
+  paper_null |>
+    dplyr::mutate(
+      metric = "Within-cohort mean (raw pseudobulk counts)",
+      value = .data$mean_obs,
+      y_label = "Mean raw count"
+    ) |>
+    dplyr::select("Category", "metric", "value", "y_label"),
+  paper_null |>
+    dplyr::mutate(
+      metric = "Within-cohort mean (log1p TMM-scaled counts)",
+      value = .data$mean_log1p_scaled,
+      y_label = "log1p(mean scaled count)"
+    ) |>
+    dplyr::select("Category", "metric", "value", "y_label")
+) |>
+  dplyr::mutate(
+    Category = factor(Category, levels = names(category_cols)),
+    metric = factor(
+      metric,
+      levels = c(
+        "Atlas: mean log2 FC vs healthy baseline",
+        "Within-cohort mean (raw pseudobulk counts)",
+        "Within-cohort mean (log1p TMM-scaled counts)"
+      )
+    )
+  )
+
+ggplot2::ggplot(
+  two_nulls_long,
+  ggplot2::aes(x = Category, y = value, fill = Category)
+) +
+  ggplot2::geom_col(width = 0.6, colour = "white") +
+  ggplot2::geom_hline(yintercept = 0, linetype = 2, colour = "grey40") +
+  ggplot2::facet_wrap(~metric, scales = "free_y", ncol = 3) +
+  ggplot2::scale_fill_manual(values = category_cols) +
+  ggplot2::labs(
+    x = NULL,
+    y = NULL,
+    title = expression(italic("IL1B") * ": atlas baseline vs within-cohort category means"),
+    subtitle = paste0(
+      "Bars = mean across donors in each Category (same GSE226598 cohort). ",
+      "Left compares to Immune Atlas healthy predictive median; centre/right are paper-style ",
+      "within-cohort contrasts only (raw or TMM-scaled pseudobulk counts)."
+    )
+  ) +
+  ggplot2::theme_minimal(base_size = 11) +
+  ggplot2::theme(
+    legend.position = "none",
+    strip.text = ggplot2::element_text(size = 9)
+  )
+```
+
+```{r}
+#| label: il1b-predictive-draws
+#| cache: true
+#| cache.lazy: false
+#| dependson: ["gene-deviation-fn"]
+
+# Subsampled posterior_predict draws for density overlays (IL1B vs TSC22D2).
+# Model scale = raw pseudobulk counts (same as atlas posterior_predict).
+predictive_draws_raw_for_gene <- function(
+  gene_sym,
+  se,
+  comparison_tbl,
+  sample_ann,
+  ndraws = 400L
+) {
+  chunk_row <- sting_fit_rows |>
+    dplyr::filter(.data$gene == .env$gene_sym) |>
+    dplyr::slice(1)
+
+  if (!nrow(chunk_row)) {
+    stop("No fit found for gene: ", gene_sym)
+  }
+
+  fit <- poco::reconstruct_brmsfit(chunk_row$brms_fit_compressed[[1]])
+  feature_id <- chunk_row$.feature
+
+  purrr::pmap_dfr(
+    comparison_tbl |>
+      dplyr::filter(.data$sample_role == "savi_pseudobulk") |>
+      dplyr::select("sample", "sample_idx"),
+    function(sample, sample_idx) {
+      newdata <- newdata_for_sample(se, sample_idx)
+      nd_grid <- build_newdata_grid(
+        fit,
+        newdata,
+        new_level_tag = paste0("__savi__", as.character(sample))
+      )
+
+      y_rep_mat <- brms::posterior_predict(
+        fit,
+        newdata = nd_grid,
+        summary = FALSE,
+        re_formula = NULL,
+        allow_new_levels = TRUE,
+        sample_new_levels = "gaussian",
+        ndraws = ndraws
+      )
+      y_rep <- marginalize_predict_draws(y_rep_mat)
+
+      obs_raw <- SummarizedExperiment::assay(
+        se[feature_id, sample_idx, drop = FALSE],
+        "counts"
+      ) |>
+        as.numeric()
+
+      tibble::tibble(
+        gene = gene_sym,
+        sample = as.character(sample),
+        draw = y_rep,
+        observed_count = obs_raw
+      )
+    }
+  ) |>
+    dplyr::left_join(
+      sample_ann |>
+        dplyr::select("sample", "Sample", "Category"),
+      by = "sample"
+    )
+}
+
+contrast_draws <- purrr::map_dfr(
+  falsify_contrast_genes,
+  predictive_draws_raw_for_gene,
+  se = se_monocytic,
+  comparison_tbl = comparison_samples_tbl,
+  sample_ann = sample_annotations
+) |>
+  dplyr::mutate(
+    Category = factor(.data$Category, levels = names(category_cols)),
+    gene = factor(.data$gene, levels = falsify_contrast_genes),
+    draw_log1p = log1p(pmax(.data$draw, 0)),
+    observed_log1p = log1p(pmax(.data$observed_count, 0))
+  )
+
+contrast_draws |>
+  dplyr::count(.data$gene, .data$Category, name = "n_draws")
+```
+
+```{r}
+#| label: plot-il1b-density-contrast
+#| fig-width: 11
+#| fig-height: 5.5
+#| fig-align: center
+
+ggplot2::ggplot(
+  contrast_draws,
+  ggplot2::aes(x = draw_log1p, colour = Category, fill = Category)
+) +
+  ggplot2::geom_density(alpha = 0.25, linewidth = 0.9) +
+  ggplot2::geom_vline(
+    data = contrast_draws |>
+      dplyr::distinct(.data$gene, .data$sample, .data$Category, .data$observed_log1p),
+    ggplot2::aes(
+      xintercept = observed_log1p,
+      colour = Category
+    ),
+    linetype = "solid",
+    linewidth = 0.7
+  ) +
+  ggplot2::facet_wrap(~gene, scales = "free_x") +
+  ggplot2::scale_colour_manual(values = category_cols, name = "Category") +
+  ggplot2::scale_fill_manual(values = category_cols, guide = "none") +
+  ggplot2::labs(
+    x = expression(log[1 + p]("raw pseudobulk count")),
+    y = "Density",
+    title = "Predictive null vs observed (log1p raw counts)",
+    subtitle = paste(
+      "Curves = atlas posterior_predict draws pooled by Category (model scale).",
+      "Vertical lines = each donor's observed raw count, coloured by Category."
+    )
+  ) +
+  ggplot2::theme_minimal(base_size = 11) +
+  ggplot2::theme(legend.position = "top")
+```
+
+```{r}
+#| label: plot-il1b-density-facet-sample
+#| fig-width: 12
+#| fig-height: 8
+#| fig-align: center
+
+il1b_facet_lookup <- il1b_sample_tbl |>
+  dplyr::select(dplyr::any_of(c(
+    "sample",
+    "Sample",
+    "Category",
+    "direction",
+    "p_above_healthy"
+  ))) |>
+  dplyr::mutate(
+    direction_short = dplyr::case_when(
+      .data$direction == "higher_than_healthy" ~ "higher",
+      .data$direction == "lower_than_healthy" ~ "lower",
+      TRUE ~ "consistent"
+    ),
+    sample_label = paste0(
+      .data$Sample,
+      " (",
+      .data$Category,
+      " · ",
+      .data$direction_short,
+      ", p=",
+      sprintf("%.2f", .data$p_above_healthy),
+      ")"
+    )
+  )
+
+il1b_label_levels <- il1b_facet_lookup |>
+  dplyr::arrange(.data$Category, .data$Sample)
+
+il1b_facet_lookup <- il1b_facet_lookup |>
+  dplyr::mutate(
+    sample_label = factor(
+      .data$sample_label,
+      levels = il1b_label_levels$sample_label
+    )
+  )
+
+il1b_draws <- contrast_draws |>
+  dplyr::filter(.data$gene == "IL1B") |>
+  dplyr::left_join(
+    il1b_facet_lookup |>
+      dplyr::select(.data$sample, .data$sample_label),
+    by = "sample"
+  )
+
+ggplot2::ggplot(
+  il1b_draws,
+  ggplot2::aes(x = draw_log1p, colour = Category)
+) +
+  ggplot2::geom_density(fill = "grey85", colour = "grey40", linewidth = 0.6, alpha = 0.9) +
+  ggplot2::geom_vline(
+    ggplot2::aes(xintercept = observed_log1p, colour = Category),
+    linewidth = 1
+  ) +
+  ggplot2::facet_wrap(~sample_label, scales = "free_x", ncol = 4) +
+  ggplot2::scale_colour_manual(values = category_cols, name = "Category") +
+  ggplot2::guides(colour = ggplot2::guide_legend(override.aes = list(linewidth = 1.2))) +
+  ggplot2::labs(
+    x = expression(log[1 + p]("raw pseudobulk count")),
+    y = "Density",
+    title = expression(italic("IL1B") * ": posterior predictive check per donor"),
+    subtitle = paste(
+      "Facet = donor (Category · atlas tail, p = P(draw >= obs) on raw counts).",
+      "Grey density = atlas healthy null; coloured vertical line = observed raw count."
+    )
+  ) +
+  ggplot2::theme_minimal(base_size = 10) +
+  ggplot2::theme(
+    legend.position = "top",
+    strip.text = ggplot2::element_text(size = 8)
+  )
+```
+
+```{r}
+#| label: il1b-falsify-summary
+il1b_ctrl_vs_savi <- il1b_sample_tbl |>
+  dplyr::group_by(.data$Category) |>
+  dplyr::summarise(
+    n = dplyr::n(),
+    mean_obs = mean(.data$observed_count),
+    mean_log2fc = mean(.data$log2fc_vs_median),
+    pct_above_hpd = 100 * mean(.data$above_hpd),
+    pct_higher_direction = 100 * mean(.data$direction == "higher_than_healthy"),
+    mean_percentile = 100 * mean(.data$obs_percentile),
+    .groups = "drop"
+  )
+
+ctrl_mean_log2fc <- il1b_ctrl_vs_savi |>
+  dplyr::filter(.data$Category == "CTRL") |>
+  dplyr::pull(.data$mean_log2fc)
+
+ctrl_pct_above_hpd <- il1b_ctrl_vs_savi |>
+  dplyr::filter(.data$Category == "CTRL") |>
+  dplyr::pull(.data$pct_above_hpd)
+
+savi_pct_above_hpd <- il1b_ctrl_vs_savi |>
+  dplyr::filter(.data$Category == "SAVI") |>
+  dplyr::pull(.data$pct_above_hpd)
+
+paper_delta <- il1b_ctrl_vs_savi |>
+  dplyr::filter(.data$Category %in% c("SAVI", "CTRL")) |>
+  tidyr::pivot_wider(names_from = "Category", values_from = "mean_obs") |>
+  dplyr::mutate(delta = .data$SAVI - .data$CTRL) |>
+  dplyr::pull(.data$delta)
+
+atlas_delta <- biomarker_quality |>
+  dplyr::filter(.data$gene == "IL1B") |>
+  dplyr::pull(.data$savi_vs_ctrl)
+
+tibble::tibble(
+  gene = "IL1B",
+  paper_mean_savi_minus_ctrl_raw_counts = paper_delta,
+  atlas_mean_log2fc_savi_minus_ctrl = atlas_delta,
+  ctrl_pct_above_healthy_hpd = ctrl_pct_above_hpd,
+  savi_pct_above_healthy_hpd = savi_pct_above_hpd,
+  falsification_verdict = dplyr::if_else(
+    is.finite(atlas_delta) &&
+      atlas_delta < 0 &&
+      is.finite(ctrl_mean_log2fc) &&
+      ctrl_mean_log2fc > 0,
+    "Atlas falsified: controls high, SAVI not elevated after correction",
+    "Review manually"
+  )
+)
+
+il1b_ctrl_vs_savi
+```
+
+**How to read this as falsification evidence**
+
+- **Per-donor plots** (HPD, raw/scaled abundance, density facets): each point/line is one pseudobulk library; HPD and density overlays use **raw counts** on the model scale (`posterior_predict` draws and observed `counts` assay). The two-panel abundance plot shows the same donors on **raw** and **TMM-scaled** count scales (log1p y-axis); atlas percentile is unchanged under linear scaling.
+- **Bar chart (`plot-il1b-two-nulls`)**: height = **mean within the GSE226598 cohort** for donors in that `Category` only (not vs atlas on the two right panels). Left panel = mean log2(obs / atlas predictive median); centre = mean raw pseudobulk count; right = mean log1p(TMM-scaled count).
+- If **atlas falsification holds**: per-donor plots show **CTRL** above the atlas HPD and high `obs_percentile` in the table above, while **SAVI** is not systematically above CTRL on the **left bar panel** (mean log2 FC).
+- The **centre bar panel** can still show **SAVI > CTRL** on raw within-cohort means — the contrast the original paper could see with seven controls.
+- The **summary table** quantifies: `paper_mean_savi_minus_ctrl_raw_counts` can stay **positive** while `atlas_mean_log2fc_savi_minus_ctrl` is **negative**.
+
+------------------------------------------------------------------------
+
+# Case study: falsifying *ADRB2* (one-donor SAVI signal)
+
+**ADRB2** is labelled **`falsified_no_savi_signal`** in the biomarker screen because only **20%** of SAVI donors pass the strict atlas tail call (`higher_than_healthy`), yet the **cohort mean** `log2fc_vs_median` in SAVI looks high. That pattern usually means **one outlier donor** pulls the category mean while the other SAVI pseudobulks sit near the healthy predictive null.
+
+We audit that claim with per-donor tables, leave-one-out SAVI means, and density overlays on **raw pseudobulk counts** (same scale as `posterior_predict`; contrast gene **TSC22D2** = validated atlas behaviour).
+
+```{r}
+#| label: adrb2-falsify-helpers
+
+adrb2_ensembl <- sting_signature_21 |>
+  dplyr::filter(.data$gene == "ADRB2") |>
+  dplyr::pull(.feature)
+
+adrb2_scaled_obs <- tibble::tibble(sample = colnames(se_monocytic)) |>
+  dplyr::mutate(
+    sample_idx = match(.data$sample, colnames(se_monocytic)),
+    observed_scaled = as.numeric(
+      SummarizedExperiment::assay(
+        se_monocytic[adrb2_ensembl, .data$sample_idx, drop = FALSE],
+        scaled_counts_assay_name(se_monocytic)
+      )
+    )
+  )
+
+adrb2_sample_tbl <- gene_deviation_eval |>
+  dplyr::filter(.data$gene == "ADRB2", !is.na(.data$Category)) |>
+  dplyr::left_join(
+    sample_annotations |>
+      dplyr::select("sample", tidyselect::any_of("Treatment")),
+    by = "sample"
+  ) |>
+  dplyr::left_join(adrb2_scaled_obs, by = "sample") |>
+  dplyr::mutate(
+    Category = factor(.data$Category, levels = names(category_cols)),
+    scale_ratio = .data$observed_scaled / pmax(.data$observed_count, 1e-9),
+    healthy_median_scaled = .data$healthy_median * .data$scale_ratio,
+    healthy_hpd_lo_scaled = .data$healthy_hpd_lo * .data$scale_ratio,
+    healthy_hpd_hi_scaled = .data$healthy_hpd_hi * .data$scale_ratio,
+    above_hpd = .data$observed_count > .data$healthy_hpd_hi,
+    below_hpd = .data$observed_count < .data$healthy_hpd_lo,
+    in_hpd = !.data$above_hpd & !.data$below_hpd
+  ) |>
+  dplyr::arrange(.data$Category, .data$Sample)
+
+adrb2_savi_tbl <- adrb2_sample_tbl |>
+  dplyr::filter(.data$Category == "SAVI")
+
+adrb2_savi_outlier_pick <- adrb2_savi_tbl |>
+  dplyr::filter(.data$direction == "higher_than_healthy") |>
+  dplyr::slice(1)
+
+if (nrow(adrb2_savi_outlier_pick) == 0L) {
+  adrb2_savi_outlier_pick <- adrb2_savi_tbl |>
+    dplyr::slice_max(.data$log2fc_vs_median, n = 1, with_ties = FALSE)
+}
+
+adrb2_label_levels <- adrb2_sample_tbl |>
+  dplyr::arrange(.data$Category, .data$Sample)
+
+adrb2_sample_tbl <- adrb2_sample_tbl |>
+  dplyr::mutate(
+    savi_outlier = .data$sample %in% adrb2_savi_outlier_pick$sample,
+    direction_short = dplyr::case_when(
+      .data$direction == "higher_than_healthy" ~ "higher",
+      .data$direction == "lower_than_healthy" ~ "lower",
+      TRUE ~ "consistent"
+    ),
+    sample_facet_label = paste0(
+      .data$Sample,
+      " (",
+      .data$Category,
+      " · ",
+      .data$direction_short,
+      ", p=",
+      sprintf("%.2f", .data$p_above_healthy),
+      ")"
+    ),
+    sample_label = factor(
+      .data$sample_facet_label,
+      levels = adrb2_label_levels |>
+        dplyr::mutate(
+          lab = paste0(
+            .data$Sample,
+            " (",
+            .data$Category,
+            " · ",
+            dplyr::case_when(
+              .data$direction == "higher_than_healthy" ~ "higher",
+              .data$direction == "lower_than_healthy" ~ "lower",
+              TRUE ~ "consistent"
+            ),
+            ", p=",
+            sprintf("%.2f", .data$p_above_healthy),
+            ")"
+          )
+        ) |>
+        dplyr::pull(.data$lab)
+    )
+  )
+
+adrb2_savi_outlier <- adrb2_sample_tbl |>
+  dplyr::filter(.data$savi_outlier)
+
+adrb2_loo_summary <- tibble::tibble(
+  contrast = c(
+    "All SAVI donors",
+    "Drop atlas-tail SAVI donor",
+    "Other SAVI donors (median)"
+  ),
+  n_savi = c(
+    nrow(adrb2_savi_tbl),
+    nrow(adrb2_savi_tbl) - 1L,
+    nrow(adrb2_savi_tbl) - 1L
+  ),
+  mean_log2fc = c(
+    mean(adrb2_savi_tbl$log2fc_vs_median),
+    mean(
+      adrb2_savi_tbl$log2fc_vs_median[
+        adrb2_savi_tbl$sample != adrb2_savi_outlier$sample
+      ]
+    ),
+    stats::median(
+      adrb2_savi_tbl$log2fc_vs_median[
+        adrb2_savi_tbl$sample != adrb2_savi_outlier$sample
+      ]
+    )
+  ),
+  pct_higher = c(
+    100 * mean(adrb2_savi_tbl$direction == "higher_than_healthy"),
+    100 * mean(
+      adrb2_savi_tbl$direction[
+        adrb2_savi_tbl$sample != adrb2_savi_outlier$sample
+      ] == "higher_than_healthy"
+    ),
+    NA_real_
+  )
+)
+
+adrb2_per_donor <- adrb2_sample_tbl |>
+  dplyr::select(
+    Sample,
+    Category,
+    direction,
+    direction_short,
+    p_above_healthy,
+    log2fc_vs_median,
+    obs_percentile,
+    observed_count,
+    observed_scaled,
+    savi_outlier,
+    sample_facet_label
+  )
+
+adrb2_per_donor
+
+adrb2_loo_summary
+
+tibble::tibble(
+  outlier_sample = adrb2_savi_outlier$Sample,
+  outlier_direction = adrb2_savi_outlier$direction,
+  outlier_log2fc = adrb2_savi_outlier$log2fc_vs_median,
+  n_savi_higher_than_healthy = sum(adrb2_savi_tbl$direction == "higher_than_healthy"),
+  n_savi_consistent = sum(adrb2_savi_tbl$direction == "consistent_with_healthy"),
+  biomarker_class = biomarker_quality |>
+    dplyr::filter(.data$gene == "ADRB2") |>
+    dplyr::pull(.data$biomarker_class)
+)
+```
+
+```{r}
+#| label: plot-adrb2-log2fc-by-sample
+#| fig-width: 11
+#| fig-height: 7
+#| fig-align: center
+
+direction_cols <- c(
+  higher_than_healthy = "#E41A1C",
+  lower_than_healthy = "#377EB8",
+  consistent_with_healthy = "grey65"
+)
+
+ggplot2::ggplot(
+  adrb2_sample_tbl,
+  ggplot2::aes(
+    x = sample_label,
+    y = log2fc_vs_median,
+    colour = direction
+  )
+) +
+  ggplot2::geom_hline(yintercept = 0, linetype = 2, colour = "grey55") +
+  ggplot2::geom_point(
+    ggplot2::aes(size = savi_outlier),
+    alpha = 0.9
+  ) +
+  ggplot2::geom_point(
+    data = adrb2_savi_outlier,
+    ggplot2::aes(x = sample_label, y = log2fc_vs_median),
+    shape = 21,
+    fill = NA,
+    colour = "black",
+    stroke = 1.2,
+    size = 5,
+    inherit.aes = FALSE
+  ) +
+  ggplot2::scale_colour_manual(values = direction_cols, name = "Atlas tail") +
+  ggplot2::scale_size_manual(
+    values = c(`TRUE` = 5, `FALSE` = 3),
+    guide = "none"
+  ) +
+  ggplot2::labs(
+    x = NULL,
+    y = expression(log[2]("obs / healthy predictive median")),
+    title = expression(italic("ADRB2") * ": per-donor atlas deviation"),
+    subtitle = paste(
+      "Ring = sole SAVI donor with atlas tail higher_than_healthy",
+      paste0("(", adrb2_savi_outlier$Sample, ", p=", sprintf("%.3f", adrb2_savi_outlier$p_above_healthy), ")."),
+      "x labels: direction and P(draw >= obs); visual offset ≠ tail call."
+    )
+  ) +
+  ggplot2::theme_minimal(base_size = 11) +
+  ggplot2::theme(
+    axis.text.x = ggplot2::element_text(angle = 45, hjust = 1, size = 8),
+    legend.position = "top"
+  )
+```
+
+```{r}
+#| label: plot-adrb2-leave-one-out
+#| fig-width: 8
+#| fig-height: 4.5
+#| fig-align: center
+
+adrb2_loo_plot <- adrb2_loo_summary |>
+  dplyr::mutate(
+    contrast = factor(
+      .data$contrast,
+      levels = .data$contrast
+    )
+  )
+
+ggplot2::ggplot(
+  adrb2_loo_plot,
+  ggplot2::aes(x = contrast, y = mean_log2fc, fill = contrast)
+) +
+  ggplot2::geom_col(width = 0.65, colour = "white") +
+  ggplot2::geom_hline(yintercept = 0, linetype = 2, colour = "grey45") +
+  ggplot2::scale_fill_manual(values = c("#E41A1C", "#FC8D59", "#FDBB84"), guide = "none") +
+  ggplot2::labs(
+    x = NULL,
+    y = expression("Mean / median " * log[2] * " FC (SAVI only)"),
+    title = expression(italic("ADRB2") * ": SAVI cohort mean driven by one donor"),
+    subtitle = paste0(
+      "Dropping ",
+      adrb2_savi_outlier$Sample,
+      " collapses the SAVI mean toward 0; remaining donors do not support a cohort-wide atlas tail."
+    )
+  ) +
+  ggplot2::theme_minimal(base_size = 11) +
+  ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 25, hjust = 1))
+```
+
+```{r}
+#| label: plot-adrb2-obs-vs-hpd
+#| fig-width: 14
+#| fig-height: 6
+#| fig-align: center
+
+log1p_trans <- scales::trans_new(
+  name = "log1p",
+  transform = function(x) log1p(pmax(x, 0)),
+  inverse = function(x) expm1(x),
+  domain = c(0, Inf)
+)
+
+adrb2_hpd_plot <- adrb2_sample_tbl |>
+  dplyr::transmute(
+    sample_label,
+    Category,
+    savi_outlier,
+    measure = "Raw pseudobulk counts (atlas null)",
+    hpd_lo = .data$healthy_hpd_lo,
+    hpd_hi = .data$healthy_hpd_hi,
+    pred_median = .data$healthy_median,
+    abundance = .data$observed_count
+  ) |>
+  dplyr::bind_rows(
+    adrb2_sample_tbl |>
+      dplyr::transmute(
+        sample_label,
+        Category,
+        savi_outlier,
+        measure = "TMM-scaled counts (linear rescale of null)",
+        hpd_lo = .data$healthy_hpd_lo_scaled,
+        hpd_hi = .data$healthy_hpd_hi_scaled,
+        pred_median = .data$healthy_median_scaled,
+        abundance = .data$observed_scaled
+      )
+  ) |>
+  dplyr::mutate(
+    measure = factor(
+      .data$measure,
+      levels = c(
+        "Raw pseudobulk counts (atlas null)",
+        "TMM-scaled counts (linear rescale of null)"
+      )
+    )
+  )
+
+ggplot2::ggplot(adrb2_hpd_plot) +
+  ggplot2::geom_linerange(
+    ggplot2::aes(
+      x = sample_label,
+      ymin = hpd_lo,
+      ymax = hpd_hi
+    ),
+    colour = "grey45",
+    linewidth = 0.7
+  ) +
+  ggplot2::geom_point(
+    ggplot2::aes(x = sample_label, y = pred_median),
+    shape = 4,
+    size = 2.2,
+    colour = "grey55",
+    stroke = 0.9
+  ) +
+  ggplot2::geom_point(
+    ggplot2::aes(
+      x = sample_label,
+      y = abundance,
+      colour = Category,
+      size = savi_outlier
+    ),
+    alpha = 0.9
+  ) +
+  ggplot2::facet_wrap(~measure, scales = "free_y", ncol = 2) +
+  ggplot2::scale_y_continuous(trans = log1p_trans) +
+  ggplot2::scale_colour_manual(values = category_cols) +
+  ggplot2::scale_size_manual(values = c(`TRUE` = 4.5, `FALSE` = 3), guide = "none") +
+  ggplot2::labs(
+    x = NULL,
+    y = expression(log[1 + p]("count")),
+    title = expression(italic("ADRB2") * ": observed vs atlas healthy predictive interval"),
+    subtitle = paste(
+      "Left = raw counts (same scale as tail test and density plots).",
+      "Right = TMM-scaled abundance with HPD rescaled by sample library size;",
+      "atlas percentile unchanged. Larger point = SAVI atlas-tail outlier."
+    )
+  ) +
+  ggplot2::theme_minimal(base_size = 11) +
+  ggplot2::theme(
+    axis.text.x = ggplot2::element_text(angle = 45, hjust = 1, size = 7),
+    legend.position = "top",
+    strip.text = ggplot2::element_text(size = 9)
+  )
+```
+
+```{r}
+#| label: plot-adrb2-savi-only
+#| fig-width: 7
+#| fig-height: 4.5
+#| fig-align: center
+
+ggplot2::ggplot(
+  adrb2_savi_tbl |>
+    dplyr::mutate(
+      highlight = .data$sample %in% adrb2_savi_outlier$sample,
+      Sample = factor(.data$Sample, levels = adrb2_savi_tbl$Sample)
+    ),
+  ggplot2::aes(x = Sample, y = log2fc_vs_median, colour = direction)
+) +
+  ggplot2::geom_hline(yintercept = 0, linetype = 2, colour = "grey55") +
+  ggplot2::geom_segment(
+    ggplot2::aes(x = Sample, xend = Sample, y = 0, yend = log2fc_vs_median),
+    colour = "grey75",
+    linewidth = 0.6
+  ) +
+  ggplot2::geom_point(
+    ggplot2::aes(size = highlight),
+    alpha = 0.95
+  ) +
+  ggplot2::scale_colour_manual(values = direction_cols, name = "Atlas tail") +
+  ggplot2::scale_size_manual(values = c(`TRUE` = 5, `FALSE` = 3), guide = "none") +
+  ggplot2::labs(
+    x = NULL,
+    y = expression(log[2]("obs / healthy predictive median")),
+    title = expression(italic("ADRB2") * ": SAVI donors only"),
+    subtitle = paste0(
+      nrow(adrb2_savi_tbl) - sum(adrb2_savi_tbl$direction == "higher_than_healthy"),
+      " of ",
+      nrow(adrb2_savi_tbl),
+      " SAVI donors are not higher_than_healthy vs atlas."
+    )
+  ) +
+  ggplot2::theme_minimal(base_size = 11) +
+  ggplot2::theme(legend.position = "top")
+```
+
+```{r}
+#| label: adrb2-predictive-draws
+#| cache: true
+#| cache.lazy: false
+#| dependson: ["gene-deviation-fn", "il1b-predictive-draws"]
+
+# Uses predictive_draws_raw_for_gene() from il1b-predictive-draws (raw model scale).
+adrb2_contrast_genes <- c("ADRB2", "TSC22D2")
+
+adrb2_draws <- purrr::map_dfr(
+  adrb2_contrast_genes,
+  predictive_draws_raw_for_gene,
+  se = se_monocytic,
+  comparison_tbl = comparison_samples_tbl,
+  sample_ann = sample_annotations
+) |>
+  dplyr::mutate(
+    Category = factor(.data$Category, levels = names(category_cols)),
+    gene = factor(.data$gene, levels = adrb2_contrast_genes),
+    draw_log1p = log1p(pmax(.data$draw, 0)),
+    observed_log1p = log1p(pmax(.data$observed_count, 0)),
+    savi_outlier = .data$sample %in% adrb2_savi_outlier$sample
+  )
+
+adrb2_draws |>
+  dplyr::count(.data$gene, .data$Category, name = "n_draws")
+```
+
+```{r}
+#| label: plot-adrb2-density-contrast
+#| fig-width: 11
+#| fig-height: 5.5
+#| fig-align: center
+
+ggplot2::ggplot(
+  adrb2_draws,
+  ggplot2::aes(x = draw_log1p, colour = Category, fill = Category)
+) +
+  ggplot2::geom_density(alpha = 0.25, linewidth = 0.9) +
+  ggplot2::geom_vline(
+    data = adrb2_draws |>
+      dplyr::distinct(.data$gene, .data$sample, .data$Category, .data$observed_log1p, .data$savi_outlier),
+    ggplot2::aes(
+      xintercept = observed_log1p,
+      colour = Category,
+      linewidth = savi_outlier
+    ),
+    linetype = "solid"
+  ) +
+  ggplot2::scale_linewidth_manual(values = c(`TRUE` = 1.2, `FALSE` = 0.65), guide = "none") +
+  ggplot2::facet_wrap(~gene, scales = "free_x") +
+  ggplot2::scale_colour_manual(values = category_cols, name = "Category") +
+  ggplot2::scale_fill_manual(values = category_cols, guide = "none") +
+  ggplot2::labs(
+    x = expression(log[1 + p]("raw pseudobulk count")),
+    y = "Density",
+    title = expression(italic("ADRB2") * " vs validated " * italic("TSC22D2")),
+    subtitle = "Grey = atlas posterior_predict (raw counts); vertical lines = observed raw count (log1p)."
+  ) +
+  ggplot2::theme_minimal(base_size = 11) +
+  ggplot2::theme(legend.position = "top")
+```
+
+```{r}
+#| label: plot-adrb2-density-facet-sample
+#| fig-width: 12
+#| fig-height: 8
+#| fig-align: center
+
+adrb2_facet_lookup <- adrb2_sample_tbl |>
+  dplyr::select(dplyr::any_of(c(
+    "sample",
+    "sample_label",
+    "Sample",
+    "Category",
+    "direction",
+    "p_above_healthy"
+  )))
+
+if (!"sample_label" %in% names(adrb2_facet_lookup) ||
+    !any(grepl(", p=", adrb2_facet_lookup$sample_label, fixed = TRUE), na.rm = TRUE)) {
+  adrb2_facet_lookup <- adrb2_facet_lookup |>
+    dplyr::mutate(
+      direction_short = dplyr::case_when(
+        .data$direction == "higher_than_healthy" ~ "higher",
+        .data$direction == "lower_than_healthy" ~ "lower",
+        TRUE ~ "consistent"
+      ),
+      sample_label = paste0(
+        .data$Sample,
+        " (",
+        .data$Category,
+        " · ",
+        .data$direction_short,
+        ", p=",
+        sprintf("%.2f", .data$p_above_healthy),
+        ")"
+      )
+    )
+}
+
+if ("sample_label" %in% names(adrb2_sample_tbl) && is.factor(adrb2_sample_tbl$sample_label)) {
+  adrb2_facet_lookup$sample_label <- factor(
+    adrb2_facet_lookup$sample_label,
+    levels = levels(adrb2_sample_tbl$sample_label)
+  )
+}
+
+adrb2_draws_gene <- adrb2_draws |>
+  dplyr::filter(.data$gene == "ADRB2") |>
+  dplyr::left_join(
+    adrb2_facet_lookup |>
+      dplyr::select(.data$sample, .data$sample_label),
+    by = "sample"
+  )
+
+ggplot2::ggplot(
+  adrb2_draws_gene,
+  ggplot2::aes(x = draw_log1p, colour = Category)
+) +
+  ggplot2::geom_density(fill = "grey85", colour = "grey40", linewidth = 0.6, alpha = 0.9) +
+  ggplot2::geom_vline(
+    ggplot2::aes(
+      xintercept = observed_log1p,
+      colour = Category,
+      linewidth = savi_outlier
+    ),
+    linetype = "solid"
+  ) +
+  ggplot2::scale_linewidth_manual(values = c(`TRUE` = 1.3, `FALSE` = 0.8), guide = "none") +
+  ggplot2::facet_wrap(~sample_label, scales = "free_x", ncol = 4) +
+  ggplot2::scale_colour_manual(values = category_cols, name = "Category") +
+  ggplot2::guides(colour = ggplot2::guide_legend(override.aes = list(linewidth = 1.2))) +
+  ggplot2::labs(
+    x = expression(log[1 + p]("raw pseudobulk count")),
+    y = "Density",
+    title = expression(italic("ADRB2") * ": posterior predictive check per donor"),
+    subtitle = paste(
+      "Facet = donor (Category · atlas tail, p = P(draw >= obs) on raw counts).",
+      "Thicker line =",
+      adrb2_savi_outlier$Sample,
+      "(only SAVI donor with p < 0.025)."
+    )
+  ) +
+  ggplot2::theme_minimal(base_size = 10) +
+  ggplot2::theme(
+    legend.position = "top",
+    strip.text = ggplot2::element_text(size = 6.5)
+  )
+```
+
+```{r}
+#| label: adrb2-falsify-summary
+
+adrb2_biomarker_row <- biomarker_quality |>
+  dplyr::filter(.data$gene == "ADRB2")
+
+tibble::tibble(
+  gene = "ADRB2",
+  biomarker_class = adrb2_biomarker_row$biomarker_class,
+  pct_higher_SAVI = adrb2_biomarker_row$pct_higher.SAVI,
+  mean_log2fc_SAVI = adrb2_biomarker_row$savi_lift,
+  savi_vs_ctrl_atlas = adrb2_biomarker_row$savi_vs_ctrl,
+  outlier_sample = adrb2_savi_outlier$Sample,
+  outlier_log2fc = adrb2_savi_outlier$log2fc_vs_median,
+  n_savi_higher = sum(adrb2_savi_tbl$direction == "higher_than_healthy"),
+  n_savi_consistent = sum(adrb2_savi_tbl$direction == "consistent_with_healthy"),
+  mean_log2fc_SAVI_drop_outlier = adrb2_loo_summary$mean_log2fc[2],
+  falsification_verdict = paste(
+    "Cohort SAVI mean is not a robust signature signal:",
+    "only",
+    sum(adrb2_savi_tbl$direction == "higher_than_healthy"),
+    "of",
+    nrow(adrb2_savi_tbl),
+    "SAVI donors exceed the atlas null;",
+    "effect driven by",
+    adrb2_savi_outlier$Sample
+  )
+)
+```
+
+**How to read**
+
+- **`plot-adrb2-log2fc-by-sample`** and **`plot-adrb2-density-facet-sample`**: same **raw-count** scale as the atlas model; facet labels show **atlas tail** and **`p = P(draw >= obs)`**. Only **P6_STING_ht** has **p < 0.025** (thicker line).
+- **`plot-adrb2-leave-one-out`**: removing that donor drops the SAVI mean `log2fc` toward zero (median of the remaining four is lower still).
+- **Density panels**: pooled SAVI curve for *ADRB2* can look elevated because draws are stacked across donors; per-donor facets show the mismatch between one extreme line and four lines near the grey null.
+- **Single-cell UMAP** (below, with *IL1B*): SCT-normalized *ADRB2* on disease-associated monocytes, split by **`Category`**, to see whether the atlas outlier is visible at cell level or confined to one donor's monocytes.
+
+# Single-cell expression on UMAP (GEO Seurat object)
+
+Published scRNA-seq object [GSE226598](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE226598) (`prepare_data.R`). We subset **`params$savi_sc_celltype`** (disease-associated monocytes — same population as the pseudobulk merge) and plot signature genes on the embedded UMAP, **`split.by = "Category"`** (`CTRL`, `SAVI`, `SAVI_treated`), using the **`SCT`** assay **`data`** slot (SCTransform–normalized expression from the published object).
+
+```{r}
+#| label: load-savi-seurat
+#| cache: false
+
+read_geo_rds_gz <- function(path) {
+  con <- gzcon(gzfile(path))
+  on.exit(close(con), add = TRUE)
+  readRDS(con)
+}
+
+seurat_savi <- read_geo_rds_gz(params$savi_seurat_gz)
+
+if (!"Category" %in% colnames(seurat_savi@meta.data)) {
+  stop("`Category` not found in Seurat metadata.")
+}
+
+seurat_savi$Category <- factor(
+  seurat_savi$Category,
+  levels = c("CTRL", "SAVI", "SAVI_treated")
+)
+
+seurat_reduction <- function(se) {
+  nms <- names(se@reductions)
+  hit <- intersect(c("umap", "UMAP", "tsne", "TSNE"), nms)
+  if (length(hit)) {
+    return(hit[[1]])
+  }
+  nms[[1]]
+}
+
+reduction_use <- seurat_reduction(seurat_savi)
+
+# Subset early so we don't keep the full >2k x 24k object around.
+seurat_savi_mono <- seurat_savi |>
+  subset(CellType == params$savi_sc_celltype)
+# rm(seurat_savi)
+# gc(verbose = FALSE)
+
+tibble::tibble(
+  n_cells = ncol(seurat_savi_mono),
+  reduction = reduction_use,
+  categories = paste(levels(seurat_savi_mono$Category), collapse = ", "),
+  il1b_present = "IL1B" %in% rownames(seurat_savi_mono),
+  adrb2_present = "ADRB2" %in% rownames(seurat_savi_mono)
+)
+```
+
+```{r}
+#| label: subset-savi-monocytes
+if (ncol(seurat_savi_mono) == 0L) {
+  stop(
+    "No cells for CellType = '", params$savi_sc_celltype,
+    "'. Check `CellType` levels in the Seurat object."
+  )
+}
+
+seurat_savi_mono$Category <- factor(
+  seurat_savi_mono$Category,
+  levels = c("CTRL", "SAVI", "SAVI_treated")
+)
+
+tibble::tibble(
+  cell_type = params$savi_sc_celltype,
+  n_cells = ncol(seurat_savi_mono)
+)
+
+table(seurat_savi_mono$Category, useNA = "ifany")
+```
+
+```{r}
+#| label: plot-il1b-featureplot-category
+#| fig-width: 12
+#| fig-height: 4
+#| fig-align: center
+
+if (!"SCT" %in% SeuratObject::Assays(seurat_savi_mono)) {
+  stop(
+    "SCT assay not found. Available: ",
+    paste(SeuratObject::Assays(seurat_savi_mono), collapse = ", ")
+  )
+}
+
+if (!"IL1B" %in% rownames(seurat_savi_mono[["SCT"]])) {
+  stop("IL1B not found in SCT assay rownames.")
+}
+
+Seurat::FeaturePlot(
+  seurat_savi_mono,
+  features = "IL1B",
+  assay = "SCT",
+  split.by = "Category",
+  reduction = reduction_use,
+  slot = "data",
+  ncol = 3,
+  order = TRUE,
+  pt.size = 0.35,
+  min.cutoff = "q10",
+  max.cutoff = "q90"
+) &
+  ggplot2::theme(
+    plot.title = ggplot2::element_text(size = 11),
+    strip.text = ggplot2::element_text(size = 11, face = "bold")
+  )
+```
+
+Panel titles are **`Category`** (study cohort label from GEO metadata). Expression is from **SCTransform** (`assay = "SCT"`, `slot = "data"`), not raw **`RNA`** counts. High **`IL1B`** in **CTRL** monocytes complements the pseudobulk / atlas falsification checks above.
+
+#### *ADRB2* on UMAP (all donors)
+
+Same layout as *IL1B*: disease-associated monocytes, SCT **`data`**, **`split.by = "Category"`**. Compare the **SAVI** column to **CTRL** and **SAVI_treated** — cells from all donors in each arm are pooled on the UMAP.
+
+```{r}
+#| label: plot-adrb2-featureplot-category
+#| fig-width: 12
+#| fig-height: 4
+#| fig-align: center
+
+if (!"ADRB2" %in% rownames(seurat_savi_mono[["SCT"]])) {
+  stop("ADRB2 not found in SCT assay rownames.")
+}
+
+Seurat::FeaturePlot(
+  seurat_savi_mono,
+  features = "ADRB2",
+  assay = "SCT",
+  split.by = "Category",
+  reduction = reduction_use,
+  slot = "data",
+  ncol = 3,
+  order = TRUE,
+  pt.size = 0.35,
+  min.cutoff = "q10",
+  max.cutoff = "q90"
+) &
+  ggplot2::theme(
+    plot.title = ggplot2::element_text(size = 11),
+    strip.text = ggplot2::element_text(size = 11, face = "bold")
+  )
+```
+
+The **SAVI** panel above pools monocytes from all five untreated SAVI donors. Pseudobulk checks show atlas deviation is dominated by **`P6_STING_ht`** (4057 raw counts, **`p_above_healthy < 0.025`**); the other four SAVI donors sit near the healthy null (≤65 raw counts). If **`ADRB2`** signal in **SAVI** is sparse overall but driven by cells from that donor, the pooled UMAP can still look elevated.
+
+#### *ADRB2* after removing the atlas-tail donor
+
+Mirroring **`plot-adrb2-leave-one-out`** on pseudobulk, we repeat the UMAP with **every disease-associated monocyte from the atlas-tail SAVI donor removed** (`adrb2_savi_outlier$Sample`, here **`P6_STING_ht`**). Assay, cell type, and **`split.by = "Category"`** are unchanged; only that library’s cells are dropped, so the **SAVI** facet reflects the remaining four untreated SAVI donors. If the **SAVI** panel now resembles **CTRL** / **SAVI_treated**, the cohort-level **`ADRB2`** signal is a **one-donor** artefact at single-cell resolution as well as in pseudobulk.
+
+```{r}
+#| label: plot-adrb2-featureplot-category_outlier_removed
+#| fig-width: 12
+#| fig-height: 4
+#| fig-align: center
+
+if (!"ADRB2" %in% rownames(seurat_savi_mono[["SCT"]])) {
+  stop("ADRB2 not found in SCT assay rownames.")
+}
+
+if (!"Sample" %in% colnames(seurat_savi_mono@meta.data)) {
+  stop("`Sample` not found in Seurat metadata.")
+}
+
+outlier_sample <- adrb2_savi_outlier$Sample
+
+seurat_savi_mono_no_outlier <- subset(
+  seurat_savi_mono,
+  subset = Sample != outlier_sample
+)
+
+Seurat::FeaturePlot(
+  seurat_savi_mono_no_outlier,
+  features = "ADRB2",
+  assay = "SCT",
+  split.by = "Category",
+  reduction = reduction_use,
+  slot = "data",
+  ncol = 3,
+  order = TRUE,
+  pt.size = 0.35,
+  min.cutoff = "q10",
+  max.cutoff = "q90"
+) &
+  ggplot2::theme(
+    plot.title = ggplot2::element_text(size = 11),
+    strip.text = ggplot2::element_text(size = 11, face = "bold")
+  )
+```
+
+**Read together:** the all-donor and leave-one-out UMAPs ask the same question as the pseudobulk falsification — is **`ADRB2`** elevated across **SAVI**, or only when **`P6_STING_ht`** is included? Concordance between a muted **SAVI** panel after exclusion and the drop in SAVI mean **`log2fc`** in **`plot-adrb2-leave-one-out`** strengthens the **`falsified_no_savi_signal`** classification (20% of SAVI donors pass the strict atlas tail test).
+
+------------------------------------------------------------------------
+
+# Composition analysis vs original SAVI paper
+
+In the original SAVI scRNA-seq paper (de Cevins *et al.* 2023; GSE226598), after QC, integration, clustering, and annotation, the authors report **23 cell populations** in the SAVI dataset and **29 cell populations** in the IFN-beta dataset. They then compare PBMC composition between SAVI and controls (Figure 1E), with p-values from Kruskal-Wallis tests followed by post hoc Dunn's multiple-comparison testing.
+
+For whole-PBMC composition, the paper reports increased naive CD4 and naive CD8 T cells, decreased effector/memory CD4 and CD8 T-cell compartments, decreased NK cells (especially NK CD56bright), and strong depletion of MAIT and gamma-delta T cells in SAVI. They also report that cell-type proportions did not differ significantly before versus under JAK-inhibitor treatment.
+
+In this notebook, we use those statements as the reference conclusion, then:
+
+1. compute per-sample proportions from GEO **`CellType`** (23 populations),
+2. map **`CellType` → Immune Atlas `L3`** labels used by the sccomp composition model,
+3. compare observed proportions to healthy **`predict_res`** draws matched on **`sex`** and **`age_decade`**,
+4. summarise trends in **`CTRL`**, **`SAVI`**, and **`SAVI_treated`** against the paper’s Figure 1E conclusions.
+
+```{r}
+#| label: summarize-paper-composition
+paper_composition_summary <- tibble::tribble(
+  ~topic, ~paper_finding,
+  "Dataset size after integration", "23 populations (SAVI dataset) and 29 populations (IFN-beta dataset).",
+  "Naive T-cell compartments", "Naive CD4 and naive CD8 T-cell proportions are increased in SAVI.",
+  "Effector/memory T-cell compartments", "Effector/memory CD4 and CD8 compartments are decreased in SAVI.",
+  "Innate-like / cytotoxic compartments", "NK cells (notably NK CD56bright), MAIT cells, and gamma-delta T cells are reduced in SAVI.",
+  "Treatment comparison", "No significant composition differences were observed before versus under JAK inhibitor treatment.",
+  "Statistics in Figure 1E", "Kruskal-Wallis tests with post hoc Dunn's multiple comparisons."
+)
+
+paper_composition_summary
+
+paper_ct_alignment <- tibble::tribble(
+  ~paper_compartment, ~direction_in_savi, ~celltype_labels_in_this_object, ~mapping_note,
+  "Naive CD4 T", "increased", "0. Naive CD4", "Directly aligned.",
+  "Effector/memory CD4", "decreased", "3. CM CD4; 4. EM CD4; 8. TE CD4; 9. Tregs and TE CD4", "Approximate effector/memory CD4 pool from available labels.",
+  "Naive CD8 T", "increased", "2. Naive CD8", "Directly aligned.",
+  "Effector/memory CD8", "decreased", "14. CM CD8; 15. EM CD8; 7. TE CD8", "Approximate effector/memory CD8 pool from available labels.",
+  "NK (especially CD56bright)", "decreased", "10. NK; 26. NK CD56bright", "CD56bright is explicitly available.",
+  "MAIT", "strongly decreased", "22. MAIT", "Directly aligned.",
+  "gamma-delta T", "strongly decreased", "16. gd T cells", "Directly aligned.",
+  "Myeloid context (not primary Figure 1E claim)", "context", "5. Classical monocytes; 12. Non-classical monocytes; 17. Disease-associated monocytes; 20. cDCs; 27. pDCs", "Contextual comparison only.",
+  "B-cell context (not primary Figure 1E claim)", "context", "1. Naive B; 6. Transitionnal B; 13. Memory B; 11. CD3+ B cells; 25. Plasmablasts", "Contextual comparison only."
+)
+
+paper_ct_alignment
+```
+
+```{r}
+#| label: composition-proportions-build
+#| cache: false
+
+if (!exists("read_geo_rds_gz", mode = "function")) {
+  read_geo_rds_gz <- function(path) {
+    con <- gzcon(gzfile(path))
+    on.exit(close(con), add = TRUE)
+    readRDS(con)
+  }
+}
+
+if (!exists("seurat_savi", inherits = FALSE)) {
+  seurat_savi <- read_geo_rds_gz(params$savi_seurat_gz)
+}
+
+if (!"Category" %in% colnames(seurat_savi@meta.data)) {
+  stop("`Category` not found in Seurat metadata.")
+}
+if (!"CellType" %in% colnames(seurat_savi@meta.data)) {
+  stop("`CellType` not found in Seurat metadata.")
+}
+
+seurat_savi$Category <- factor(
+  seurat_savi$Category,
+  levels = c("CTRL", "SAVI", "SAVI_treated")
+)
+
+# GEO sample metadata (same table as pseudobulk join above).
+geo_tbl_comp <- geo_tbl |>
+  dplyr::mutate(
+    sex = dplyr::case_when(
+      .data$gse_sex == "M" ~ "male",
+      .data$gse_sex == "F" ~ "female",
+      TRUE ~ NA_character_
+    ),
+    age_decade = as.character(ceiling(.data$gse_age_years / 10))
+  ) |>
+  dplyr::select("Sample", "sex", "age_decade", "gse_age_years")
+
+# Fine-grained CellType -> Immune Atlas L3 (posteriorHCA / sccomp) labels.
+celltype_to_l3 <- tibble::tribble(
+  ~cell_type, ~L3,
+  "0. Naive CD4", "cd4 naive",
+  "2. Naive CD8", "cd8 naive",
+  "3. CM CD4", "cd4 tcm",
+  "4. EM CD4", "cd4 th1 em",
+  "8. TE CD4", "cd4 th1 em",
+  "9. Tregs and TE CD4", "treg",
+  "14. CM CD8", "cd8 tcm",
+  "15. EM CD8", "cd8 tem",
+  "7. TE CD8", "cd8 tem",
+  "10. NK", "nk",
+  "26. NK CD56bright", "nk",
+  "22. MAIT", "mait",
+  "16. gd T cells", "tgd",
+  "1. Naive B", "b naive",
+  "6. Transitionnal B", "b naive",
+  "13. Memory B", "b memory",
+  "11. CD3+ B cells", "b memory",
+  "5. Classical monocytes", "cd14 mono",
+  "12. Non-classical monocytes", "cd16 mono",
+  "17. Disease-associated monocytes", "cd14 mono",
+  "20. cDCs", "cdc",
+  "27. pDCs", "pdc",
+  "25. Plasmablasts", "plasma"
+)
+
+cell_tbl <- seurat_savi@meta.data |>
+  tibble::rownames_to_column("cell_id") |>
+  dplyr::transmute(
+    sample_id = as.character(.data$Sample),
+    Category = as.character(.data$Category),
+    cell_type = as.character(.data$CellType)
+  ) |>
+  dplyr::left_join(celltype_to_l3, by = "cell_type") |>
+  dplyr::left_join(geo_tbl_comp, by = c("sample_id" = "Sample"))
+
+example_proportions_celltype <- cell_tbl |>
+  dplyr::filter(!is.na(.data$cell_type), nzchar(.data$cell_type)) |>
+  dplyr::count(.data$sample_id, .data$cell_type, name = "n_cells") |>
+  dplyr::group_by(.data$sample_id) |>
+  dplyr::mutate(proportion = .data$n_cells / sum(.data$n_cells)) |>
+  dplyr::ungroup() |>
+  dplyr::select(.data$sample_id, .data$cell_type, .data$proportion)
+
+# L3-level observed proportions (merge CellType labels that map to the same L3).
+example_proportions <- cell_tbl |>
+  dplyr::filter(!is.na(.data$L3)) |>
+  dplyr::count(.data$sample_id, .data$Category, .data$sex, .data$age_decade, .data$L3, name = "n_cells") |>
+  dplyr::group_by(.data$sample_id, .data$Category, .data$sex, .data$age_decade, .data$L3) |>
+  dplyr::summarise(proportion = sum(.data$n_cells), .groups = "drop_last") |>
+  dplyr::group_by(.data$sample_id) |>
+  dplyr::mutate(proportion = .data$proportion / sum(.data$proportion)) |>
+  dplyr::ungroup() |>
+  dplyr::rename(cell_type = L3) |>
+  dplyr::arrange(.data$sample_id, .data$cell_type)
+
+unmapped_celltypes <- cell_tbl |>
+  dplyr::filter(is.na(.data$L3)) |>
+  dplyr::count(.data$cell_type, sort = TRUE)
+
+tibble::tibble(
+  label_column_used = "CellType",
+  n_samples = dplyr::n_distinct(example_proportions$sample_id),
+  n_cells_total = nrow(cell_tbl),
+  n_celltypes_raw = dplyr::n_distinct(example_proportions_celltype$cell_type),
+  n_l3_types = dplyr::n_distinct(example_proportions$cell_type),
+  n_unmapped_celltypes = nrow(unmapped_celltypes)
+)
+
+if (nrow(unmapped_celltypes) > 0L) {
+  unmapped_celltypes
+}
+```
+
+### Healthy atlas composition null (`predict_res`)
+
+Posterior draws of blood PBMC composition from the Immune Atlas sccomp model (`disease_groups___altered = Normal`), stratified by **`sex`** (`male` / `female`) and **`age_decade`** (`1`–`4`), matching SAVI donor metadata. The draw table is **not** knitr-cached (too large for R’s cache serializer); it is saved once to **`params$composition_predict_rds`** and trimmed to L3 types present in the SAVI cohort.
+
+```{r}
+#| label: composition-predict-healthy
+#| cache: false
+
+if (!requireNamespace("sccomp", quietly = TRUE)) {
+  stop("Package `sccomp` is required for composition prediction.")
+}
+
+l3_for_comparison <- example_proportions |>
+  dplyr::distinct(.data$cell_type) |>
+  dplyr::pull(.data$cell_type)
+
+trim_predict_res <- function(x, cell_types) {
+  x |>
+    dplyr::filter(.data$cell_type %in% cell_types) |>
+    dplyr::select(dplyr::any_of(c(
+      "sample_id",
+      "age_decade",
+      "sex",
+      "cell_type",
+      "proportion",
+      ".draw"
+    )))
+}
+
+if (file.exists(params$composition_predict_rds)) {
+  predict_res <- readRDS(params$composition_predict_rds)
+} else {
+  sccomp_est <- readRDS(params$sccomp_estimates_rds)
+
+  sample_metadata <- tidyr::expand_grid(
+    age_decade = as.character(1:4),
+    sex = c("male", "female")
+  ) |>
+    dplyr::mutate(
+      assay_groups___altered = "10x Genomics 3",
+      disease_groups___altered = "Normal",
+      tissue_groups = "blood",
+      ethnicity_groups_imputed = NA,
+      dataset_id___altered = NA,
+      sample_id = paste0("S", dplyr::row_number())
+    )
+
+  predict_res <- sccomp_est |>
+    sccomp::sccomp_predict(
+      formula_composition = NULL,
+      new_data = sample_metadata,
+      summary_instead_of_draws = FALSE
+    ) |>
+    dplyr::rename(cell_type = L3) |>
+    trim_predict_res(l3_for_comparison)
+
+  predict_dir <- dirname(params$composition_predict_rds)
+  if (!dir.exists(predict_dir)) {
+    dir.create(predict_dir, recursive = TRUE, showWarnings = FALSE)
+  }
+  saveRDS(predict_res, params$composition_predict_rds, compress = "xz")
+}
+
+predict_res <- trim_predict_res(predict_res, l3_for_comparison)
+
+predict_res |>
+  dplyr::distinct(.data$age_decade, .data$sex, .data$cell_type) |>
+  dplyr::count(.data$age_decade, .data$sex, name = "n_cell_types")
+```
+
+### Compare observed SAVI proportions to healthy predictive draws
+
+For each donor we match **`predict_res`** rows with the same **`sex`** and **`age_decade`**, then compute empirical tail probabilities (same logic as `posteriorHCA::composition_posterior_test()`).
+
+```{r}
+#| label: composition-vs-healthy
+
+composition_vs_healthy <- example_proportions |>
+  dplyr::rename(
+    sample_id_observed = sample_id,
+    cell_type_observed = cell_type,
+    proportion_observed = proportion
+  ) |>
+  dplyr::inner_join(
+    predict_res |>
+      dplyr::select(
+        age_decade, sex, cell_type, proportion_sampled = proportion, .draw
+      ),
+    by = c("sex" = "sex", "age_decade" = "age_decade", "cell_type_observed" = "cell_type"),
+    relationship = "many-to-many"
+  ) |>
+  dplyr::group_by(.data$sample_id_observed, .data$Category, .data$cell_type_observed) |>
+  dplyr::summarise(
+    proportion_observed = dplyr::first(.data$proportion_observed),
+    healthy_median = stats::median(.data$proportion_sampled),
+    healthy_mean = mean(.data$proportion_sampled),
+    healthy_hpd_lo = stats::quantile(.data$proportion_sampled, 0.025),
+    healthy_hpd_hi = stats::quantile(.data$proportion_sampled, 0.975),
+    # Same tail convention as `gene_deviation_from_fit()`: P(draw >= obs), not P(obs > draw).
+    p_above_healthy = mean(.data$proportion_sampled >= .data$proportion_observed),
+    p_below_healthy = mean(.data$proportion_sampled <= .data$proportion_observed),
+    empirical_confidence = 2 * pmin(.data$p_above_healthy, .data$p_below_healthy),
+    direction = dplyr::case_when(
+      .data$p_above_healthy < 0.025 ~ "higher_than_healthy",
+      .data$p_below_healthy < 0.025 ~ "lower_than_healthy",
+      TRUE ~ "consistent_with_healthy"
+    ),
+    .groups = "drop"
+  )
+
+composition_vs_healthy |>
+  dplyr::arrange(.data$Category, .data$cell_type_observed, .data$sample_id_observed) |>
+  dplyr::slice_head(n = 12)
+```
+
+### Paper compartments: trend by `Category` and comparison to published direction
+
+We aggregate mapped L3 labels into the Figure 1E compartments from the paper, then summarise mean proportion per **`Category`** and compare the SAVI–CTRL direction to the published expectation.
+
+```{r}
+#| label: composition-paper-compartments
+
+paper_compartment_l3 <- tibble::tribble(
+  ~paper_compartment, ~direction_in_savi, ~cell_type,
+  "Naive CD4 T", "increased", "cd4 naive",
+  "Effector/memory CD4", "decreased", "cd4 tcm",
+  "Effector/memory CD4", "decreased", "cd4 th1 em",
+  "Effector/memory CD4", "decreased", "cd4 th17 em",
+  "Effector/memory CD4", "decreased", "cd4 th2 em",
+  "Effector/memory CD4", "decreased", "cd4 fh em",
+  "Effector/memory CD4", "decreased", "cd4 th1/th17 em",
+  "Effector/memory CD4", "decreased", "treg",
+  "Naive CD8 T", "increased", "cd8 naive",
+  "Effector/memory CD8", "decreased", "cd8 tcm",
+  "Effector/memory CD8", "decreased", "cd8 tem",
+  "NK", "decreased", "nk",
+  "MAIT", "strongly decreased", "mait",
+  "gamma-delta T", "strongly decreased", "tgd"
+)
+
+composition_paper_per_donor <- composition_vs_healthy |>
+  dplyr::inner_join(paper_compartment_l3, by = c("cell_type_observed" = "cell_type")) |>
+  dplyr::group_by(
+    .data$sample_id_observed,
+    .data$Category,
+    .data$paper_compartment,
+    .data$direction_in_savi
+  ) |>
+  dplyr::summarise(
+    proportion_observed = sum(.data$proportion_observed),
+    healthy_median = sum(.data$healthy_median),
+    direction = dplyr::if_else(
+      any(.data$direction == "higher_than_healthy"),
+      "higher_than_healthy",
+      dplyr::if_else(
+        any(.data$direction == "lower_than_healthy"),
+        "lower_than_healthy",
+        "consistent_with_healthy"
+      )
+    ),
+    .groups = "drop"
+  )
+
+# Donors with zero cells in a compartment are absent from counts; fill with 0 so
+# category means (and CTRL dots) include all donors in each Category.
+all_donors_comp <- example_proportions |>
+  dplyr::distinct(.data$sample_id, .data$Category) |>
+  dplyr::rename(sample_id_observed = sample_id)
+
+compartment_meta <- paper_compartment_l3 |>
+  dplyr::distinct(.data$paper_compartment, .data$direction_in_savi)
+
+composition_paper_long <- tidyr::crossing(all_donors_comp, compartment_meta) |>
+  dplyr::left_join(
+    composition_paper_per_donor,
+    by = c("sample_id_observed", "Category", "paper_compartment", "direction_in_savi")
+  ) |>
+  dplyr::mutate(
+    proportion_observed = dplyr::coalesce(.data$proportion_observed, 0),
+    healthy_median = dplyr::coalesce(.data$healthy_median, 0),
+    direction = dplyr::coalesce(.data$direction, "consistent_with_healthy")
+  )
+
+composition_paper_summary <- composition_paper_long |>
+  dplyr::group_by(.data$paper_compartment, .data$direction_in_savi, .data$Category) |>
+  dplyr::summarise(
+    n_samples = dplyr::n(),
+    mean_prop = mean(.data$proportion_observed),
+    median_prop = stats::median(.data$proportion_observed),
+    mean_healthy_median = mean(.data$healthy_median),
+    .groups = "drop"
+  ) |>
+  tidyr::pivot_wider(
+    names_from = Category,
+    values_from = c(mean_prop, median_prop, n_samples),
+    names_sep = "__"
+  ) |>
+  dplyr::mutate(
+    delta_savi_minus_ctrl = .data$mean_prop__SAVI - .data$mean_prop__CTRL,
+    delta_treated_minus_ctrl = .data$mean_prop__SAVI_treated - .data$mean_prop__CTRL,
+    matches_paper_savi = dplyr::case_when(
+      .data$direction_in_savi == "increased" ~ .data$delta_savi_minus_ctrl > 0,
+      .data$direction_in_savi %in% c("decreased", "strongly decreased") ~ .data$delta_savi_minus_ctrl < 0,
+      TRUE ~ NA
+    ),
+    matches_paper_treated = dplyr::case_when(
+      .data$direction_in_savi == "increased" ~ .data$delta_treated_minus_ctrl > 0,
+      .data$direction_in_savi %in% c("decreased", "strongly decreased") ~ .data$delta_treated_minus_ctrl < 0,
+      TRUE ~ NA
+    )
+  ) |>
+  dplyr::arrange(.data$paper_compartment)
+
+composition_paper_summary
+```
+
+### Healthy baseline vs age decade
+
+Healthy atlas predictive draws (`predict_res`, Normal blood): for each **paper compartment**, sum mapped L3 proportions per draw, then summarise by **`sex`** and **`age_decade`** (1–4).
+
+```{r}
+#| label: plot-composition-healthy-baseline-by-age
+#| fig-width: 12
+#| fig-height: 9
+#| fig-align: center
+
+healthy_baseline_compartment_age <- predict_res |>
+  dplyr::inner_join(
+    paper_compartment_l3 |>
+      dplyr::distinct(.data$paper_compartment, .data$cell_type),
+    by = "cell_type"
+  ) |>
+  dplyr::group_by(
+    .data$paper_compartment,
+    .data$sex,
+    .data$age_decade,
+    .data$.draw
+  ) |>
+  dplyr::summarise(
+    compartment_proportion = sum(.data$proportion),
+    .groups = "drop"
+  ) |>
+  dplyr::group_by(
+    .data$paper_compartment,
+    .data$sex,
+    .data$age_decade
+  ) |>
+  dplyr::summarise(
+    median_proportion = stats::median(.data$compartment_proportion),
+    hpd_lo = stats::quantile(.data$compartment_proportion, 0.025),
+    hpd_hi = stats::quantile(.data$compartment_proportion, 0.975),
+    .groups = "drop"
+  ) |>
+  dplyr::mutate(
+    age_decade = factor(.data$age_decade, levels = as.character(1:4)),
+    sex = factor(.data$sex, levels = c("female", "male")),
+    paper_compartment = factor(
+      .data$paper_compartment,
+      levels = unique(paper_compartment_l3$paper_compartment)
+    )
+  )
+
+sex_cols <- c(female = "#E41A1C", male = "#377EB8")
+
+ggplot2::ggplot(
+  healthy_baseline_compartment_age,
+  ggplot2::aes(
+    x = age_decade,
+    y = median_proportion,
+    color = sex,
+    group = sex
+  )
+) +
+  ggplot2::geom_ribbon(
+    ggplot2::aes(ymin = hpd_lo, ymax = hpd_hi, fill = sex),
+    alpha = 0.15,
+    color = NA
+  ) +
+  ggplot2::geom_line(linewidth = 0.9) +
+  ggplot2::geom_point(size = 2.2) +
+  ggplot2::facet_wrap(~paper_compartment, scales = "free_y", ncol = 2) +
+  ggplot2::scale_color_manual(values = sex_cols, name = "Sex") +
+  ggplot2::scale_fill_manual(values = sex_cols, guide = "none") +
+  ggplot2::labs(
+    title = "Healthy atlas compartment proportion by sex and age decade",
+    subtitle = paste(
+      "Lines = posterior median per decade; ribbon = 2.5–97.5% across predictive draws.",
+      "Compartment mass = sum of mapped L3 proportions (sccomp Normal blood)."
+    ),
+    x = "Age decade",
+    y = "Compartment proportion (healthy baseline)"
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::theme(
+    legend.position = "bottom",
+    strip.text = ggplot2::element_text(face = "bold", size = 9)
+  )
+```
+
+### Observed composition (within cohort)
+
+Boxplot and bar chart use **observed** compartment proportions only (CTRL / SAVI / SAVI_treated); no healthy atlas reference.
+
+```{r}
+#| label: plot-composition-paper-box
+#| fig-width: 12
+#| fig-height: 12
+#| fig-align: center
+
+category_cols <- c(
+  CTRL = "#4DAF4A",
+  SAVI = "#E41A1C",
+  SAVI_treated = "#377EB8"
+)
+
+plot_data <- composition_paper_long |>
+  dplyr::mutate(
+    Category = factor(.data$Category, levels = names(category_cols)),
+    paper_compartment = forcats::fct_reorder(
+      .data$paper_compartment,
+      .data$proportion_observed,
+      .fun = median,
+      .desc = TRUE
+    )
+  )
+
+ggplot2::ggplot(
+  plot_data,
+  ggplot2::aes(
+    x = Category,
+    y = proportion_observed,
+    fill = Category
+  )
+) +
+  ggplot2::geom_boxplot(outlier.shape = NA, alpha = 0.75) +
+  ggplot2::geom_jitter(width = 0.12, size = 1.6, alpha = 0.85) +
+  ggplot2::facet_wrap(~paper_compartment, scales = "free_y", ncol = 2) +
+  ggplot2::scale_fill_manual(values = category_cols) +
+  ggplot2::labs(
+    title = "SAVI composition vs paper compartments (observed CellType -> L3)",
+    subtitle = "Each point = one donor; compartments aggregate mapped L3 labels",
+    x = NULL,
+    y = "Proportion within sample"
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::theme(legend.position = "none")
+```
+
+```{r}
+#| label: plot-composition-paper-vs-atlas
+#| fig-width: 12
+#| fig-height: 14
+#| fig-align: center
+
+composition_paper_bar <- composition_paper_summary |>
+  tidyr::pivot_longer(
+    cols = c(
+      tidyselect::starts_with("mean_prop__"),
+      tidyselect::starts_with("median_prop__")
+    ),
+    names_to = c("statistic", "Category"),
+    names_sep = "__",
+    values_to = "prop"
+  ) |>
+  dplyr::mutate(
+    statistic = dplyr::recode(
+      .data$statistic,
+      mean_prop = "Mean across donors",
+      median_prop = "Median across donors"
+    ),
+    statistic = factor(
+      .data$statistic,
+      levels = c("Mean across donors", "Median across donors")
+    ),
+    Category = factor(.data$Category, levels = names(category_cols))
+  )
+
+ggplot2::ggplot(
+  composition_paper_bar,
+  ggplot2::aes(x = Category, y = prop, fill = Category)
+) +
+  ggplot2::geom_col(position = ggplot2::position_dodge(width = 0.8), width = 0.7) +
+  ggplot2::facet_grid(
+    paper_compartment ~ statistic,
+    scales = "free_y"
+  ) +
+  ggplot2::scale_fill_manual(values = category_cols) +
+  ggplot2::labs(
+    title = "Observed compartment proportion by Category",
+    subtitle = paste(
+      "Left column = mean across donors; right column = median.",
+      "Observed data only (no atlas); compare SAVI vs CTRL with paper expectation",
+      "(direction_in_savi in composition_paper_summary)."
+    ),
+    x = NULL,
+    y = "Proportion within sample"
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::theme(
+    legend.position = "bottom",
+    strip.text = ggplot2::element_text(size = 9, face = "bold")
+  )
+```
+
+### SAVI donors vs healthy baseline (unified compartments)
+
+For **`SAVI`** and **`SAVI_treated`** donors only, we compare each donor’s **compartment proportion** (sum of mapped L3 types) to healthy **`predict_res`** draws matched on **`sex`** and **`age_decade`**. We then ask whether the atlas tail call (`higher` / `lower` / `consistent` vs healthy) agrees with the **paper’s expected direction** in SAVI (increased vs decreased).
+
+```{r}
+#| label: composition-savi-vs-healthy-compartments
+
+baseline_compartment_draws <- predict_res |>
+  dplyr::inner_join(
+    paper_compartment_l3 |>
+      dplyr::distinct(.data$paper_compartment, .data$cell_type),
+    by = "cell_type"
+  ) |>
+  dplyr::group_by(
+    .data$age_decade,
+    .data$sex,
+    .data$paper_compartment,
+    .data$.draw
+  ) |>
+  dplyr::summarise(
+    compartment_proportion = sum(.data$proportion),
+    .groups = "drop"
+  )
+
+donor_sex_age_all <- example_proportions |>
+  dplyr::distinct(.data$sample_id, .data$sex, .data$age_decade) |>
+  dplyr::rename(sample_id_observed = sample_id)
+
+# One reference table for all donors: tail test vs sex/age-matched healthy draws.
+composition_matched_reference <- composition_paper_long |>
+  dplyr::left_join(donor_sex_age_all, by = "sample_id_observed") |>
+  dplyr::inner_join(
+    baseline_compartment_draws,
+    by = c("sex", "age_decade", "paper_compartment"),
+    relationship = "many-to-many"
+  ) |>
+  dplyr::group_by(
+    .data$sample_id_observed,
+    .data$Category,
+    .data$sex,
+    .data$age_decade,
+    .data$paper_compartment,
+    .data$direction_in_savi,
+    .data$proportion_observed
+  ) |>
+  dplyr::summarise(
+    healthy_median = stats::median(.data$compartment_proportion),
+    healthy_hpd_lo = stats::quantile(.data$compartment_proportion, 0.025),
+    healthy_hpd_hi = stats::quantile(.data$compartment_proportion, 0.975),
+    p_above_healthy = mean(.data$compartment_proportion >= .data$proportion_observed),
+    p_below_healthy = mean(.data$compartment_proportion <= .data$proportion_observed),
+    empirical_confidence = 2 * pmin(.data$p_above_healthy, .data$p_below_healthy),
+    direction_vs_healthy = dplyr::case_when(
+      .data$p_above_healthy < 0.025 ~ "higher_than_healthy",
+      .data$p_below_healthy < 0.025 ~ "lower_than_healthy",
+      TRUE ~ "consistent_with_healthy"
+    ),
+    .groups = "drop"
+  )
+
+composition_savi_vs_healthy <- composition_matched_reference |>
+  dplyr::filter(.data$Category %in% c("SAVI", "SAVI_treated")) |>
+  dplyr::mutate(
+    atlas_direction_simple = dplyr::case_when(
+      .data$direction_vs_healthy == "higher_than_healthy" ~ "increased",
+      .data$direction_vs_healthy == "lower_than_healthy" ~ "decreased",
+      TRUE ~ "consistent"
+    ),
+    agrees_with_paper = dplyr::case_when(
+      .data$direction_in_savi == "increased" ~
+        .data$atlas_direction_simple == "increased",
+      .data$direction_in_savi %in% c("decreased", "strongly decreased") ~
+        .data$atlas_direction_simple == "decreased",
+      TRUE ~ NA
+    ),
+    agreement_label = dplyr::case_when(
+      .data$agrees_with_paper %in% TRUE ~ "agrees (atlas vs paper)",
+      .data$agrees_with_paper %in% FALSE ~ "disagrees (atlas vs paper)",
+      TRUE ~ "atlas consistent (no tail)"
+    )
+  )
+
+composition_savi_vs_healthy |>
+  dplyr::arrange(.data$Category, .data$paper_compartment, .data$sample_id_observed)
+
+composition_savi_agreement_summary <- composition_savi_vs_healthy |>
+  dplyr::group_by(.data$Category, .data$paper_compartment, .data$direction_in_savi) |>
+  dplyr::summarise(
+    n_donors = dplyr::n(),
+    n_higher = sum(.data$direction_vs_healthy == "higher_than_healthy"),
+    n_lower = sum(.data$direction_vs_healthy == "lower_than_healthy"),
+    n_consistent = sum(.data$direction_vs_healthy == "consistent_with_healthy"),
+    n_agrees_paper = sum(.data$agrees_with_paper %in% TRUE, na.rm = TRUE),
+    n_disagrees_paper = sum(.data$agrees_with_paper %in% FALSE, na.rm = TRUE),
+    n_testable = sum(!is.na(.data$agrees_with_paper)),
+    pct_agrees_paper = dplyr::if_else(
+      sum(!is.na(.data$agrees_with_paper)) > 0L,
+      100 * mean(.data$agrees_with_paper, na.rm = TRUE),
+      NA_real_
+    ),
+    .groups = "drop"
+  ) |>
+  dplyr::arrange(.data$Category, .data$paper_compartment)
+
+composition_savi_agreement_summary
+
+# Diagnostic: heatmap tail call vs observed relative to matched healthy median.
+composition_naive_cd4_check <- composition_matched_reference |>
+  dplyr::filter(
+    .data$paper_compartment == "Naive CD4 T",
+    .data$Category == "SAVI"
+  ) |>
+  dplyr::transmute(
+    sample_id_observed,
+    age_decade,
+    sex,
+    proportion_observed,
+    healthy_median_matched = .data$healthy_median,
+    delta_obs_minus_matched = .data$proportion_observed - .data$healthy_median,
+    direction_vs_healthy,
+    visual_check = dplyr::case_when(
+      .data$direction_vs_healthy == "higher_than_healthy" ~
+        "solid line should be RIGHT of dashed median",
+      .data$direction_vs_healthy == "lower_than_healthy" ~
+        "solid line should be LEFT of dashed median",
+      TRUE ~ "solid line near dashed median"
+    )
+  )
+
+composition_naive_cd4_check
+```
+
+### How much CTRL samples in data agree with our healthy baseline
+
+In-study **CTRL** donors are the paper’s reference for “healthy”. If they are exchangeable with the Immune Atlas healthy baseline, each **CTRL** pseudobulk compartment proportion should fall inside the **sex/age-matched** predictive null (`direction_vs_healthy == consistent_with_healthy`). Deviations flag compartments where study controls already sit above or below the atlas before comparing SAVI.
+
+```{r}
+#| label: composition-ctrl-baseline
+
+composition_ctrl_baseline <- composition_matched_reference |>
+  dplyr::filter(.data$Category == "CTRL") |>
+  dplyr::mutate(
+    agrees_with_healthy_baseline = .data$direction_vs_healthy == "consistent_with_healthy",
+    baseline_agreement = dplyr::case_when(
+      .data$direction_vs_healthy == "consistent_with_healthy" ~ "consistent with healthy",
+      .data$direction_vs_healthy == "higher_than_healthy" ~ "higher than healthy",
+      .data$direction_vs_healthy == "lower_than_healthy" ~ "lower than healthy"
+    ),
+    baseline_agreement = factor(
+      .data$baseline_agreement,
+      levels = c(
+        "consistent with healthy",
+        "higher than healthy",
+        "lower than healthy"
+      )
+    ),
+    atlas_strength = 1 - .data$empirical_confidence,
+    direction_short = dplyr::case_when(
+      .data$direction_vs_healthy == "higher_than_healthy" ~ "↑",
+      .data$direction_vs_healthy == "lower_than_healthy" ~ "↓",
+      TRUE ~ "·"
+    ),
+    tile_label = sprintf(
+      "%s\n%.2f",
+      .data$direction_short,
+      .data$atlas_strength
+    ),
+    paper_compartment = factor(
+      .data$paper_compartment,
+      levels = unique(paper_compartment_l3$paper_compartment)
+    )
+  )
+
+composition_ctrl_baseline_summary <- composition_ctrl_baseline |>
+  dplyr::group_by(.data$sample_id_observed, .data$sex, .data$age_decade) |>
+  dplyr::summarise(
+    n_compartments = dplyr::n(),
+    n_consistent = sum(.data$agrees_with_healthy_baseline),
+    n_higher = sum(.data$direction_vs_healthy == "higher_than_healthy"),
+    n_lower = sum(.data$direction_vs_healthy == "lower_than_healthy"),
+    pct_consistent = 100 * .data$n_consistent / .data$n_compartments,
+    .groups = "drop"
+  ) |>
+  dplyr::arrange(dplyr::desc(.data$pct_consistent), .data$sample_id_observed)
+
+composition_ctrl_baseline_overall <- composition_ctrl_baseline |>
+  dplyr::summarise(
+    n_ctrl_donors = dplyr::n_distinct(.data$sample_id_observed),
+    n_tests = dplyr::n(),
+    n_consistent = sum(.data$agrees_with_healthy_baseline),
+    n_higher = sum(.data$direction_vs_healthy == "higher_than_healthy"),
+    n_lower = sum(.data$direction_vs_healthy == "lower_than_healthy"),
+    pct_consistent = 100 * .data$n_consistent / .data$n_tests,
+    mean_pct_consistent_per_donor = mean(composition_ctrl_baseline_summary$pct_consistent)
+  )
+
+composition_ctrl_baseline_overall
+composition_ctrl_baseline_summary
+```
+
+```{r}
+#| label: plot-composition-ctrl-baseline-heatmap
+#| fig-width: 12
+#| fig-height: 5.5
+#| fig-align: center
+
+ctrl_baseline_cols <- c(
+  "consistent with healthy" = "#4DAF4A",
+  "higher than healthy" = "#E41A1C",
+  "lower than healthy" = "#377EB8"
+)
+
+ctrl_sample_order <- composition_ctrl_baseline_summary |>
+  dplyr::arrange(dplyr::desc(.data$pct_consistent), .data$sample_id_observed) |>
+  dplyr::pull(.data$sample_id_observed)
+
+ctrl_heatmap_data <- composition_ctrl_baseline |>
+  dplyr::mutate(
+    sample_id_observed = factor(.data$sample_id_observed, levels = ctrl_sample_order),
+    tile_label = dplyr::if_else(
+      .data$agrees_with_healthy_baseline,
+      "·",
+      .data$tile_label
+    )
+  )
+
+ggplot2::ggplot(
+  ctrl_heatmap_data,
+  ggplot2::aes(
+    x = paper_compartment,
+    y = sample_id_observed,
+    fill = baseline_agreement
+  )
+) +
+  ggplot2::geom_tile(color = "white", linewidth = 0.45) +
+  ggplot2::geom_text(
+    ggplot2::aes(label = tile_label),
+    size = 2.5,
+    lineheight = 0.85,
+    color = "grey15"
+  ) +
+  ggplot2::scale_fill_manual(
+    values = ctrl_baseline_cols,
+    name = "vs matched\nhealthy null"
+  ) +
+  ggplot2::labs(
+    title = "CTRL donors: agreement with sex/age-matched healthy atlas (paper compartments)",
+    subtitle = paste0(
+      "Green = consistent_with_healthy (",
+      sprintf("%.0f", composition_ctrl_baseline_overall$pct_consistent),
+      "% of donor × compartment tests cohort-wide). ",
+      "Non-green tiles show direction (↑/↓) and tail strength (1 - empirical confidence)."
+    ),
+    x = NULL,
+    y = "CTRL donor"
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::theme(
+    axis.text.x = ggplot2::element_text(angle = 35, hjust = 1, size = 8),
+    axis.text.y = ggplot2::element_text(size = 9),
+    legend.position = "bottom"
+  )
+```
+
+Each panel below is one **CTRL donor × paper compartment**: grey density = healthy **`predict_res`** draws for that donor’s **`sex`** and **`age_decade`**; coloured vertical line = observed proportion. Line colour matches the heatmap (green = consistent, red/blue = tail call). Text at each line reports **`p_above_healthy`** = P(draw ≥ obs) and **`p_below_healthy`** = P(draw ≤ obs) (same tail convention as gene-level tests).
+
+```{r}
+#| label: plot-composition-ctrl-baseline-density
+#| fig-width: 20
+#| fig-height: 15
+#| fig-align: center
+
+compartment_levels <- paper_compartment_l3 |>
+  dplyr::distinct(.data$paper_compartment) |>
+  dplyr::pull(.data$paper_compartment)
+
+if (!exists("baseline_compartment_draws")) {
+  baseline_compartment_draws <- predict_res |>
+    dplyr::inner_join(
+      paper_compartment_l3 |>
+        dplyr::distinct(.data$paper_compartment, .data$cell_type),
+      by = "cell_type"
+    ) |>
+    dplyr::group_by(
+      .data$paper_compartment,
+      .data$age_decade,
+      .data$sex,
+      .data$.draw
+    ) |>
+    dplyr::summarise(
+      compartment_proportion = sum(.data$proportion),
+      .groups = "drop"
+    )
+}
+
+ctrl_panel_meta <- composition_ctrl_baseline |>
+  dplyr::distinct(
+    .data$sample_id_observed,
+    .data$sex,
+    .data$age_decade,
+    .data$paper_compartment
+  ) |>
+  dplyr::mutate(
+    sample_panel = paste0(
+      .data$sample_id_observed,
+      " (",
+      .data$sex,
+      " | decade ",
+      .data$age_decade,
+      ")"
+    )
+  )
+
+ctrl_panel_order <- composition_ctrl_baseline_summary |>
+  dplyr::mutate(
+    sample_panel = paste0(
+      .data$sample_id_observed,
+      " (",
+      .data$sex,
+      " | decade ",
+      .data$age_decade,
+      ")"
+    )
+  ) |>
+  dplyr::arrange(dplyr::desc(.data$pct_consistent), .data$sample_id_observed)
+
+ctrl_density_draws <- ctrl_panel_meta |>
+  dplyr::inner_join(
+    baseline_compartment_draws,
+    by = c("sex", "age_decade", "paper_compartment")
+  ) |>
+  dplyr::mutate(
+    sample_panel = factor(
+      .data$sample_panel,
+      levels = ctrl_panel_order$sample_panel
+    ),
+    paper_compartment = factor(.data$paper_compartment, levels = compartment_levels)
+  ) |>
+  dplyr::filter(
+    is.finite(.data$compartment_proportion),
+    .data$compartment_proportion >= 0
+  )
+
+ctrl_density_vlines <- composition_ctrl_baseline |>
+  dplyr::mutate(
+    sample_panel = paste0(
+      .data$sample_id_observed,
+      " (",
+      .data$sex,
+      " | decade ",
+      .data$age_decade,
+      ")"
+    ),
+    sample_panel = factor(
+      .data$sample_panel,
+      levels = ctrl_panel_order$sample_panel
+    ),
+    paper_compartment = factor(.data$paper_compartment, levels = compartment_levels),
+    p_label = sprintf(
+      "p_above=%.2f\np_below=%.2f",
+      .data$p_above_healthy,
+      .data$p_below_healthy
+    )
+  ) |>
+  dplyr::filter(is.finite(.data$proportion_observed)) |>
+  dplyr::left_join(
+    ctrl_density_draws |>
+      dplyr::group_by(.data$sample_panel, .data$paper_compartment) |>
+      dplyr::summarise(
+        x_mid = stats::median(.data$compartment_proportion, na.rm = TRUE),
+        .groups = "drop"
+      ),
+    by = c("sample_panel", "paper_compartment")
+  ) |>
+  dplyr::mutate(
+    text_hjust = dplyr::if_else(
+      .data$proportion_observed > .data$x_mid,
+      1.05,
+      -0.05
+    )
+  )
+
+ggplot2::ggplot(
+  ctrl_density_draws,
+  ggplot2::aes(x = compartment_proportion)
+) +
+  ggplot2::geom_density(
+    fill = "grey80",
+    color = "grey35",
+    alpha = 0.55,
+    linewidth = 0.35,
+    na.rm = TRUE
+  ) +
+  ggplot2::geom_vline(
+    data = ctrl_density_vlines,
+    ggplot2::aes(
+      xintercept = proportion_observed,
+      color = baseline_agreement
+    ),
+    inherit.aes = FALSE,
+    linewidth = 0.75
+  ) +
+  ggplot2::geom_text(
+    data = ctrl_density_vlines,
+    ggplot2::aes(
+      x = proportion_observed,
+      y = Inf,
+      label = p_label,
+      hjust = text_hjust
+    ),
+    inherit.aes = FALSE,
+    vjust = 1.05,
+    size = 2.1,
+    lineheight = 0.85,
+    color = "grey15"
+  ) +
+  ggplot2::facet_grid(
+    sample_panel ~ paper_compartment,
+    scales = "free",
+    labeller = ggplot2::labeller(
+      .cols = ggplot2::label_wrap_gen(10),
+      .rows = ggplot2::label_wrap_gen(16)
+    )
+  ) +
+  ggplot2::scale_color_manual(
+    values = ctrl_baseline_cols,
+    name = "CTRL vs\nmatched null"
+  ) +
+  ggplot2::scale_x_continuous(expand = ggplot2::expansion(mult = c(0.04, 0.06))) +
+  ggplot2::labs(
+    title = "CTRL donors vs sex/age-matched healthy atlas (density grid)",
+    subtitle = paste(
+      "Rows = CTRL donor (sex | age decade); columns = paper compartments.",
+      "Grey = healthy predictive draws for that donor's metadata;",
+      "vertical line = observed CTRL proportion;",
+      "labels = p_above_healthy / p_below_healthy."
+    ),
+    x = "Compartment proportion",
+    y = "Density"
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::theme(
+    legend.position = "bottom",
+    strip.text.x = ggplot2::element_text(size = 7, face = "bold"),
+    strip.text.y = ggplot2::element_text(size = 7),
+    panel.spacing = grid::unit(0.25, "lines")
+  )
+```
+
+**Read:** donors sorted by **% compartments consistent** (top = closest to atlas). Widespread non-green tiles mean in-study controls are **not** drawn from the same reference as Immune Atlas healthy PBMCs for those compartments — relevant when interpreting SAVI vs atlas (and gene-level CTRL drift). The **density grid** shows the same comparison panel-by-panel: a line inside the grey band supports consistency; a line in the tail matches the heatmap colour.
+
+### Healthy atlas comparison (plots)
+
+Tail tests and visualizations below use **sex/age-matched** healthy **`predict_res`** draws (`composition_matched_reference`).
+
+```{r}
+#| label: plot-savi-atlas-direction-heatmap
+#| fig-width: 12
+#| fig-height: 7
+#| fig-align: center
+
+# empirical_confidence = 2 * min(P(draw>=obs), P(draw<=obs)): near 0 = strong tail;
+# near 1 = central. Signed score: direction x (1 - empirical_confidence).
+heatmap_data <- composition_savi_vs_healthy |>
+  dplyr::mutate(
+    Category = factor(.data$Category, levels = c("SAVI", "SAVI_treated")),
+    atlas_strength = 1 - .data$empirical_confidence,
+    atlas_signed_score = dplyr::case_when(
+      .data$direction_vs_healthy == "higher_than_healthy" ~ .data$atlas_strength,
+      .data$direction_vs_healthy == "lower_than_healthy" ~ -.data$atlas_strength,
+      TRUE ~ 0
+    ),
+    direction_short = dplyr::case_when(
+      .data$direction_vs_healthy == "higher_than_healthy" ~ "↑",
+      .data$direction_vs_healthy == "lower_than_healthy" ~ "↓",
+      TRUE ~ "·"
+    ),
+    tile_label = sprintf(
+      "%s\n%.2f",
+      .data$direction_short,
+      .data$atlas_strength
+    ),
+    sample_label = paste0(.data$sample_id_observed, " (", .data$Category, ")"),
+    paper_compartment = factor(
+      .data$paper_compartment,
+      levels = unique(paper_compartment_l3$paper_compartment)
+    )
+  )
+
+score_lim <- max(abs(heatmap_data$atlas_signed_score), na.rm = TRUE)
+score_lim <- if (is.finite(score_lim) && score_lim > 0) score_lim else 1
+
+ggplot2::ggplot(
+  heatmap_data,
+  ggplot2::aes(
+    x = paper_compartment,
+    y = sample_label,
+    fill = atlas_signed_score
+  )
+) +
+  ggplot2::geom_tile(color = "white", linewidth = 0.4) +
+  ggplot2::geom_text(
+    ggplot2::aes(label = tile_label),
+    size = 2.4,
+    lineheight = 0.85,
+    color = "grey15"
+  ) +
+  ggplot2::scale_fill_gradient2(
+    low = "#377EB8",
+    mid = "grey92",
+    high = "#E41A1C",
+    midpoint = 0,
+    limits = c(-score_lim, score_lim),
+    oob = scales::squish,
+    name = "Signed evidence\nvs healthy"
+  ) +
+  ggplot2::facet_grid(.data$Category ~ ., scales = "free_y", space = "free_y") +
+  ggplot2::labs(
+    title = "SAVI donors: strength of deviation from healthy atlas (unified compartments)",
+    subtitle = paste(
+      "Tail test vs sex/age-matched healthy draws (not pooled across all decades).",
+      "Red = higher, blue = lower; intensity = 1 - empirical confidence."
+    ),
+    x = NULL,
+    y = NULL
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::theme(
+    axis.text.x = ggplot2::element_text(angle = 35, hjust = 1, size = 8),
+    axis.text.y = ggplot2::element_text(size = 7),
+    strip.text = ggplot2::element_text(face = "bold"),
+    legend.position = "bottom"
+  )
+```
+
+```{r}
+#| label: plot-savi-atlas-direction-counts
+#| fig-width: 12
+#| fig-height: 6
+#| fig-align: center
+
+direction_cols <- c(
+  higher_than_healthy = "#E41A1C",
+  lower_than_healthy = "#377EB8",
+  consistent_with_healthy = "grey75"
+)
+
+count_long <- composition_savi_agreement_summary |>
+  tidyr::pivot_longer(
+    cols = c(n_higher, n_lower, n_consistent),
+    names_to = "atlas_call",
+    values_to = "n"
+  ) |>
+  dplyr::mutate(
+    Category = factor(.data$Category, levels = c("SAVI", "SAVI_treated")),
+    atlas_call = dplyr::recode(
+      .data$atlas_call,
+      n_higher = "higher_than_healthy",
+      n_lower = "lower_than_healthy",
+      n_consistent = "consistent_with_healthy"
+    ),
+    atlas_call = factor(.data$atlas_call, levels = names(direction_cols))
+  )
+
+ggplot2::ggplot(
+  count_long,
+  ggplot2::aes(x = paper_compartment, y = n, fill = atlas_call)
+) +
+  ggplot2::geom_col(position = "stack") +
+  ggplot2::facet_wrap(~Category, ncol = 1) +
+  ggplot2::scale_fill_manual(values = direction_cols, name = "Atlas call") +
+  ggplot2::labs(
+    title = "Count of SAVI donors by atlas direction per compartment",
+    subtitle = "Stacked bars: how many donors are higher / lower / consistent vs healthy null",
+    x = NULL,
+    y = "Number of donors"
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::theme(
+    axis.text.x = ggplot2::element_text(angle = 35, hjust = 1, size = 8),
+    legend.position = "bottom"
+  )
+```
+
+```{r}
+#| label: plot-savi-paper-agreement
+#| fig-width: 12
+#| fig-height: 6
+#| fig-align: center
+
+agreement_cols <- c(
+  "agrees (atlas vs paper)" = "#4DAF4A",
+  "disagrees (atlas vs paper)" = "#FF7F00",
+  "atlas consistent (no tail)" = "grey70"
+)
+
+ggplot2::ggplot(
+  composition_savi_vs_healthy |>
+    dplyr::mutate(
+      Category = factor(.data$Category, levels = c("SAVI", "SAVI_treated")),
+      agreement_label = factor(.data$agreement_label, levels = names(agreement_cols))
+    ),
+  ggplot2::aes(x = paper_compartment, fill = agreement_label)
+) +
+  ggplot2::geom_bar(position = "fill") +
+  ggplot2::facet_wrap(~Category, ncol = 1) +
+  ggplot2::scale_fill_manual(values = agreement_cols, name = "Agreement") +
+  ggplot2::scale_y_continuous(labels = scales::percent_format()) +
+  ggplot2::labs(
+    title = "Atlas vs paper agreement (SAVI donors, unified compartments)",
+    subtitle = paste(
+      "Paper expects increased (naive CD4/CD8) or decreased (effector/memory, NK, MAIT, gdT).",
+      "Green = atlas tail matches paper direction; orange = opposite tail."
+    ),
+    x = NULL,
+    y = "Fraction of donors"
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::theme(
+    axis.text.x = ggplot2::element_text(angle = 35, hjust = 1, size = 8),
+    legend.position = "bottom"
+  )
+```
+
+```{r}
+#| label: plot-savi-paper-agreement-rate
+#| fig-width: 10
+#| fig-height: 5
+#| fig-align: center
+
+ggplot2::ggplot(
+  composition_savi_agreement_summary |>
+    dplyr::mutate(
+      Category = factor(.data$Category, levels = c("SAVI", "SAVI_treated")),
+      paper_compartment = factor(
+        .data$paper_compartment,
+        levels = unique(paper_compartment_l3$paper_compartment)
+      )
+    ),
+  ggplot2::aes(
+    x = paper_compartment,
+    y = pct_agrees_paper,
+    fill = Category
+  )
+) +
+  ggplot2::geom_col(position = ggplot2::position_dodge(width = 0.75), width = 0.65) +
+  ggplot2::geom_hline(yintercept = 50, linetype = "dashed", color = "grey50") +
+  ggplot2::scale_fill_manual(values = c(SAVI = "#E41A1C", SAVI_treated = "#377EB8")) +
+  ggplot2::scale_y_continuous(limits = c(0, 100), expand = ggplot2::expansion(mult = c(0, 0.02))) +
+  ggplot2::labs(
+    title = "Share of SAVI donors where atlas tail agrees with paper",
+    subtitle = "Among donors with a clear atlas tail (excludes 'consistent' only when testing agreement)",
+    x = NULL,
+    y = "% donors agreeing with paper direction"
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 35, hjust = 1, size = 8))
+```
+
+### Compartment density vs matched healthy null
+
+Same layout as the **CTRL** density grid (`plot-composition-ctrl-baseline-density`): one panel per **donor × paper compartment**. Grey density = healthy **`predict_res`** draws for that donor’s **`sex`** and **`age_decade`**; vertical line = observed proportion with tail colours and **`p_above_healthy`** / **`p_below_healthy`** labels. Below: **SAVI** and **SAVI_treated** donors only.
+
+```{r}
+#| label: plot-composition-compartment-density
+#| fig-width: 20
+#| fig-height: 18
+#| fig-align: center
+
+compartment_levels <- paper_compartment_l3 |>
+  dplyr::distinct(.data$paper_compartment) |>
+  dplyr::pull(.data$paper_compartment)
+
+atlas_null_cols <- c(
+  "consistent with healthy" = "#4DAF4A",
+  "higher than healthy" = "#E41A1C",
+  "lower than healthy" = "#377EB8"
+)
+
+if (!exists("baseline_compartment_draws")) {
+  baseline_compartment_draws <- predict_res |>
+    dplyr::inner_join(
+      paper_compartment_l3 |>
+        dplyr::distinct(.data$paper_compartment, .data$cell_type),
+      by = "cell_type"
+    ) |>
+    dplyr::group_by(
+      .data$paper_compartment,
+      .data$age_decade,
+      .data$sex,
+      .data$.draw
+    ) |>
+    dplyr::summarise(
+      compartment_proportion = sum(.data$proportion),
+      .groups = "drop"
+    )
+}
+
+savi_cohort_atlas <- composition_matched_reference |>
+  dplyr::filter(.data$Category %in% c("SAVI", "SAVI_treated")) |>
+  dplyr::mutate(
+    baseline_agreement = dplyr::case_when(
+      .data$direction_vs_healthy == "consistent_with_healthy" ~ "consistent with healthy",
+      .data$direction_vs_healthy == "higher_than_healthy" ~ "higher than healthy",
+      .data$direction_vs_healthy == "lower_than_healthy" ~ "lower than healthy"
+    ),
+    baseline_agreement = factor(
+      .data$baseline_agreement,
+      levels = names(atlas_null_cols)
+    ),
+    sample_panel = paste0(
+      .data$sample_id_observed,
+      " (",
+      .data$Category,
+      " · ",
+      .data$sex,
+      " | decade ",
+      .data$age_decade,
+      ")"
+    )
+  )
+
+savi_panel_order <- savi_cohort_atlas |>
+  dplyr::distinct(.data$sample_panel, .data$Category, .data$sample_id_observed) |>
+  dplyr::mutate(
+    Category = factor(.data$Category, levels = c("SAVI", "SAVI_treated"))
+  ) |>
+  dplyr::arrange(.data$Category, .data$sample_id_observed)
+
+savi_panel_meta <- savi_cohort_atlas |>
+  dplyr::distinct(
+    .data$sample_id_observed,
+    .data$Category,
+    .data$sex,
+    .data$age_decade,
+    .data$paper_compartment,
+    .data$sample_panel
+  )
+
+savi_density_draws <- savi_panel_meta |>
+  dplyr::inner_join(
+    baseline_compartment_draws,
+    by = c("sex", "age_decade", "paper_compartment")
+  ) |>
+  dplyr::mutate(
+    sample_panel = factor(
+      .data$sample_panel,
+      levels = savi_panel_order$sample_panel
+    ),
+    paper_compartment = factor(.data$paper_compartment, levels = compartment_levels)
+  ) |>
+  dplyr::filter(
+    is.finite(.data$compartment_proportion),
+    .data$compartment_proportion >= 0
+  )
+
+savi_density_vlines <- savi_cohort_atlas |>
+  dplyr::mutate(
+    sample_panel = factor(
+      .data$sample_panel,
+      levels = savi_panel_order$sample_panel
+    ),
+    paper_compartment = factor(.data$paper_compartment, levels = compartment_levels),
+    p_label = sprintf(
+      "p_above=%.2f\np_below=%.2f",
+      .data$p_above_healthy,
+      .data$p_below_healthy
+    )
+  ) |>
+  dplyr::filter(is.finite(.data$proportion_observed)) |>
+  dplyr::left_join(
+    savi_density_draws |>
+      dplyr::group_by(.data$sample_panel, .data$paper_compartment) |>
+      dplyr::summarise(
+        x_mid = stats::median(.data$compartment_proportion, na.rm = TRUE),
+        .groups = "drop"
+      ),
+    by = c("sample_panel", "paper_compartment")
+  ) |>
+  dplyr::mutate(
+    text_hjust = dplyr::if_else(
+      .data$proportion_observed > .data$x_mid,
+      1.05,
+      -0.05
+    )
+  )
+
+ggplot2::ggplot(
+  savi_density_draws,
+  ggplot2::aes(x = compartment_proportion)
+) +
+  ggplot2::geom_density(
+    fill = "grey80",
+    color = "grey35",
+    alpha = 0.55,
+    linewidth = 0.35,
+    na.rm = TRUE
+  ) +
+  ggplot2::geom_vline(
+    data = savi_density_vlines,
+    ggplot2::aes(
+      xintercept = proportion_observed,
+      color = baseline_agreement
+    ),
+    inherit.aes = FALSE,
+    linewidth = 0.75
+  ) +
+  ggplot2::geom_text(
+    data = savi_density_vlines,
+    ggplot2::aes(
+      x = proportion_observed,
+      y = Inf,
+      label = p_label,
+      hjust = text_hjust
+    ),
+    inherit.aes = FALSE,
+    vjust = 1.05,
+    size = 2.1,
+    lineheight = 0.85,
+    color = "grey15"
+  ) +
+  ggplot2::facet_grid(
+    sample_panel ~ paper_compartment,
+    scales = "free",
+    labeller = ggplot2::labeller(
+      .cols = ggplot2::label_wrap_gen(10),
+      .rows = ggplot2::label_wrap_gen(16)
+    )
+  ) +
+  ggplot2::scale_color_manual(
+    values = atlas_null_cols,
+    name = "Donor vs\nmatched null"
+  ) +
+  ggplot2::scale_x_continuous(expand = ggplot2::expansion(mult = c(0.04, 0.06))) +
+  ggplot2::labs(
+    title = "SAVI and SAVI_treated donors vs sex/age-matched healthy atlas (density grid)",
+    subtitle = paste(
+      "Rows = donor (Category · sex | age decade); columns = paper compartments.",
+      "Grey = healthy predictive draws for that donor's metadata;",
+      "vertical line = observed proportion;",
+      "labels = p_above_healthy / p_below_healthy."
+    ),
+    x = "Compartment proportion",
+    y = "Density"
+  ) +
+  ggplot2::theme_bw() +
+  ggplot2::theme(
+    legend.position = "bottom",
+    strip.text.x = ggplot2::element_text(size = 7, face = "bold"),
+    strip.text.y = ggplot2::element_text(size = 7),
+    panel.spacing = grid::unit(0.25, "lines")
+  )
+```
+
+**How to read vs the paper**
+
+1. **Observed cohort trends** (boxplot / bar chart): within-study CTRL vs SAVI vs SAVI_treated using observed proportions only (paper Figure 1E style). **`composition_paper_summary`**: `delta_savi_minus_ctrl` and `matches_paper_savi` flag agreement with published SAVI vs control direction.
+2. **Healthy baseline by age** (line chart): how female vs male compartment proportions change across age decades 1–4 in **`predict_res`** (context for sex/age matching).
+3. **CTRL vs atlas** (`plot-composition-ctrl-baseline-heatmap`, `plot-composition-ctrl-baseline-density`): sample × compartment heatmap plus per-donor density grid — grey curve = sex/age-matched healthy draws; line = observed CTRL proportion.
+4. **Healthy atlas comparison** (heatmap, count/agreement bars): per donor × compartment tail test vs sex/age-matched **`predict_res`** draws (`composition_matched_reference`, `composition_savi_vs_healthy`).
+5. **Compartment density plot** (`plot-composition-compartment-density`): same donor × compartment grid as CTRL — matched healthy density, tail-coloured line, **p_above** / **p_below** labels (**SAVI** and **SAVI_treated**).
+6. **Fine-grained L3 table** (`composition_vs_healthy`): per donor × L3, `direction` and `empirical_confidence` with the same tail convention as gene-level deviation tests.
+
+

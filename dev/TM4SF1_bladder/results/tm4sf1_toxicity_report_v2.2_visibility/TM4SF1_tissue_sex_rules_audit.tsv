@@ -1,0 +1,51 @@
+tissue_groups	biologically_allowed_sex	analysis_allowed_sex	atlas_observed_sex	n_biologically_allowed	n_analysis_allowed	reports_tissue_sex	restriction_type	has_unobserved_target_sex
+brainstem and cerebellar structures	female, male	female, male	male	2	2	TRUE	both sexes biologically valid	TRUE
+breast	female, male	female	female	2	1	FALSE	analysis restriction (not structural)	FALSE
+cardiovascular system	female, male	female, male	female	2	2	TRUE	both sexes biologically valid	TRUE
+cerebral lobes and cortical areas	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+digestive system (general)	female, male	female, male	female	2	2	TRUE	both sexes biologically valid	TRUE
+female reproductive system	female	female	female	1	1	FALSE	hard structural constraint	FALSE
+general brain and major structures	female, male	female, male	male	2	2	TRUE	both sexes biologically valid	TRUE
+integumentary system (skin)	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+large intestine	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+limbic and basal systems	female, male	female, male	male	2	2	TRUE	both sexes biologically valid	TRUE
+liver	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+miscellaneous glands	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+nasal, oral, and pharyngeal regions	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+prostate	male	male	male	1	1	FALSE	hard structural constraint	FALSE
+renal system	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+respiratory system	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+sensory-related structures	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+small intestine	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+thymus	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+trachea	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+vasculature	female, male	female, male	female	2	2	TRUE	both sexes biologically valid	TRUE
+adipose tissue	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+brainstem and cerebellar structures	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+breast	female, male	female	female	2	1	FALSE	analysis restriction (not structural)	FALSE
+cardiovascular system	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+cerebral lobes and cortical areas	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+digestive system (general)	female, male	female, male	female	2	2	TRUE	both sexes biologically valid	TRUE
+endocrine system	female, male	female, male	female	2	2	TRUE	both sexes biologically valid	TRUE
+female reproductive system	female	female	female	1	1	FALSE	hard structural constraint	FALSE
+general brain and major structures	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+integumentary system (skin)	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+large intestine	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+limbic and basal systems	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+liver	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+lymphatic system	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+miscellaneous glands	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+muscular system (skeletal muscles)	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+nasal, oral, and pharyngeal regions	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+oesophagus	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+ovary	female	female	female	1	1	FALSE	hard structural constraint	FALSE
+pancreas	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+prostate	male	male	male	1	1	FALSE	hard structural constraint	FALSE
+renal system	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+respiratory system	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+sensory-related structures	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+small intestine	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+spleen	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+thymus	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+trachea	female, male	female, male	female, male	2	2	TRUE	both sexes biologically valid	FALSE
+vasculature	female, male	female, male	male	2	2	TRUE	both sexes biologically valid	TRUE

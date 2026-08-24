@@ -1,0 +1,1658 @@
+---
+title: "HCC case study — frozen posteriorHCA baseline transfer to GeoMx"
+subtitle: "Source-feature-excluded liver-NK reference retrieval on an unseen spatial platform"
+date: today
+date-format: "DD MMM YYYY"
+title-block-banner: true
+author:
+  - name: Chen Zhan
+    orcid: 0000-0002-4794-8339
+    email: chen.zhan@adelaide.edu.au
+    affiliation:
+      - id: sgc
+        name: SAiGENCI, The University of Adelaide
+format:
+  html:
+    theme: minty
+    df-print: paged
+    code-line-numbers: true
+    embed-resources: true
+    code-fold: true
+    code-fold-default: true
+    toc: true
+    toc-location: left
+    toc-title: "Contents"
+knitr:
+  opts_chunk:
+    message: false
+    warning: false
+editor: source
+abstract: |
+  This report tests one question: can a frozen posteriorHCA healthy-liver NK
+  baseline be transported to GeoMx, a spatial assay that was not represented
+  when posteriorHCA was fitted? The external observations are within-patient
+  tumour-centre contrasts between protein-defined NK-selected and cold-tumour
+  regions from six HCC patients. The validation excludes genes selected by the
+  source study, the TIMES biomarkers and the transcripts used to define the
+  regions. A successful result requires the posteriorHCA liver-NK reference to
+  match the GeoMx contrast better than six alternative cell references and to
+  score highly under exhaustive reallocations of the spatial labels. A
+  dataset-balanced, unmatched empirical HCA centroid is included only as a
+  descriptive sensitivity analysis. The estimand is
+  relative cross-gene structure; this report does not calibrate posteriorHCA
+  counts to GeoMx Q3-normalized expression.
+params:
+  case_dir: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC"
+  model_store_root: "/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/HPC_posterior/NEW_CELL_TYPE"
+  output_dir: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/spatial_transfer_validation"
+  baseline_tissue_group: "liver"
+  target_cell_type: "nk"
+  candidate_cell_types:
+    - "nk"
+    - "cd8.tem"
+    - "mait"
+    - "tgd"
+    - "monocytic"
+    - "macrophage"
+    - "epithelial"
+  n_posterior_draws: 400
+  pass_maximum_rhat: 1.05
+  pass_maximum_divergence_percent: 1
+  fail_maximum_rhat: 1.5
+  fail_minimum_divergence_percent: 50
+  joint_null_draws: 100000
+  seed: 20260812
+  refresh_references: false
+---
+
+# Analysis question and claim boundary
+
+The analysis asks whether a healthy cell-state reference learned from atlas
+pseudobulk data retains its biological structure on an unseen spatial platform:
+
+> Do genes predicted by frozen posteriorHCA models to be relatively enriched
+> in healthy liver NK cells also increase in independently labelled
+> NK-selected GeoMx tumour-centre regions, and is liver NK the best-matching
+> reference among seven candidate cell types?
+
+The outcome is **reference retrieval**, not equality of measurement scales.
+Both sides of the comparison are contrasts:
+
+$$
+D_{gp} =
+\operatorname{median}_{r \in \mathrm{NK\ selected\ TC}}
+\{\log_2 Q3_{gpr}\}
+-
+\operatorname{median}_{r \in \mathrm{cold\ TC}}
+\{\log_2 Q3_{gpr}\},
+$$
+
+and
+
+$$
+H_{gc} = \log\mu_{gc}
+- \frac{1}{7}\sum_{c'=1}^{7}\log\mu_{gc'}.
+$$
+
+Here, $D_{gp}$ is the GeoMx contrast for gene $g$ and patient $p$;
+$H_{gc}$ is the posteriorHCA specificity of candidate cell type $c$ from its
+comprehensive healthy-liver grand-mean $\log\mu$. No GeoMx assay coefficient
+is added to or estimated inside posteriorHCA.
+
+The analysis can support transport of **relative cell-reference structure**.
+It cannot establish absolute GeoMx calibration, predictive-interval coverage,
+pure-cell expression or recurrence prediction.
+
+Because the model stores are frozen, convergence diagnostics are audited but
+not repaired here. The operational retrieval excludes catastrophic `FAIL`
+fits and visibly retains intermediate `WARN` fits. It can be promoted from an
+exploratory deployment result to strong inferential evidence only if a useful
+gene universe also passes the strict diagnostic criteria in all seven models.
+
+------------------------------------------------------------------------
+
+# Setup
+
+```{r}
+#| label: setup
+
+suppressPackageStartupMessages({
+  library(tibble)
+  library(tidyr)
+  library(dplyr)
+  library(readr)
+  library(purrr)
+  library(stringr)
+  library(forcats)
+  library(ggplot2)
+  library(scales)
+  library(targets)
+  library(brms)
+  library(posterior)
+  library(AnnotationDbi)
+  library(org.Hs.eg.db)
+})
+
+theme_set(theme_minimal(base_size = 11))
+set.seed(params$seed)
+
+candidate_cells <- unlist(params$candidate_cell_types)
+target_cell <- params$target_cell_type
+output_dir <- params$output_dir
+dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+
+core_rdata <- file.path(
+  params$case_dir,
+  "codeocean/data/Input_1_Spatial_transcriptomics_analysis",
+  "transcriptome_differential_analysis_input_1.RData"
+)
+
+source_de_rdata <- file.path(
+  params$case_dir,
+  "codeocean/data/Input_1_Spatial_transcriptomics_analysis",
+  "differential_gene_expression.RData"
+)
+
+cell_labels <- c(
+  nk = "NK",
+  `cd8.tem` = "CD8 TEM",
+  mait = "MAIT",
+  tgd = "gamma-delta T",
+  monocytic = "Monocytic",
+  macrophage = "Macrophage",
+  epithelial = "Epithelial"
+)
+
+method_colours <- c(
+  posteriorHCA = "#2878B5",
+  `Naive empirical HCA` = "#E08A2E"
+)
+```
+
+------------------------------------------------------------------------
+
+# Helper functions
+
+All data preparation, reference construction and validation helpers used by
+the report are defined below. The report does not source external analysis
+scripts.
+
+## Data and contrast helpers
+
+```{r}
+#| label: data-helpers
+
+load_rdata_environment <- function(path) {
+  environment <- new.env(parent = emptyenv())
+  load(path, envir = environment)
+  environment
+}
+
+row_median <- function(x) {
+  apply(x, 1, stats::median)
+}
+
+make_patient_contrast <- function(
+    patient,
+    genes,
+    metadata,
+    log_expression
+) {
+  patient_regions <- metadata |>
+    filter(.data$patient_id == patient)
+
+  nk_regions <- patient_regions$roi_key[
+    patient_regions$region_group == "NK-selected TC"
+  ]
+  cold_regions <- patient_regions$roi_key[
+    patient_regions$region_group == "Cold TC"
+  ]
+
+  tibble(
+    gene = genes,
+    patient_id = patient,
+    panel = dplyr::first(patient_regions$panel),
+    delta_q3 =
+      row_median(log_expression[genes, nk_regions, drop = FALSE]) -
+      row_median(log_expression[genes, cold_regions, drop = FALSE])
+  )
+}
+```
+
+## posteriorHCA reference helpers
+
+These helpers follow the same comprehensive healthy-liver baseline used in the
+universal baseline report: equal-weight grand mean of $\log\mu$ over the
+factor grid, with a new `dataset_id` level drawn from the hierarchical prior.
+
+```{r}
+#| label: reference-helpers
+
+model_store <- function(cell_type) {
+  file.path(
+    params$model_store_root,
+    paste0("V1_", cell_type),
+    "_targets"
+  )
+}
+
+read_model_inventory <- function(cell_type) {
+  store <- model_store(cell_type)
+
+  targets::tar_meta(
+    starts_with("estimates_chunk_"),
+    store = store
+  ) |>
+    filter(.data$type == "branch") |>
+    transmute(
+      cell_type = cell_type,
+      .feature = str_extract(
+        .data$warnings,
+        "(?<=Gene:___)ENSG\\d+(?=___)"
+      ),
+      target_name = .data$name,
+      store = store
+    ) |>
+    filter(!is.na(.data$.feature))
+}
+
+read_model_fit <- function(target_name, store) {
+  targets::tar_read_raw(target_name, store = store)$brms_fit[[1]]
+}
+
+fit_levels <- function(fit, var) {
+  if (!var %in% names(fit$data)) {
+    return(character(0))
+  }
+
+  values <- fit$data[[var]]
+  lv <- if (is.factor(values)) {
+    base::levels(values)
+  } else {
+    sort(unique(as.character(values)))
+  }
+
+  lv[!is.na(lv) & nzchar(lv)]
+}
+
+build_comprehensive_grid <- function(
+    fit,
+    tissue_group = params$baseline_tissue_group,
+    marginalize_over = c(
+      "sex",
+      "age_decade",
+      "ethnicity_groups",
+      "assay_groups_altered"
+    ),
+    new_level_cols = "dataset_id_altered",
+    new_level_tag = "__comprehensive_healthy_baseline__"
+) {
+  level_list <- lapply(
+    intersect(marginalize_over, names(fit$data)),
+    function(col) fit_levels(fit, col)
+  )
+  names(level_list) <- intersect(marginalize_over, names(fit$data))
+  level_list <- level_list[lengths(level_list) > 0]
+
+  grid <- if (length(level_list)) {
+    tidyr::expand_grid(!!!level_list)
+  } else {
+    tibble(.rows = 1)
+  }
+
+  grid$disease_groups_altered <- "Normal"
+  grid$tissue_groups <- tissue_group
+  grid$offset <- 0
+
+  for (col in new_level_cols) {
+    grid[[col]] <- new_level_tag
+  }
+
+  grid
+}
+
+fit_diagnostics <- function(fit) {
+  draw_diagnostics <- posterior::summarise_draws(
+    posterior::as_draws_array(fit),
+    "rhat",
+    "ess_bulk"
+  )
+
+  divergent_draws <- brms::nuts_params(fit) |>
+    filter(.data$Parameter == "divergent__")
+
+  tibble(
+    maximum_rhat = max(draw_diagnostics$rhat, na.rm = TRUE),
+    minimum_ess_bulk = min(draw_diagnostics$ess_bulk, na.rm = TRUE),
+    post_warmup_transitions = nrow(divergent_draws),
+    divergent_transitions = sum(divergent_draws$Value == 1),
+    divergent_percent = mean(divergent_draws$Value == 1) * 100
+  )
+}
+
+posterior_liver_draws <- function(fit, n_draws, seed) {
+  nd_grid <- build_comprehensive_grid(fit)
+  n_use <- min(n_draws, posterior::ndraws(posterior::as_draws_df(fit)))
+
+  set.seed(seed)
+  log_mu <- brms::posterior_linpred(
+    fit,
+    newdata = nd_grid,
+    transform = FALSE,
+    re_formula = NULL,
+    allow_new_levels = TRUE,
+    sample_new_levels = "gaussian",
+    ndraws = n_use
+  )
+
+  tibble(
+    draw = seq_len(nrow(log_mu)),
+    reference_log_mu = rowMeans(log_mu),
+    n_grid_rows = nrow(nd_grid)
+  )
+}
+
+empirical_liver_centroid <- function(fit) {
+  healthy_liver <- fit$data |>
+    filter(
+      .data$disease_groups_altered == "Normal",
+      .data$tissue_groups == params$baseline_tissue_group
+    ) |>
+    mutate(
+      normalized_log_expression = log1p(.data$counts / exp(.data$offset))
+    )
+
+  dataset_means <- healthy_liver |>
+    group_by(.data$dataset_id_altered) |>
+    summarise(
+      dataset_mean = mean(.data$normalized_log_expression),
+      n_samples = n(),
+      .groups = "drop"
+    )
+
+  tibble(
+    empirical_log_expression = mean(dataset_means$dataset_mean),
+    n_empirical_datasets = nrow(dataset_means),
+    n_empirical_samples = sum(dataset_means$n_samples)
+  )
+}
+
+compute_reference_job <- function(job, cache_dir) {
+  cache_path <- file.path(
+    cache_dir,
+    paste0(job$job_id, "_", job$cell_type, "_", job$.feature, ".rds")
+  )
+
+  if (!isTRUE(params$refresh_references) && file.exists(cache_path)) {
+    return(readRDS(cache_path))
+  }
+
+  fit <- read_model_fit(job$target_name, job$store)
+
+  result <- list(
+    posterior_draws = posterior_liver_draws(
+      fit = fit,
+      n_draws = params$n_posterior_draws,
+      seed = params$seed + job$job_id
+    ) |>
+      mutate(
+        gene = job$gene,
+        .feature = job$.feature,
+        cell_type = job$cell_type,
+        .before = 1
+      ),
+    diagnostics = bind_cols(
+      tibble(
+        gene = job$gene,
+        .feature = job$.feature,
+        cell_type = job$cell_type
+      ),
+      fit_diagnostics(fit),
+      empirical_liver_centroid(fit)
+    )
+  )
+
+  saveRDS(result, cache_path, compress = "gzip")
+  result
+}
+```
+
+## Retrieval and label-null helpers
+
+```{r}
+#| label: retrieval-helpers
+
+calculate_reference_correlations <- function(
+    patient_contrasts,
+    reference_values,
+    method
+) {
+  patient_contrasts |>
+    inner_join(
+      reference_values,
+      by = c("gene", ".feature")
+    ) |>
+    group_by(
+      .data$patient_id,
+      .data$panel,
+      .data$cell_type
+    ) |>
+    summarise(
+      correlation = cor(
+        .data$delta_q3,
+        .data$reference_value,
+        method = "spearman"
+      ),
+      n_genes = n(),
+      .groups = "drop"
+    ) |>
+    mutate(method = method, .before = 1)
+}
+
+summarise_retrieval <- function(correlations, target_cell = "nk") {
+  correlations |>
+    group_by(
+      .data$method,
+      .data$patient_id,
+      .data$panel
+    ) |>
+    group_modify(function(data, key) {
+      target_correlation <- data$correlation[
+        data$cell_type == target_cell
+      ][[1]]
+
+      best_other <- data |>
+        filter(.data$cell_type != target_cell) |>
+        dplyr::slice_max(
+          order_by = .data$correlation,
+          n = 1,
+          with_ties = FALSE
+        )
+
+      tibble(
+        n_genes = dplyr::first(data$n_genes),
+        nk_correlation = target_correlation,
+        best_other_cell = best_other$cell_type,
+        best_other_correlation = best_other$correlation,
+        nk_margin = target_correlation - best_other$correlation,
+        nk_rank = rank(
+          -data$correlation,
+          ties.method = "min"
+        )[data$cell_type == target_cell][[1]]
+      )
+    }) |>
+    ungroup()
+}
+
+reference_matrix_from_long <- function(reference_values) {
+  wide <- reference_values |>
+    dplyr::select(gene, cell_type, reference_value) |>
+    pivot_wider(
+      names_from = .data$cell_type,
+      values_from = .data$reference_value
+    ) |>
+    arrange(.data$gene)
+
+  matrix <- as.matrix(wide[, candidate_cells, drop = FALSE])
+  rownames(matrix) <- wide$gene
+  matrix
+}
+
+retrieval_margin <- function(
+    delta,
+    reference_matrix,
+    target_cell = "nk"
+) {
+  genes <- intersect(names(delta), rownames(reference_matrix))
+
+  correlations <- apply(
+    reference_matrix[genes, , drop = FALSE],
+    2,
+    function(reference) {
+      cor(delta[genes], reference, method = "spearman")
+    }
+  )
+
+  other_correlations <- correlations[
+    names(correlations) != target_cell
+  ]
+  best_other <- names(which.max(other_correlations))
+
+  tibble(
+    nk_correlation = unname(correlations[target_cell]),
+    best_other_cell = best_other,
+    best_other_correlation = unname(other_correlations[best_other]),
+    nk_margin = unname(
+      correlations[target_cell] - other_correlations[best_other]
+    )
+  )
+}
+
+exact_patient_permutations <- function(
+    patient,
+    genes,
+    metadata,
+    log_expression,
+    reference_matrix,
+    method
+) {
+  patient_regions <- metadata |>
+    filter(.data$patient_id == patient)
+
+  all_regions <- patient_regions$roi_key
+  observed_nk <- patient_regions$roi_key[
+    patient_regions$region_group == "NK-selected TC"
+  ]
+  assignments <- combn(
+    all_regions,
+    length(observed_nk),
+    simplify = FALSE
+  )
+
+  map_dfr(seq_along(assignments), function(permutation_id) {
+    nk_regions <- assignments[[permutation_id]]
+    cold_regions <- setdiff(all_regions, nk_regions)
+
+    delta <-
+      row_median(log_expression[genes, nk_regions, drop = FALSE]) -
+      row_median(log_expression[genes, cold_regions, drop = FALSE])
+    names(delta) <- genes
+
+    retrieval_margin(delta, reference_matrix) |>
+      mutate(
+        method = method,
+        patient_id = patient,
+        panel = dplyr::first(patient_regions$panel),
+        permutation_id = permutation_id,
+        observed_labels = setequal(nk_regions, observed_nk),
+        .before = 1
+      )
+  })
+}
+
+summarise_exact_test <- function(permutation_results) {
+  permutation_results |>
+    group_by(
+      .data$method,
+      .data$patient_id,
+      .data$panel
+    ) |>
+    summarise(
+      n_assignments = n(),
+      observed_margin = .data$nk_margin[.data$observed_labels][[1]],
+      observed_percentile = mean(
+        .data$nk_margin <= observed_margin
+      ),
+      upper_tail_fraction = mean(
+        .data$nk_margin >= observed_margin
+      ),
+      .groups = "drop"
+    )
+}
+
+simulate_joint_null <- function(
+    permutation_results,
+    n_draws,
+    seed
+) {
+  methods <- unique(permutation_results$method)
+
+  map_dfr(seq_along(methods), function(method_id) {
+    method <- methods[[method_id]]
+    method_results <- permutation_results |>
+      filter(.data$method == method)
+    patient_margins <- split(
+      method_results$nk_margin,
+      method_results$patient_id
+    )
+
+    set.seed(seed + method_id)
+    sampled_margins <- vapply(
+      patient_margins,
+      sample,
+      numeric(n_draws),
+      size = n_draws,
+      replace = TRUE
+    )
+
+    tibble(
+      method = method,
+      joint_draw = seq_len(n_draws),
+      cohort_mean_margin = rowMeans(sampled_margins)
+    )
+  })
+}
+
+summarise_joint_null <- function(permutation_results, joint_null) {
+  observed <- permutation_results |>
+    filter(.data$observed_labels) |>
+    group_by(.data$method) |>
+    summarise(
+      observed_cohort_mean_margin = mean(.data$nk_margin),
+      .groups = "drop"
+    )
+
+  joint_null |>
+    inner_join(observed, by = "method") |>
+    group_by(.data$method, .data$observed_cohort_mean_margin) |>
+    summarise(
+      n_joint_draws = n(),
+      observed_percentile = mean(
+        .data$cohort_mean_margin <= .data$observed_cohort_mean_margin
+      ),
+      monte_carlo_upper_tail =
+        (sum(
+          .data$cohort_mean_margin >= .data$observed_cohort_mean_margin
+        ) + 1) / (n() + 1),
+      .groups = "drop"
+    )
+}
+```
+
+------------------------------------------------------------------------
+
+# Frozen design and HCC data
+
+The external spatial data and author-defined region labels come from
+Jia *et al.* (2025), *Spatial immune scoring system predicts hepatocellular
+carcinoma recurrence*, *Nature* **640**, 1029–1040
+([doi:10.1038/s41586-025-08668-x](https://doi.org/10.1038/s41586-025-08668-x)).
+Only files present in the audited local Code Ocean export are used; unavailable
+raw GeoMx data and supplementary annotations are not reconstructed.
+
+The primary biological unit is the patient; individual GeoMx regions are
+spatial sampling units. Only matched tumour-centre comparisons are used, so
+each patient acts as their own spatial control. Recurrence is retained only as
+source metadata and is not used in this report.
+
+```{r}
+#| label: load-geomx-data
+
+core <- load_rdata_environment(core_rdata)
+source_de <- load_rdata_environment(source_de_rdata)
+
+geomx_expression <- as.matrix(core$data_gene_df_ed)
+mode(geomx_expression) <- "numeric"
+
+geomx_metadata <- as.data.frame(
+  t(core$data_meta_df_ed),
+  stringsAsFactors = FALSE
+) |>
+  rownames_to_column("roi_key") |>
+  mutate(
+    author_index = as.integer(str_remove(.data$roi_key, "^\\.\\.\\.")),
+    patient_id = .data$sampleid,
+    panel = if_else(
+      str_detect(.data$sampleid_raw, "_2_14Dec"),
+      "low coverage",
+      "high coverage"
+    ),
+    region_group = case_when(
+      .data$author_index %in% core$NKatTumor_indx ~ "NK-selected TC",
+      str_detect(
+        .data$label,
+        regex("^cold tumor", ignore_case = TRUE)
+      ) ~ "Cold TC",
+      TRUE ~ NA_character_
+    ),
+    region_detail = case_when(
+      .data$region_group == "Cold TC" ~ "cold tumour",
+      str_detect(
+        .data$label,
+        regex("CD3 rich too", ignore_case = TRUE)
+      ) ~ "CD57/CD3 overlap",
+      .data$region_group == "NK-selected TC" ~ "CD57-rich",
+      TRUE ~ NA_character_
+    )
+  )
+
+primary_patients <- c("A24", "A29", "A10", "A9", "A3", "A39")
+
+primary_regions <- geomx_metadata |>
+  filter(
+    .data$patient_id %in% primary_patients,
+    !is.na(.data$region_group)
+  ) |>
+  mutate(
+    patient_id = factor(.data$patient_id, levels = primary_patients),
+    region_group = factor(
+      .data$region_group,
+      levels = c("Cold TC", "NK-selected TC")
+    )
+  ) |>
+  arrange(.data$patient_id, .data$region_group, .data$author_index)
+
+region_design <- primary_regions |>
+  count(
+    .data$patient_id,
+    .data$panel,
+    .data$region_group,
+    .data$region_detail,
+    name = "n_regions",
+    .drop = FALSE
+  ) |>
+  filter(.data$n_regions > 0)
+
+write_csv(
+  primary_regions,
+  file.path(output_dir, "primary_tc_regions.csv")
+)
+
+region_design
+```
+
+The six patients contribute `r nrow(primary_regions)` regions:
+`r sum(primary_regions$region_group == "NK-selected TC")` NK-selected TC and
+`r sum(primary_regions$region_group == "Cold TC")` cold TC regions. Of the
+NK-selected regions, `r sum(primary_regions$region_detail == "CD57-rich")`
+are labelled CD57-rich and
+`r sum(primary_regions$region_detail == "CD57/CD3 overlap")` are labelled
+CD57/CD3 overlap. The overlap is therefore part of what “NK-selected” means in
+this primary source-defined experiment and is reported explicitly.
+
+------------------------------------------------------------------------
+
+# Source-excluded common gene universe
+
+The gene universe is frozen without using the observed retrieval result. It
+starts from genes measured in every one of the 93 GeoMx segments, excludes all
+241 source spatial genes and the transcripts used to define the CD57/CD3
+regions, and then retains only unambiguous Ensembl mappings available in all
+seven posteriorHCA model stores.
+
+```{r}
+#| label: model-inventories
+
+model_inventories <- map_dfr(
+  candidate_cells,
+  read_model_inventory
+)
+
+common_model_features <- model_inventories |>
+  group_by(.data$.feature) |>
+  summarise(n_cell_types = n_distinct(.data$cell_type), .groups = "drop") |>
+  filter(.data$n_cell_types == length(candidate_cells)) |>
+  pull(.data$.feature)
+```
+
+```{r}
+#| label: gene-universe
+
+complete_geomx_genes <- rownames(geomx_expression)[
+  rowSums(is.na(geomx_expression)) == 0
+]
+
+source_genes <- bind_rows(
+  source_de$fd_df,
+  source_de$fd_uf,
+  source_de$fu_df,
+  source_de$fu_uf
+) |>
+  distinct(.data$gene) |>
+  pull(.data$gene)
+
+times_genes <- c("SPON2", "ZFP36L2", "ZFP36", "VIM", "HLA-DRB1")
+selection_genes <- c("B3GAT1", "CD3D", "CD3E", "CD3G")
+
+source_excluded_symbols <- setdiff(
+  complete_geomx_genes,
+  c(source_genes, times_genes, selection_genes)
+)
+
+gene_mapping <- AnnotationDbi::select(
+  org.Hs.eg.db,
+  keys = source_excluded_symbols,
+  columns = "ENSEMBL",
+  keytype = "SYMBOL"
+) |>
+  as_tibble() |>
+  filter(
+    !is.na(.data$ENSEMBL),
+    .data$ENSEMBL %in% common_model_features
+  ) |>
+  distinct(.data$SYMBOL, .data$ENSEMBL) |>
+  add_count(.data$SYMBOL, name = "n_model_mappings") |>
+  filter(.data$n_model_mappings == 1) |>
+  transmute(
+    gene = .data$SYMBOL,
+    .feature = .data$ENSEMBL
+  ) |>
+  arrange(.data$gene)
+
+gene_universe_audit <- tibble(
+  stage = c(
+    "All GeoMx matrix rows",
+    "Complete in all 93 GeoMx segments",
+    "After source, TIMES and region-selection exclusion",
+    "Available in all seven posteriorHCA stores"
+  ),
+  n_genes = c(
+    nrow(geomx_expression),
+    length(complete_geomx_genes),
+    length(source_excluded_symbols),
+    nrow(gene_mapping)
+  )
+)
+
+write_csv(
+  gene_mapping,
+  file.path(output_dir, "source_excluded_gene_universe_before_model_qc.csv")
+)
+
+gene_universe_audit
+```
+
+The five TIMES genes are not used. None is present in the all-segment common
+universe, and they were selected using the same HCC source data. Among the 241
+source genes, only `BIRC5` overlaps the 1,788-gene common GeoMx universe, but
+the full source list is excluded before model intersection.
+
+------------------------------------------------------------------------
+
+# HCC within-patient spatial contrasts
+
+```{r}
+#| label: hcc-contrasts
+
+log2_q3 <- log2(geomx_expression)
+
+hcc_contrasts_before_model_qc <- map_dfr(
+  primary_patients,
+  make_patient_contrast,
+  genes = gene_mapping$gene,
+  metadata = primary_regions,
+  log_expression = log2_q3
+) |>
+  left_join(gene_mapping, by = "gene")
+
+write_csv(
+  hcc_contrasts_before_model_qc,
+  file.path(output_dir, "hcc_tc_contrasts_before_model_qc.csv")
+)
+
+hcc_contrasts_before_model_qc |>
+  group_by(.data$patient_id, .data$panel) |>
+  summarise(
+    n_genes = n(),
+    median_delta_q3 = median(.data$delta_q3),
+    .groups = "drop"
+  )
+```
+
+Positive `delta_q3` means that a gene is higher in the patient's NK-selected
+TC regions than in their cold TC regions. The analysis compares the ranking of
+these gene-wise changes with each frozen healthy cell reference; it never
+compares Q3 values directly with posteriorHCA counts.
+
+------------------------------------------------------------------------
+
+# Frozen healthy-liver references
+
+## Comprehensive healthy-liver baseline
+
+Each gene-by-cell reference is the same comprehensive healthy-liver estimand
+used in the universal baseline report. Disease is fixed to Normal, tissue to
+liver, and offset to zero. Sex, age decade, ethnicity and assay are expanded
+to the full factorial of levels present in that fitted model; every grid cell
+receives equal weight. The scalar baseline draw is the mean of $\log\mu$ over
+that grid (`mean(log mu)`, not `log(mean mu)`). Dataset identity is a new
+shared level sampled from the hierarchical prior
+(`allow_new_levels = TRUE`, `sample_new_levels = "gaussian"`,
+`re_formula = NULL`), so dataset uncertainty enters the baseline posterior
+rather than being pinned at the population mean or averaged over observed
+dataset IDs. Retrieval still uses Spearman correlation across genes within
+each cell reference, so a cell-model-specific additive intercept does not
+change that cell's correlation or the NK retrieval margin.
+
+## Model evaluation and caching
+
+For each gene and cell type, `posterior_linpred()` returns posterior draws of
+the comprehensive healthy-liver grand-mean $\log\mu$. The empirical benchmark
+uses the same fitted model's training rows but does no modelling: it
+normalizes counts by their fitted offset, averages within atlas dataset and
+then gives each dataset equal weight. Each gene-by-cell job is written to
+disk immediately so an interrupted run can resume.
+
+```{r}
+#| label: compute-reference-cache
+
+reference_jobs <- tidyr::crossing(
+  gene_mapping,
+  cell_type = candidate_cells
+) |>
+  left_join(
+    model_inventories,
+    by = c(".feature", "cell_type")
+  ) |>
+  mutate(job_id = row_number())
+
+reference_job_cache_dir <- file.path(
+  output_dir,
+  "frozen_reference_jobs"
+)
+dir.create(reference_job_cache_dir, recursive = TRUE, showWarnings = FALSE)
+
+n_jobs <- nrow(reference_jobs)
+results <- vector("list", n_jobs)
+progress <- txtProgressBar(min = 0, max = n_jobs, style = 3)
+
+for (i in seq_len(n_jobs)) {
+  job <- reference_jobs[i, ]
+  results[[i]] <- compute_reference_job(job, reference_job_cache_dir)
+  setTxtProgressBar(progress, i)
+  if (i == 1L || i == n_jobs || i %% 25L == 0L) {
+    message(
+      sprintf(
+        "\n[%d/%d] %s | %s | %s",
+        i,
+        n_jobs,
+        job$cell_type,
+        job$gene,
+        job$.feature
+      )
+    )
+  }
+}
+
+close(progress)
+
+reference_results <- list(
+  posterior_draws = map_dfr(results, "posterior_draws"),
+  diagnostics = map_dfr(results, "diagnostics")
+)
+```
+
+## Model-diagnostic triage and final analysis genes
+
+```{r}
+#| label: model-quality-gate
+
+reference_diagnostics <- reference_results$diagnostics |>
+  mutate(
+    diagnostic_status = case_when(
+      .data$maximum_rhat > params$fail_maximum_rhat |
+        .data$divergent_percent >= params$fail_minimum_divergence_percent ~
+        "FAIL",
+      .data$maximum_rhat <= params$pass_maximum_rhat &
+        .data$divergent_percent < params$pass_maximum_divergence_percent ~
+        "PASS",
+      TRUE ~ "WARN"
+    ),
+    diagnostic_status = factor(
+      .data$diagnostic_status,
+      levels = c("PASS", "WARN", "FAIL")
+    )
+  )
+
+gene_model_quality <- reference_diagnostics |>
+  group_by(.data$gene, .data$.feature) |>
+  summarise(
+    n_models = n(),
+    all_models_pass = all(.data$diagnostic_status == "PASS"),
+    any_model_failed = any(.data$diagnostic_status == "FAIL"),
+    n_models_warn = sum(.data$diagnostic_status == "WARN"),
+    maximum_rhat = max(.data$maximum_rhat),
+    minimum_ess_bulk = min(.data$minimum_ess_bulk),
+    maximum_divergent_percent = max(.data$divergent_percent),
+    divergent_transitions = sum(.data$divergent_transitions),
+    .groups = "drop"
+  )
+
+strict_gene_mapping <- gene_mapping |>
+  inner_join(
+    gene_model_quality |>
+      filter(.data$all_models_pass),
+    by = c("gene", ".feature")
+  ) |>
+  arrange(.data$gene)
+
+analysis_gene_mapping <- gene_mapping |>
+  inner_join(
+    gene_model_quality |>
+      filter(!.data$any_model_failed),
+    by = c("gene", ".feature")
+  ) |>
+  arrange(.data$gene)
+
+hcc_contrasts <- hcc_contrasts_before_model_qc |>
+  semi_join(
+    analysis_gene_mapping,
+    by = c("gene", ".feature")
+  )
+
+write_csv(
+  reference_diagnostics,
+  file.path(output_dir, "posteriorHCA_reference_model_diagnostics.csv")
+)
+write_csv(
+  analysis_gene_mapping,
+  file.path(output_dir, "final_analysis_gene_universe.csv")
+)
+write_csv(
+  strict_gene_mapping,
+  file.path(output_dir, "strict_pass_gene_universe.csv")
+)
+write_csv(
+  hcc_contrasts,
+  file.path(output_dir, "hcc_tc_contrasts_final.csv")
+)
+
+tibble(
+  item = c(
+    "Candidate genes before model diagnostics",
+    "Genes with PASS in all seven cell models",
+    "Genes without a FAIL among seven cell models",
+    "Models evaluated",
+    "Models classified PASS",
+    "Models classified WARN",
+    "Models classified FAIL"
+  ),
+  n = c(
+    nrow(gene_mapping),
+    nrow(strict_gene_mapping),
+    nrow(analysis_gene_mapping),
+    nrow(reference_diagnostics),
+    sum(reference_diagnostics$diagnostic_status == "PASS"),
+    sum(reference_diagnostics$diagnostic_status == "WARN"),
+    sum(reference_diagnostics$diagnostic_status == "FAIL")
+  )
+)
+```
+
+The frozen models were fitted before this case study and are not refitted here.
+Diagnostics therefore use the same three-level convention as the project's
+convergence report. `PASS` requires maximum R-hat no greater than
+`r params$pass_maximum_rhat` and fewer than
+`r params$pass_maximum_divergence_percent`% divergent transitions. `FAIL`
+requires maximum R-hat greater than `r params$fail_maximum_rhat` or at least
+`r params$fail_minimum_divergence_percent`% divergent transitions; intermediate
+fits are retained as visible `WARN` results. A gene is excluded only if at
+least one of its seven cell models is `FAIL`. This preserves the frozen-model
+constraint without presenting soft warnings as clean convergence. The
+all-seven-`PASS` universe is saved separately as a claim-strength audit; the
+broader no-`FAIL` universe is an operational, explicitly exploratory
+evaluation of the deployed frozen stores.
+
+------------------------------------------------------------------------
+
+# Cell-reference retrieval
+
+## Construct posteriorHCA and naive empirical cell specificities
+
+```{r}
+#| label: construct-reference-values
+
+posterior_reference_draws <- reference_results$posterior_draws |>
+  semi_join(
+    analysis_gene_mapping,
+    by = c("gene", ".feature")
+  ) |>
+  group_by(.data$gene, .data$.feature, .data$draw) |>
+  mutate(
+    reference_value =
+      .data$reference_log_mu - mean(.data$reference_log_mu)
+  ) |>
+  ungroup()
+
+posterior_reference <- posterior_reference_draws |>
+  group_by(.data$gene, .data$.feature, .data$cell_type) |>
+  summarise(
+    reference_value = median(.data$reference_value),
+    .groups = "drop"
+  )
+
+empirical_reference <- reference_diagnostics |>
+  semi_join(
+    analysis_gene_mapping,
+    by = c("gene", ".feature")
+  ) |>
+  group_by(.data$gene, .data$.feature) |>
+  mutate(
+    reference_value =
+      .data$empirical_log_expression -
+      mean(.data$empirical_log_expression)
+  ) |>
+  ungroup() |>
+  dplyr::select(
+    gene,
+    .feature,
+    cell_type,
+    reference_value
+  )
+```
+
+## Primary retrieval metrics
+
+For each patient and candidate cell, Spearman correlation compares the ranking
+of GeoMx spatial changes with the ranking of reference specificity. The primary
+specificity statistic is
+
+$$
+M_p = \rho_{p,\mathrm{NK}} -
+\max_{c \neq \mathrm{NK}} \rho_{pc}.
+$$
+
+A positive margin means that liver NK is the best of the seven frozen
+posteriorHCA cell references.
+
+```{r}
+#| label: primary-retrieval
+
+retrieval_correlations <- bind_rows(
+  calculate_reference_correlations(
+    hcc_contrasts,
+    posterior_reference,
+    method = "posteriorHCA"
+  ),
+  calculate_reference_correlations(
+    hcc_contrasts,
+    empirical_reference,
+    method = "Naive empirical HCA"
+  )
+) |>
+  mutate(
+    cell_label = unname(cell_labels[.data$cell_type])
+  )
+
+retrieval_metrics <- summarise_retrieval(
+  retrieval_correlations,
+  target_cell = target_cell
+)
+
+posterior_draw_correlations <- hcc_contrasts |>
+  inner_join(
+    posterior_reference_draws |>
+      dplyr::select(
+        gene,
+        .feature,
+        draw,
+        cell_type,
+        reference_value
+      ),
+    by = c("gene", ".feature")
+  ) |>
+  group_by(
+    .data$draw,
+    .data$patient_id,
+    .data$panel,
+    .data$cell_type
+  ) |>
+  summarise(
+    correlation = cor(
+      .data$delta_q3,
+      .data$reference_value,
+      method = "spearman"
+    ),
+    n_genes = n(),
+    .groups = "drop"
+  ) |>
+  mutate(method = "posteriorHCA", .before = 1)
+
+posterior_draw_metrics <- posterior_draw_correlations |>
+  group_by(
+    .data$method,
+    .data$draw,
+    .data$patient_id,
+    .data$panel
+  ) |>
+  group_modify(function(data, key) {
+    target_correlation <- data$correlation[
+      data$cell_type == target_cell
+    ][[1]]
+    best_other_correlation <- max(
+      data$correlation[data$cell_type != target_cell]
+    )
+
+    tibble(
+      nk_correlation = target_correlation,
+      nk_margin = target_correlation - best_other_correlation
+    )
+  }) |>
+  ungroup()
+
+posterior_uncertainty <- posterior_draw_metrics |>
+  group_by(.data$patient_id, .data$panel) |>
+  summarise(
+    nk_correlation_lo = quantile(.data$nk_correlation, 0.025),
+    nk_correlation_hi = quantile(.data$nk_correlation, 0.975),
+    nk_margin_lo = quantile(.data$nk_margin, 0.025),
+    nk_margin_hi = quantile(.data$nk_margin, 0.975),
+    posterior_probability_margin_positive = mean(.data$nk_margin > 0),
+    .groups = "drop"
+  ) |>
+  mutate(method = "posteriorHCA", .before = 1)
+
+retrieval_metrics <- retrieval_metrics |>
+  left_join(
+    posterior_uncertainty,
+    by = c("method", "patient_id", "panel")
+  )
+
+write_csv(
+  retrieval_correlations,
+  file.path(output_dir, "reference_correlations.csv")
+)
+write_csv(
+  retrieval_metrics,
+  file.path(output_dir, "retrieval_metrics.csv")
+)
+```
+
+------------------------------------------------------------------------
+
+# Spatial-label compatibility null
+
+Within each patient, the analysis enumerates every allocation with the same
+number of NK-selected and cold regions as observed. It then repeats the entire
+gene-wise contrast and reference-retrieval calculation. This sensitivity asks
+whether the protein-defined spatial labels are unusually compatible with the
+frozen reference; it does not treat individual regions as independent patients
+and does not assume that the source regions were randomized.
+
+```{r}
+#| label: exact-label-null
+
+posterior_reference_matrix <- reference_matrix_from_long(
+  posterior_reference
+)
+empirical_reference_matrix <- reference_matrix_from_long(
+  empirical_reference
+)
+
+reference_matrices <- list(
+  posteriorHCA = posterior_reference_matrix,
+  `Naive empirical HCA` = empirical_reference_matrix
+)
+
+exact_permutations <- imap_dfr(
+  reference_matrices,
+  function(reference_matrix, method) {
+    map_dfr(
+      primary_patients,
+      exact_patient_permutations,
+      genes = analysis_gene_mapping$gene,
+      metadata = primary_regions,
+      log_expression = log2_q3,
+      reference_matrix = reference_matrix,
+      method = method
+    )
+  }
+)
+
+exact_test_summary <- summarise_exact_test(exact_permutations)
+
+joint_null <- simulate_joint_null(
+  exact_permutations,
+  n_draws = params$joint_null_draws,
+  seed = params$seed
+)
+
+joint_null_summary <- summarise_joint_null(
+  exact_permutations,
+  joint_null
+)
+
+write_csv(
+  exact_permutations,
+  file.path(output_dir, "exact_region_label_permutations.csv")
+)
+write_csv(
+  exact_test_summary,
+  file.path(output_dir, "exact_region_label_test_summary.csv")
+)
+write_csv(
+  joint_null_summary,
+  file.path(output_dir, "joint_region_label_null_summary.csv")
+)
+
+joint_null_summary
+```
+
+For a 3-versus-3 patient there are only 20 exact assignments, so the smallest
+attainable individual upper-tail fraction is 0.05. These fractions are
+compatibility summaries, not randomization-test P values: the available files
+do not establish that all regions were randomized or freely exchangeable.
+The cohort statistic is the pre-specified mean NK margin across six patients.
+Its joint null independently samples from each patient's exhaustive allocation
+set; the reported Monte Carlo tail fraction uses `r params$joint_null_draws`
+draws and preserves the patient as the biological unit.
+
+------------------------------------------------------------------------
+
+# Results
+
+## Patient-level result table
+
+```{r}
+#| label: result-table
+
+result_table <- retrieval_metrics |>
+  dplyr::select(
+    method,
+    patient_id,
+    panel,
+    n_genes,
+    nk_correlation,
+    best_other_cell,
+    best_other_correlation,
+    nk_margin,
+    nk_rank,
+    nk_margin_lo,
+    nk_margin_hi,
+    posterior_probability_margin_positive
+  ) |>
+  left_join(
+    exact_test_summary,
+    by = c("method", "patient_id", "panel")
+  ) |>
+  mutate(
+    best_other_cell = unname(cell_labels[.data$best_other_cell]),
+    across(
+      where(is.numeric),
+      ~ round(.x, 3)
+    )
+  ) |>
+  arrange(.data$panel, .data$patient_id, .data$method)
+
+write_csv(
+  result_table,
+  file.path(output_dir, "spatial_transfer_result_table.csv")
+)
+
+result_table
+```
+
+## Which cell reference is retrieved?
+
+```{r}
+#| label: correlation-heatmap
+#| fig-width: 9
+#| fig-height: 5.5
+#| fig-align: center
+
+correlation_heatmap <- retrieval_correlations |>
+  filter(.data$method == "posteriorHCA") |>
+  mutate(
+    patient_id = fct_rev(factor(.data$patient_id, levels = primary_patients)),
+    cell_label = factor(
+      .data$cell_label,
+      levels = unname(cell_labels[candidate_cells])
+    )
+  ) |>
+  ggplot(aes(x = .data$cell_label, y = .data$patient_id)) +
+  geom_tile(aes(fill = .data$correlation), colour = "white") +
+  geom_text(
+    aes(label = number(.data$correlation, accuracy = 0.01)),
+    size = 3
+  ) +
+  scale_fill_gradient2(
+    low = "#C23B4A",
+    mid = "white",
+    high = "#2878B5",
+    midpoint = 0,
+    name = "Spearman\nrho"
+  ) +
+  labs(
+    title = "Frozen posteriorHCA reference retrieval on GeoMx",
+    subtitle = "Each row compares one within-patient NK-selected-minus-cold TC contrast with seven healthy-liver cell references",
+    x = NULL,
+    y = "HCC patient"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 35, hjust = 1),
+    panel.grid = element_blank(),
+    legend.position = "right"
+  )
+
+correlation_heatmap
+
+ggsave(
+  file.path(output_dir, "posteriorHCA_reference_correlation_heatmap.pdf"),
+  correlation_heatmap,
+  width = 9,
+  height = 5.5
+)
+```
+
+The transfer claim requires NK to be the best-matching reference, not merely
+positively correlated. A positive NK margin means that NK outranks CD8 TEM,
+MAIT, gamma-delta T, monocytic, macrophage and epithelial references.
+
+## Descriptive sensitivity: posteriorHCA versus a naive empirical centroid
+
+```{r}
+#| label: retrieval-margin-plot
+#| fig-width: 8.5
+#| fig-height: 5
+#| fig-align: center
+
+margin_plot_data <- retrieval_metrics |>
+  mutate(
+    patient_id = factor(.data$patient_id, levels = primary_patients),
+    method = factor(
+      .data$method,
+      levels = c("Naive empirical HCA", "posteriorHCA")
+    )
+  )
+
+margin_plot <- margin_plot_data |>
+  ggplot(aes(x = .data$patient_id, y = .data$nk_margin)) +
+  geom_hline(yintercept = 0, colour = "grey55", linewidth = 0.5) +
+  geom_line(aes(group = .data$patient_id), colour = "grey70") +
+  geom_point(
+    aes(colour = .data$method, shape = .data$method),
+    size = 3
+  ) +
+  geom_errorbar(
+    data = margin_plot_data |>
+      filter(.data$method == "posteriorHCA"),
+    aes(ymin = .data$nk_margin_lo, ymax = .data$nk_margin_hi),
+    width = 0.08,
+    colour = method_colours[["posteriorHCA"]]
+  ) +
+  facet_grid(cols = vars(.data$panel), scales = "free_x", space = "free_x") +
+  scale_colour_manual(values = method_colours) +
+  scale_shape_manual(
+    values = c(`Naive empirical HCA` = 16, posteriorHCA = 18)
+  ) +
+  labs(
+    title = "Specificity of liver-NK retrieval",
+    subtitle = "Positive values indicate that NK outperforms every alternative cell reference",
+    x = "HCC patient",
+    y = "NK retrieval margin",
+    colour = NULL,
+    shape = NULL
+  ) +
+  theme(legend.position = "bottom")
+
+margin_plot
+
+ggsave(
+  file.path(output_dir, "posteriorHCA_vs_empirical_retrieval_margin.pdf"),
+  margin_plot,
+  width = 8.5,
+  height = 5
+)
+```
+
+The empirical comparator is intentionally naive. It uses offset-normalized
+healthy-liver observations and equal dataset weighting, but it does not use
+the comprehensive factor-grid grand mean or the new-dataset hierarchical draw
+used by posteriorHCA. Any difference can therefore reflect covariate mix,
+dataset handling or the log transformation as well as hierarchical modelling.
+It is shown only to contextualize the frozen reference and cannot establish
+posteriorHCA superiority.
+
+## Where does the observed labelling fall among alternative allocations?
+
+```{r}
+#| label: exact-null-plot
+#| fig-width: 9
+#| fig-height: 5.5
+#| fig-align: center
+
+exact_null_plot <- exact_permutations |>
+  filter(.data$method == "posteriorHCA") |>
+  mutate(
+    patient_id = factor(.data$patient_id, levels = primary_patients)
+  ) |>
+  ggplot(aes(x = .data$patient_id, y = .data$nk_margin)) +
+  geom_hline(yintercept = 0, colour = "grey55", linewidth = 0.5) +
+  geom_jitter(
+    data = function(data) filter(data, !.data$observed_labels),
+    width = 0.13,
+    height = 0,
+    colour = "grey72",
+    alpha = 0.75,
+    size = 1.8
+  ) +
+  geom_point(
+    data = function(data) filter(data, .data$observed_labels),
+    colour = "#2878B5",
+    shape = 18,
+    size = 4
+  ) +
+  facet_grid(cols = vars(.data$panel), scales = "free_x", space = "free_x") +
+  labs(
+    title = "Within-patient spatial-label compatibility null",
+    subtitle = "Blue diamonds are the protein-defined labels; grey points are every size-matched reassignment",
+    x = "HCC patient",
+    y = "posteriorHCA NK retrieval margin"
+  )
+
+exact_null_plot
+
+ggsave(
+  file.path(output_dir, "posteriorHCA_exact_spatial_label_null.pdf"),
+  exact_null_plot,
+  width = 9,
+  height = 5.5
+)
+```
+
+------------------------------------------------------------------------
+
+# Interpretation
+
+```{r}
+#| label: interpretation-summary
+
+posterior_results <- retrieval_metrics |>
+  filter(.data$method == "posteriorHCA")
+
+panel_results <- posterior_results |>
+  group_by(.data$panel) |>
+  summarise(
+    n_patients = n(),
+    median_nk_correlation = median(.data$nk_correlation),
+    median_nk_margin = median(.data$nk_margin),
+    patients_with_nk_rank_1 = sum(.data$nk_rank == 1),
+    .groups = "drop"
+  )
+
+evidence_summary <- tibble(
+  evidence = c(
+    "Patients with positive posteriorHCA NK correlation",
+    "Patients with NK ranked first",
+    "Patients with positive NK retrieval margin",
+    "Coverage panels with positive median NK margin",
+    "Patients with observed-label percentile at least 0.90",
+    "Cohort joint-null upper-tail fraction"
+  ),
+  observed = c(
+    paste0(sum(posterior_results$nk_correlation > 0), " / ", nrow(posterior_results)),
+    paste0(sum(posterior_results$nk_rank == 1), " / ", nrow(posterior_results)),
+    paste0(sum(posterior_results$nk_margin > 0), " / ", nrow(posterior_results)),
+    paste0(sum(panel_results$median_nk_margin > 0), " / ", nrow(panel_results)),
+    paste0(
+      sum(
+        exact_test_summary$method == "posteriorHCA" &
+          exact_test_summary$observed_percentile >= 0.90
+      ),
+      " / ",
+      sum(exact_test_summary$method == "posteriorHCA")
+    ),
+    format(
+      joint_null_summary$monte_carlo_upper_tail[
+        joint_null_summary$method == "posteriorHCA"
+      ],
+      digits = 3
+    )
+  )
+)
+
+evidence_summary
+```
+
+Evidence for cross-platform transport is strongest when the following pattern
+appears together:
+
+1. the liver-NK correlation is positive;
+2. NK ranks first among all seven cell references, giving a positive margin;
+3. the result is present in both GeoMx coverage panels;
+4. the observed spatial labels lie near the top of their exhaustive
+   compatibility null; and
+5. the pattern remains after source-gene, TIMES-gene and segmentation-marker
+   exclusion.
+
+The posterior-draw intervals and positive-margin probability are conditional
+on the frozen fitted models and the fixed HCC contrasts. They represent
+reference-model sensitivity, not total uncertainty and not GeoMx calibration.
+The naive empirical centroid is descriptive context only; this experiment does
+not use it to claim superiority of hierarchical modelling.
+
+Even a strong result remains a structural validation. GeoMx Q3 values are not
+raw counts, the regions are mixed-cell spatial samples, and no healthy GeoMx or
+paired cross-platform bridge exists. Consequently, this report does not call
+the baseline absolutely calibrated to GeoMx.
+
+------------------------------------------------------------------------
+
+# Claim–evidence map
+
+| Claim | Required evidence in this report | Status rule |
+|---|---|---|
+| Frozen posteriorHCA structure transfers to unseen GeoMx | Positive NK correlation and margin, both coverage panels, source-excluded genes and label-null support | Strongly supported only if all evidence classes agree and a useful all-seven-PASS gene universe exists; otherwise exploratory |
+| Transfer is NK-specific | NK outranks CD8 TEM, MAIT, gamma-delta T, monocytic, macrophage and epithelial references | Supported patient by patient by a positive NK margin |
+| posteriorHCA improves on a direct HCA centroid | A covariate- and estimand-matched direct reference comparison | Not tested; the naive empirical sensitivity is not a fair superiority benchmark |
+| posteriorHCA is absolutely calibrated to GeoMx | Healthy or paired cross-platform bridge and valid GeoMx observation model | Not testable with the available data |
+
+------------------------------------------------------------------------
+
+# Reviewer-facing self-review
+
+| Dimension | Question | Current safeguard |
+|---|---|---|
+| Contribution | Does the experiment test something unavailable from a direct REC/non-REC comparison? | Yes: correct frozen cell-reference retrieval on an unseen assay |
+| Writing clarity | Are the two contrasts, biological unit and platform boundary explicit? | Yes: equations and region-level design are stated before results |
+| Experimental strength | Is posteriorHCA compared with hard alternative references? | Yes: six alternative cell types; the unmatched empirical centroid is descriptive only |
+| Evaluation completeness | Could source selection or arbitrary region assignment explain the result? | Source features are excluded and every within-patient label allocation is enumerated |
+| Method soundness | Are Q3 values treated as raw counts or calibrated posteriorHCA observations? | No: only within-patient log-Q3 ranks are compared with latent reference structure |
+
+------------------------------------------------------------------------
+
+# Saved artefacts
+
+```{r}
+#| label: output-files
+
+output_files <- tibble(
+  file = list.files(
+    output_dir,
+    full.names = TRUE,
+    recursive = TRUE,
+    include.dirs = FALSE
+  ),
+  size_mb = file.info(file)$size / 1024^2
+) |>
+  mutate(size_mb = round(.data$size_mb, 2)) |>
+  arrange(.data$file)
+
+output_files
+```
+
+```{r}
+#| label: session-info
+
+sessionInfo()
+```

@@ -1,0 +1,1119 @@
+---
+title: "Age-smooth k-grid evaluation"
+subtitle: "Convergence, age curves, brms smooth-term comparison, vs strong RE, fitting time"
+date: today
+date-format: "DD MMM YYYY"
+title-block-banner: true
+author:
+  - name: Chen Zhan
+    orcid: 0000-0002-4794-8339
+    email: chen.zhan@adelaide.edu.au
+    affiliation:
+      - id: sgc
+        name: SAiGENCI, The University of Adelaide
+format:
+  html:
+    theme: minty
+    df-print: paged
+    code-line-numbers: true
+    embed-resources: true
+    code-fold: true
+    code-fold-default: true
+    toc: true
+    toc-location: left
+    toc-title: "Contents"
+knitr:
+  opts_chunk:
+    message: false
+    warning: false
+editor: source
+abstract: |
+  Evaluation of continuous-age thin-plate smooth fits on healthy V1_nk samples
+  (`disease_groups_altered == "Normal"`) for four TIMES biomarkers
+  (SPON2, ZFP36L2, ZFP36, VIM) and smooth basis sizes k ∈ {3,4,5}. We report
+  HMC convergence, blood/liver age curves, an explicit comparison with
+  `brms::conditional_smooths()`, predict/linpred compatibility (needed for
+  comprehensive μ), comprehensive healthy liver baseline mean/SD against
+  the strong-HMC correlated RE (simple shape) fits, and wall-clock fitting
+  times from the `formula_bench` targets pipeline (age-smooth vs RE formulas
+  across chain × CPU settings).
+params:
+  case_dir: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC"
+  smooth_out_dir: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/age_smooth_k_grid_pilot"
+  strong_out_dir: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/re_vs_interaction_strong"
+  diagnostics_csv: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/age_smooth_k_grid_pilot/age_smooth_eval_diagnostics.csv"
+  curves_rds: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/age_smooth_k_grid_pilot/age_smooth_eval_curves_group_support.rds"
+  conditional_smooths_rds: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/age_smooth_k_grid_pilot/age_smooth_eval_conditional_smooths_group_support.rds"
+  baseline_draws_rds: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/age_smooth_k_grid_pilot/age_smooth_eval_baseline_draws.rds"
+  compat_csv: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/age_smooth_k_grid_pilot/age_smooth_eval_linpred_compat.csv"
+  timing_summary_csv: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/formula_bench/timing_summary.csv"
+  refresh: false
+  n_curve_draws: 200
+  n_baseline_draws: 400
+---
+
+# Motivation
+
+Age-smooth models replace categorical `age_decade` with
+
+`s(age_days_scaled, by = tissue_sex, bs = "tp", k, m = 1)`
+
+on **healthy** rows only. This report asks:
+
+1. **Convergence** — does HMC reliability depend on k?  
+2. **Age curves** — how do blood / liver log-mean trajectories look by k, and
+   how do they differ from `brms::conditional_smooths()`?  
+3. **Predict API** — do `posterior_linpred` / `posterior_predict` work on these
+   objects (required for comprehensive μ)?  
+4. **vs strong RE** — how do comprehensive liver baseline μ and SD compare to
+   the long-run correlated RE (simple shape) fits?  
+5. **Fitting time** — how does wall-clock HMC time compare across formulas
+   (age-smooth k vs RE) and chain × CPU settings from the `formula_bench`
+   targets pipeline?
+
+| Model | Data | Age | MCMC |
+|-------|------|-----|------|
+| Age-smooth k=3/4/5 | Normal only (n≈2905) | continuous smooth | 4×400/900, control=NULL |
+| Strong RE (report §4) | all disease (n≈3226) | age_decade FE/RE | 4×1500/3000, δ=0.95 |
+| formula_bench (§5) | Normal only (n=2905) | smooth or age_decade | 2/4 chains × 400/900 |
+
+------------------------------------------------------------------------
+
+# Library setup
+
+```{r}
+#| label: setup
+
+suppressPackageStartupMessages({
+  library(tibble)
+  library(tidyr)
+  library(dplyr)
+  library(readr)
+  library(ggplot2)
+  library(forcats)
+  library(scales)
+  library(glue)
+  library(stringr)
+  library(posterior)
+  library(brms)
+})
+
+source(file.path(params$case_dir, "R", "re_vs_interaction_helpers.R"))
+source(file.path(params$case_dir, "R", "fit_convergence_helpers.R"))
+source(file.path(params$case_dir, "R", "age_smooth_helpers.R"))
+
+theme_set(theme_minimal(base_size = 11))
+
+genes <- pilot_biomarker_genes()
+ks <- age_smooth_ks_default()
+
+k_colours <- c(`3` = "#4DBBD5", `4` = "#E64B35", `5` = "#3C5488")
+model_colours <- c(
+  `RE HMC (simple)` = "#7A7A7A",
+  `Age-smooth k=3` = "#4DBBD5",
+  `Age-smooth k=4` = "#E64B35",
+  `Age-smooth k=5` = "#3C5488"
+)
+gate_colours <- c(PASS = "#2D8B57", WARN = "#E08A2E", FAIL = "#C23B4A")
+setting_colours <- c(
+  `2×8 (4 thr)` = "#00A087",
+  `4×8 (2 thr)` = "#E64B35",
+  `4×16 (4 thr)` = "#3C5488"
+)
+```
+
+------------------------------------------------------------------------
+
+# Fit inventory
+
+```{r}
+#| label: inventory
+
+inv <- age_smooth_inventory(params$smooth_out_dir, genes = genes, ks = ks)
+inv |>
+  transmute(
+    gene, k, model,
+    status = if_else(available, "OK", "MISSING"),
+    file = basename(rds_path)
+  ) |>
+  arrange(gene, k)
+```
+
+```{r}
+#| label: inventory-text
+#| results: asis
+
+n_ok <- sum(inv$available)
+cat(glue("**{n_ok}/{nrow(inv)}** age-smooth fits available under `{params$smooth_out_dir}`."))
+```
+
+------------------------------------------------------------------------
+
+# 1. Convergence by k
+
+HMC gates (same spirit as the strong-formula report):
+
+| Gate | PASS |
+|------|------|
+| R̂ | `max_rhat ≤ 1.05` |
+| Divergences | `< 1%` of post-warmup transitions |
+
+`FAIL` if `max_rhat > 1.5` or `≥ 50%` divergences; else soft → `WARN`.
+
+```{r}
+#| label: diagnostics
+#| cache: false
+
+diag_path <- params$diagnostics_csv
+need_diag <- isTRUE(params$refresh) || !file.exists(diag_path)
+
+if (need_diag) {
+  message("Computing age-smooth diagnostics + baselines ...")
+  diag <- diagnose_age_smooth_fits(
+    out_dir = params$smooth_out_dir,
+    genes = genes,
+    ks = ks,
+    compute_baseline = TRUE,
+    n_baseline_draws = params$n_baseline_draws,
+    cache_csv = diag_path
+  )
+} else {
+  diag <- read_csv(diag_path, show_col_types = FALSE)
+}
+
+diag_view <- diag |>
+  mutate(
+    k = factor(k, levels = ks),
+    gate = case_when(
+      gate_pass ~ "PASS",
+      max_rhat > 1.5 | pct_divergent >= 50 ~ "FAIL",
+      TRUE ~ "WARN"
+    ),
+    gate = factor(gate, levels = c("PASS", "WARN", "FAIL"))
+  )
+```
+
+## Full diagnostics table
+
+```{r}
+#| label: diagnostics-table
+
+diag_view |>
+  transmute(
+    gene,
+    k,
+    settings = glue("{chains}×{warmup}/{iter}"),
+    max_rhat = round(max_rhat, 3),
+    n_rhat_gt_1_05,
+    pct_divergent = round(pct_divergent, 2),
+    pct_max_treedepth = round(pct_max_treedepth, 1),
+    min_ess_bulk = round(min_ess_bulk, 0),
+    baseline_mean = round(baseline_mean, 3),
+    baseline_sd = round(baseline_sd, 3),
+    baseline_n_draws,
+    gate
+  ) |>
+  arrange(gene, k)
+```
+
+## Gate summary
+
+```{r}
+#| label: gate-summary
+
+diag_view |>
+  count(k, gate) |>
+  pivot_wider(names_from = gate, values_from = n, values_fill = 0) |>
+  arrange(k)
+```
+
+```{r}
+#| label: plot-max-rhat
+#| fig-width: 9
+#| fig-height: 4.5
+#| fig-align: center
+
+ggplot(diag_view, aes(x = gene, y = max_rhat, fill = k)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.75) +
+  geom_hline(yintercept = 1.05, linetype = 2, colour = "grey40") +
+  geom_hline(yintercept = 1.1, linetype = 3, colour = "grey60") +
+  scale_fill_manual(values = k_colours) +
+  labs(
+    title = "Maximum R̂ by gene and smooth basis size k",
+    subtitle = "Dashed = 1.05 PASS gate",
+    x = NULL, y = "max R̂", fill = "k"
+  ) +
+  theme(legend.position = "bottom")
+```
+
+```{r}
+#| label: plot-divergences
+#| fig-width: 9
+#| fig-height: 4.5
+#| fig-align: center
+
+ggplot(diag_view, aes(x = gene, y = pct_divergent, fill = k)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.75) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "grey40") +
+  scale_fill_manual(values = k_colours) +
+  labs(
+    title = "Divergent transitions (% of post-warmup)",
+    subtitle = "Dashed = 1% PASS gate; age-smooth pilots used brms default adapt_delta",
+    x = NULL, y = "% divergent", fill = "k"
+  ) +
+  theme(legend.position = "bottom")
+```
+
+```{r}
+#| label: convergence-text
+#| results: asis
+
+n_pass <- sum(diag_view$gate == "PASS")
+n_warn <- sum(diag_view$gate == "WARN")
+n_fail <- sum(diag_view$gate == "FAIL")
+worst <- diag_view |> arrange(desc(max_rhat)) |> slice(1)
+cat(glue(
+  "Across {nrow(diag_view)} gene × k cells: **{n_pass} PASS**, **{n_warn} WARN**, ",
+  "**{n_fail} FAIL**. Worst max R̂ = **{round(worst$max_rhat, 3)}** for ",
+  "**{worst$gene} / k={worst$k}** ({round(worst$pct_divergent, 1)}% divergent)."
+))
+```
+
+------------------------------------------------------------------------
+
+# 2. Age-smooth curves (blood & liver)
+
+The report curve is the population-level (`re_formula = NA`) linear predictor,
+with `offset = 0`, versus `age_days_scaled`. To make its absolute level
+reproducible, ethnicity and assay are fixed to their most frequent values in
+the fit instead of being inherited from the first matching training row.
+Each curve is restricted to its tissue–sex group's observed 5th–95th percentile
+age range to avoid extrapolating the sparse liver strata. Curves show the
+posterior mean and pointwise 95% interval for **blood** and **liver**, faceted
+by sex; colours denote k.
+
+```{r}
+#| label: curves
+#| cache: false
+
+curves_path <- params$curves_rds
+need_curves <- isTRUE(params$refresh) || !file.exists(curves_path)
+
+if (need_curves) {
+  message("Building blood/liver age curves ...")
+  inv_ok <- inv |> filter(available)
+  curve_rows <- vector("list", nrow(inv_ok))
+  for (i in seq_len(nrow(inv_ok))) {
+    row <- inv_ok[i, ]
+    message(sprintf("[%d/%d] curves %s k=%d", i, nrow(inv_ok), row$gene, row$k))
+    fit <- readRDS(row$rds_path)
+    curve_rows[[i]] <- age_smooth_curve_draws(
+      fit,
+      tissues = c("blood", "liver"),
+      n_age = 40L,
+      ndraws = params$n_curve_draws,
+      re_formula = NA
+    ) |>
+      mutate(gene = row$gene, k = factor(row$k, levels = ks))
+  }
+  curves <- bind_rows(curve_rows)
+  dir.create(dirname(curves_path), recursive = TRUE, showWarnings = FALSE)
+  saveRDS(curves, curves_path, compress = "xz")
+} else {
+  curves <- readRDS(curves_path)
+}
+```
+
+```{r}
+#| label: curve-reference-profile
+
+curves |>
+  distinct(gene, k, reference_profile) |>
+  arrange(gene, k)
+```
+
+```{r}
+#| label: curve-age-support
+
+curves |>
+  distinct(tissue_groups, sex, support_lower, support_upper) |>
+  mutate(across(c(support_lower, support_upper), ~ round(.x, 3))) |>
+  arrange(tissue_groups, sex)
+```
+
+```{r}
+#| label: plot-age-curves
+#| fig-width: 10
+#| fig-height: 10
+#| fig-align: center
+
+ggplot(curves, aes(x = age_days_scaled, y = estimate, colour = k, fill = k)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.15, colour = NA) +
+  geom_line(linewidth = 0.8) +
+  facet_grid(gene ~ tissue_groups + sex, scales = "free_y") +
+  scale_colour_manual(values = k_colours) +
+  scale_fill_manual(values = k_colours) +
+  labs(
+    title = "Reference-profile log-mean trajectories (blood & liver)",
+    subtitle = "Full population-level linpred on group-specific age support; ribbon = 95% interval",
+    x = "age_days_scaled",
+    y = "Population-level log(μ)",
+    colour = "k", fill = "k"
+  ) +
+  theme(legend.position = "bottom")
+```
+
+## What `conditional_smooths()` computes
+
+The two curve APIs answer different questions. The report helper evaluates the
+**full** count-component linear predictor, whereas
+[`brms::conditional_smooths()`](https://paulbuerkner.com/brms/reference/conditional_smooths.brmsfit.html)
+uses `posterior_smooths()` internally to isolate the contribution from the
+selected smooth term.
+
+| Feature | Report helper: `age_smooth_curve_draws()` | `brms::conditional_smooths()` |
+|---|---|---|
+| Quantity | Full population-level `log(μ)` linear predictor | Only `s(age_days_scaled, by = tissue_sex, ...)` |
+| Included terms | Intercept, sex, reference ethnicity/assay, smooth | Smooth term only |
+| Group-level terms | Excluded by `re_formula = NA` | Not part of the isolated smooth |
+| Offset | Set to 0 | Not part of the isolated smooth |
+| Point estimate | Posterior mean | Posterior median |
+| Interval | Pointwise 2.5% and 97.5% quantiles | Pointwise 2.5% and 97.5% quantiles |
+| Default age grid | Group-specific 5th–95th percentiles, 40 points | Full observed range, 100 points |
+| Grid used below | Group-specific 5th–95th percentiles, 40 points | Matched to the report helper |
+
+Thus, the raw vertical positions should **not** agree: the brms curve is a
+smooth-term contribution, not an absolute expected log mean. Their
+age-dependent shapes should agree after removing an age-invariant vertical
+shift, up to mean-versus-median summarisation and posterior Monte Carlo error.
+
+```{r}
+#| label: conditional-smooth-curves
+#| cache: false
+
+conditional_path <- params$conditional_smooths_rds
+need_conditional <- isTRUE(params$refresh) || !file.exists(conditional_path)
+
+if (need_conditional) {
+  message("Building brms conditional_smooths curves ...")
+  inv_ok <- inv |> filter(available)
+  conditional_rows <- vector("list", nrow(inv_ok))
+  for (i in seq_len(nrow(inv_ok))) {
+    row <- inv_ok[i, ]
+    message(sprintf(
+      "[%d/%d] conditional_smooths %s k=%d",
+      i, nrow(inv_ok), row$gene, row$k
+    ))
+    fit <- readRDS(row$rds_path)
+    conditional_rows[[i]] <- age_smooth_conditional_smooths(
+      fit,
+      tissues = c("blood", "liver"),
+      n_age = 40L,
+      ndraws = params$n_curve_draws
+    ) |>
+      mutate(gene = row$gene, k = factor(row$k, levels = ks))
+  }
+  conditional_curves <- bind_rows(conditional_rows)
+  dir.create(dirname(conditional_path), recursive = TRUE, showWarnings = FALSE)
+  saveRDS(conditional_curves, conditional_path, compress = "xz")
+} else {
+  conditional_curves <- readRDS(conditional_path)
+}
+```
+
+```{r}
+#| label: plot-conditional-smooths
+#| fig-width: 10
+#| fig-height: 10
+#| fig-align: center
+
+ggplot(
+  conditional_curves,
+  aes(x = age_days_scaled, y = estimate, colour = k, fill = k)
+) +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.15, colour = NA) +
+  geom_line(linewidth = 0.8) +
+  facet_grid(gene ~ tissue_groups + sex, scales = "free_y") +
+  scale_colour_manual(values = k_colours) +
+  scale_fill_manual(values = k_colours) +
+  labs(
+    title = "Age smooth returned by brms::conditional_smooths()",
+    subtitle = "Term only, on group-specific age support; median and 95% interval",
+    x = "age_days_scaled",
+    y = "Smooth contribution to log(μ)",
+    colour = "k", fill = "k"
+  ) +
+  theme(legend.position = "bottom")
+```
+
+## Shape comparison on a common zero
+
+For visual comparison, each method's point-estimate curve is shifted to zero at
+the grid point nearest `age_days_scaled = 0`. This removes the non-age terms
+from the full linear predictor. It is a comparison of displayed point
+estimates, not a new posterior estimand.
+
+```{r}
+#| label: centred-curve-comparison-data
+
+curve_comparison <- bind_rows(
+  curves |>
+    transmute(
+      gene, k, tissue_groups, sex, age_days_scaled, estimate,
+      method = "Full linpred (mean)"
+    ),
+  conditional_curves |>
+    transmute(
+      gene, k, tissue_groups, sex, age_days_scaled, estimate,
+      method = "conditional_smooths (median)"
+    )
+) |>
+  group_by(gene, k, tissue_groups, sex, method) |>
+  arrange(age_days_scaled, .by_group = TRUE) |>
+  mutate(
+    anchor = estimate[which.min(abs(age_days_scaled))],
+    centred_estimate = estimate - anchor
+  ) |>
+  ungroup()
+
+shape_difference <- curve_comparison |>
+  select(
+    gene, k, tissue_groups, sex, age_days_scaled, method, centred_estimate
+  ) |>
+  pivot_wider(names_from = method, values_from = centred_estimate) |>
+  mutate(
+    difference = `Full linpred (mean)` - `conditional_smooths (median)`
+  )
+
+shape_difference |>
+  group_by(gene, k, tissue_groups, sex) |>
+  summarise(
+    max_abs_difference = max(abs(difference)),
+    rmse = sqrt(mean(difference^2)),
+    .groups = "drop"
+  ) |>
+  mutate(across(c(max_abs_difference, rmse), ~ round(.x, 4))) |>
+  arrange(desc(max_abs_difference))
+```
+
+```{r}
+#| label: plot-centred-curve-comparison
+#| fig-width: 10
+#| fig-height: 10
+#| fig-align: center
+
+ggplot(
+  curve_comparison,
+  aes(
+    x = age_days_scaled,
+    y = centred_estimate,
+    colour = k,
+    linetype = method
+  )
+) +
+  geom_hline(yintercept = 0, colour = "grey80", linewidth = 0.35) +
+  geom_line(linewidth = 0.75) +
+  facet_grid(gene ~ tissue_groups + sex, scales = "free_y") +
+  scale_colour_manual(values = k_colours) +
+  scale_linetype_manual(values = c(
+    `Full linpred (mean)` = "solid",
+    `conditional_smooths (median)` = "22"
+  )) +
+  labs(
+    title = "Age-dependent shape: full linpred vs conditional_smooths",
+    subtitle = "Each displayed curve is anchored at age_days_scaled ≈ 0",
+    x = "age_days_scaled",
+    y = "Change from value at scaled age ≈ 0",
+    colour = "k",
+    linetype = NULL
+  ) +
+  theme(legend.position = "bottom")
+```
+
+```{r}
+#| label: centred-curve-comparison-text
+#| results: asis
+
+shape_audit <- shape_difference |>
+  group_by(gene, k, tissue_groups, sex) |>
+  summarise(
+    max_abs_difference = max(abs(difference)),
+    .groups = "drop"
+  )
+largest_shape_difference <- shape_audit |>
+  arrange(desc(max_abs_difference)) |>
+  slice(1)
+
+cat(glue(
+  "After anchoring, the median group-wise maximum absolute difference is ",
+  "**{round(median(shape_audit$max_abs_difference), 3)} log units**. ",
+  "The largest is **{round(largest_shape_difference$max_abs_difference, 3)}** ",
+  "for **{largest_shape_difference$gene}, k={largest_shape_difference$k}, ",
+  "{largest_shape_difference$tissue_groups}, ",
+  "{largest_shape_difference$sex}**. Residual discrepancies are expected because ",
+  "the full curve is summarised by the posterior mean whereas ",
+  "`conditional_smooths()` uses the posterior median; sparse liver strata also ",
+  "have wider, more skewed posteriors. For absolute `log(μ)`, retain the full ",
+  "linear predictor. For the isolated age-shape diagnostic, use ",
+  "`conditional_smooths()`."
+))
+```
+
+------------------------------------------------------------------------
+
+# 3. brms predict / linpred compatibility
+
+Smoke-test on one fit per gene (prefer k=4 when available) to confirm the
+prediction API used for comprehensive μ works on smooth objects.
+
+```{r}
+#| label: linpred-compat
+#| cache: false
+
+compat_path <- params$compat_csv
+need_compat <- isTRUE(params$refresh) || !file.exists(compat_path)
+
+if (need_compat) {
+  compat_rows <- list()
+  for (g in genes) {
+    prefer <- inv |> filter(gene == g, k == 4L, available)
+    if (!nrow(prefer)) {
+      prefer <- inv |> filter(gene == g, available) |> slice(1)
+    }
+    if (!nrow(prefer)) next
+    message("Compat checks: ", prefer$gene, " k=", prefer$k)
+    fit <- readRDS(prefer$rds_path[[1]])
+    compat_rows[[g]] <- age_smooth_predict_compat(fit, ndraws = 50L) |>
+      mutate(gene = prefer$gene, k = prefer$k)
+  }
+  compat <- bind_rows(compat_rows)
+  write_csv(compat, compat_path)
+} else {
+  compat <- read_csv(compat_path, show_col_types = FALSE)
+}
+
+compat |>
+  mutate(
+    elapsed_sec = round(elapsed_sec, 2),
+    ok = if_else(ok, "YES", "NO")
+  ) |>
+  arrange(gene, check)
+```
+
+```{r}
+#| label: linpred-compat-text
+#| results: asis
+
+n_ok <- sum(compat$ok %in% c(TRUE, "YES"))
+n_tot <- nrow(compat)
+if (n_ok == n_tot) {
+  cat(glue(
+    "All **{n_tot}** prediction checks passed, including `posterior_linpred` ",
+    "and the comprehensive liver baseline helper — smooth fits are usable for μ."
+  ))
+} else {
+  bad <- compat |> filter(!ok %in% c(TRUE, "YES"))
+  cat(glue(
+    "**{n_ok}/{n_tot}** checks passed. Failures: ",
+    "{paste(bad$gene, bad$check, sep = '/', collapse = '; ')}."
+  ))
+}
+```
+
+------------------------------------------------------------------------
+
+# 4. Baseline μ / SD vs strong RE (simple shape)
+
+Comprehensive healthy **liver** baseline:
+
+- **Age-smooth** — average `posterior_linpred` over sex × ethnicity × assay ×
+  age quantile grid (`build_comprehensive_grid_age_smooth`).  
+- **Strong RE** — existing comprehensive grid (`age_decade` margins) from the
+  formula-comparison helpers.
+
+Densities use `n_baseline_draws` posterior draws of the scalar baseline
+`log(μ)`.
+
+```{r}
+#| label: baseline-draws
+#| cache: false
+
+draws_path <- params$baseline_draws_rds
+need_draws <- isTRUE(params$refresh) || !file.exists(draws_path)
+
+if (need_draws) {
+  message("Collecting baseline draws (smooth + RE) ...")
+  out <- list()
+
+  inv_ok <- inv |> filter(available)
+  for (i in seq_len(nrow(inv_ok))) {
+    row <- inv_ok[i, ]
+    message(sprintf("[smooth %d/%d] %s k=%d", i, nrow(inv_ok), row$gene, row$k))
+    fit <- readRDS(row$rds_path)
+    d <- linpred_baseline_draws_age_smooth(
+      fit, ndraws = params$n_baseline_draws
+    ) |>
+      mutate(
+        gene = row$gene,
+        model = paste0("Age-smooth k=", row$k),
+        k = row$k,
+        family = "age_smooth"
+      )
+    out[[length(out) + 1L]] <- d
+  }
+
+  for (g in genes) {
+    re_path <- file.path(params$strong_out_dir, paste0("fit_re_", g, ".rds"))
+    if (!file.exists(re_path)) next
+    message("RE baseline: ", g)
+    fit_re <- readRDS(re_path)
+    d <- linpred_baseline_draws(fit_re, ndraws = params$n_baseline_draws) |>
+      mutate(
+        gene = g,
+        model = "RE HMC (simple)",
+        k = NA_integer_,
+        family = "re"
+      )
+    out[[length(out) + 1L]] <- d
+  }
+
+  baseline_draws <- bind_rows(out)
+  dir.create(dirname(draws_path), recursive = TRUE, showWarnings = FALSE)
+  saveRDS(baseline_draws, draws_path, compress = "xz")
+} else {
+  baseline_draws <- readRDS(draws_path)
+}
+
+baseline_draws <- baseline_draws |>
+  mutate(
+    model = factor(model, levels = names(model_colours))
+  )
+
+baseline_summary <- baseline_draws |>
+  group_by(gene, model, family, k) |>
+  summarise(
+    n_draws = n(),
+    mean_log_mu = mean(baseline_log_mu),
+    sd_log_mu = sd(baseline_log_mu),
+    .groups = "drop"
+  )
+```
+
+## Mean / SD table
+
+```{r}
+#| label: baseline-summary-table
+
+baseline_summary |>
+  mutate(
+    mean_log_mu = round(mean_log_mu, 3),
+    sd_log_mu = round(sd_log_mu, 3)
+  ) |>
+  arrange(gene, family, k)
+```
+
+## Smooth vs RE deltas
+
+```{r}
+#| label: baseline-deltas
+
+deltas <- baseline_summary |>
+  select(gene, model, mean_log_mu, sd_log_mu) |>
+  pivot_wider(
+    names_from = model,
+    values_from = c(mean_log_mu, sd_log_mu)
+  )
+
+# Build delta columns relative to RE when present
+re_mean_col <- "mean_log_mu_RE HMC (simple)"
+re_sd_col <- "sd_log_mu_RE HMC (simple)"
+smooth_mean_cols <- grep("^mean_log_mu_Age-smooth", names(deltas), value = TRUE)
+smooth_sd_cols <- grep("^sd_log_mu_Age-smooth", names(deltas), value = TRUE)
+
+if (re_mean_col %in% names(deltas)) {
+  for (col in smooth_mean_cols) {
+    deltas[[paste0("delta_", col)]] <- deltas[[col]] - deltas[[re_mean_col]]
+  }
+  for (col in smooth_sd_cols) {
+    deltas[[paste0("ratio_", col)]] <- deltas[[col]] / deltas[[re_sd_col]]
+  }
+}
+
+deltas |>
+  mutate(across(where(is.numeric), ~ round(.x, 3))) |>
+  arrange(gene)
+```
+
+```{r}
+#| label: plot-baseline-mean-sd
+#| fig-width: 10
+#| fig-height: 5
+#| fig-align: center
+
+sum_plot <- baseline_summary |>
+  mutate(k_label = if_else(is.na(k), "RE", as.character(k)))
+
+p1 <- ggplot(sum_plot, aes(x = gene, y = mean_log_mu, fill = model)) +
+  geom_col(position = position_dodge(width = 0.85), width = 0.8) +
+  scale_fill_manual(values = model_colours, drop = FALSE) +
+  labs(title = "Comprehensive liver baseline mean", y = "mean log(μ)", x = NULL, fill = NULL) +
+  theme(legend.position = "bottom")
+
+p2 <- ggplot(sum_plot, aes(x = gene, y = sd_log_mu, fill = model)) +
+  geom_col(position = position_dodge(width = 0.85), width = 0.8) +
+  scale_fill_manual(values = model_colours, drop = FALSE) +
+  labs(title = "Comprehensive liver baseline SD", y = "SD log(μ)", x = NULL, fill = NULL) +
+  theme(legend.position = "bottom")
+
+p1
+p2
+```
+
+## Overlapping baseline densities
+
+```{r}
+#| label: plot-baseline-density
+#| fig-width: 10
+#| fig-height: 7
+#| fig-align: center
+
+ggplot(baseline_draws, aes(x = baseline_log_mu, colour = model)) +
+  geom_density(linewidth = 0.85) +
+  facet_wrap(~ gene, scales = "free") +
+  scale_colour_manual(values = model_colours, drop = FALSE) +
+  labs(
+    title = "Comprehensive liver baseline posterior densities",
+    subtitle = "Age-smooth k=3/4/5 vs strong RE HMC (simple shape)",
+    x = "baseline log(μ)", y = "Density", colour = NULL
+  ) +
+  theme(legend.position = "bottom")
+```
+
+```{r}
+#| label: interpretation
+#| results: asis
+
+best_k <- diag_view |>
+  group_by(k) |>
+  summarise(
+    median_rhat = median(max_rhat, na.rm = TRUE),
+    median_div = median(pct_divergent, na.rm = TRUE),
+    n_pass = sum(gate == "PASS"),
+    .groups = "drop"
+  ) |>
+  arrange(desc(n_pass), median_rhat)
+
+re_vs <- baseline_summary |>
+  filter(family == "age_smooth") |>
+  left_join(
+    baseline_summary |>
+      filter(family == "re") |>
+      select(gene, re_mean = mean_log_mu, re_sd = sd_log_mu),
+    by = "gene"
+  ) |>
+  mutate(
+    abs_mean_shift = abs(mean_log_mu - re_mean),
+    sd_ratio = sd_log_mu / re_sd
+  )
+
+cat(glue(
+  "Best k by gate/R̂: **k={best_k$k[1]}** ",
+  "({best_k$n_pass[1]} PASS; median R̂={round(best_k$median_rhat[1], 3)}; ",
+  "median %div={round(best_k$median_div[1], 1)}). ",
+  "Median |smooth − RE| baseline mean shift: ",
+  "**{round(median(re_vs$abs_mean_shift, na.rm = TRUE), 3)}**; ",
+  "median SD ratio (smooth/RE): ",
+  "**{round(median(re_vs$sd_ratio, na.rm = TRUE), 3)}**. ",
+  "Note: smooth fits use healthy-only data; RE used the full disease mix."
+))
+```
+
+------------------------------------------------------------------------
+
+# 5. Fitting-time benchmark (`formula_bench`)
+
+Wall-clock HMC times from the `targets` pipeline under
+`targets/formula_bench/`. All cells use the same healthy-only frame
+(n = 2905), MCMC length 400 warmup / 900 iter, and `control = NULL`. The grid
+crosses four genes × five formulas × three resource settings:
+
+| setting_id | Chains | Slurm CPUs | Threads / chain |
+|------------|--------|------------|-----------------|
+| `c2_cpu8` | 2 | 8 | 4 |
+| `c4_cpu8` | 4 | 8 | 2 |
+| `c4_cpu16` | 4 | 16 | 4 |
+
+Formulas: age-smooth k ∈ {3,4,5} (`AGE-k*`) plus healthy-adapted RE
+(`RE-simple`, `RE-split`). Times are exclusive of data prep; they measure
+`brms::brm()` wall clock on the assigned Slurm controller.
+
+```{r}
+#| label: timing-load
+
+timing_raw <- read_csv(params$timing_summary_csv, show_col_types = FALSE)
+
+timing <- timing_raw |>
+  mutate(
+    formula_id = factor(
+      formula_id,
+      levels = c("AGE-k3", "AGE-k4", "AGE-k5", "RE-simple", "RE-split")
+    ),
+    setting_id = factor(
+      setting_id,
+      levels = c("c2_cpu8", "c4_cpu8", "c4_cpu16")
+    ),
+    setting_label = factor(
+      case_when(
+        setting_id == "c2_cpu8" ~ "2×8 (4 thr)",
+        setting_id == "c4_cpu8" ~ "4×8 (2 thr)",
+        setting_id == "c4_cpu16" ~ "4×16 (4 thr)",
+        TRUE ~ as.character(setting_label)
+      ),
+      levels = names(setting_colours)
+    ),
+    family_group = if_else(family == "age_smooth", "Age-smooth", "RE"),
+    elapsed_min = elapsed_sec / 60,
+    gene = factor(gene, levels = genes)
+  )
+
+stopifnot(all(timing$fit_ok))
+```
+
+```{r}
+#| label: timing-inventory-text
+#| results: asis
+
+cat(glue(
+  "**{nrow(timing)}/{nrow(timing)}** benchmark fits succeeded ",
+  "({n_distinct(timing$gene)} genes × {n_distinct(timing$formula_id)} formulas × ",
+  "{n_distinct(timing$setting_id)} settings). ",
+  "Source: `{params$timing_summary_csv}`."
+))
+```
+
+## Timing table (minutes)
+
+```{r}
+#| label: timing-table
+
+timing |>
+  transmute(
+    gene,
+    formula_id,
+    setting = setting_label,
+    threads = threads_per_chain,
+    elapsed_min = round(elapsed_min, 1),
+    max_rhat = round(max_rhat, 3)
+  ) |>
+  arrange(gene, formula_id, setting)
+```
+
+## Elapsed time by formula and resource setting
+
+```{r}
+#| label: plot-timing-by-formula
+#| fig-width: 10
+#| fig-height: 7
+#| fig-align: center
+
+ggplot(timing, aes(x = formula_id, y = elapsed_min, fill = setting_label)) +
+  geom_col(position = position_dodge(width = 0.85), width = 0.8) +
+  facet_wrap(~ gene, nrow = 2) +
+  scale_fill_manual(values = setting_colours) +
+  labs(
+    title = "HMC wall-clock time by formula and resource setting",
+    subtitle = "Healthy-only n=2905; 400 warmup / 900 iter; fill = chains×CPUs (threads/chain)",
+    x = NULL, y = "Elapsed (minutes)", fill = "Setting"
+  ) +
+  theme(
+    legend.position = "bottom",
+    axis.text.x = element_text(angle = 30, hjust = 1)
+  )
+```
+
+## Age-smooth k vs RE under each setting
+
+```{r}
+#| label: plot-timing-family-by-setting
+#| fig-width: 10
+#| fig-height: 4.5
+#| fig-align: center
+
+timing_family <- timing |>
+  group_by(gene, setting_label, family_group) |>
+  summarise(
+    elapsed_min = mean(elapsed_min),
+    .groups = "drop"
+  )
+
+ggplot(
+  timing_family,
+  aes(x = gene, y = elapsed_min, fill = family_group)
+) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.75) +
+  facet_wrap(~ setting_label, nrow = 1) +
+  scale_fill_manual(
+    values = c(`Age-smooth` = "#3C5488", `RE` = "#7A7A7A")
+  ) +
+  labs(
+    title = "Mean fit time: age-smooth (avg over k) vs RE (avg over formulas)",
+    subtitle = "One panel per chains×CPU setting",
+    x = NULL, y = "Mean elapsed (minutes)", fill = NULL
+  ) +
+  theme(legend.position = "bottom")
+```
+
+## Effect of k on age-smooth fit time
+
+```{r}
+#| label: plot-timing-by-k
+#| fig-width: 10
+#| fig-height: 4.5
+#| fig-align: center
+
+timing_age <- timing |>
+  filter(family == "age_smooth") |>
+  mutate(k = factor(k, levels = ks))
+
+ggplot(timing_age, aes(x = gene, y = elapsed_min, fill = k)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.75) +
+  facet_wrap(~ setting_label, nrow = 1) +
+  scale_fill_manual(values = k_colours) +
+  labs(
+    title = "Age-smooth fit time by smooth basis size k",
+    subtitle = "Facets = resource setting; larger k is not systematically slower",
+    x = NULL, y = "Elapsed (minutes)", fill = "k"
+  ) +
+  theme(legend.position = "bottom")
+```
+
+## Resource-setting speedup (relative to 4×8)
+
+The pilot default is 4 chains on 8 CPUs (2 within-chain threads). Speedup is
+elapsed(4×8) / elapsed(setting) for the same gene × formula.
+
+```{r}
+#| label: plot-timing-speedup
+#| fig-width: 10
+#| fig-height: 5.5
+#| fig-align: center
+
+timing_speedup <- timing |>
+  select(gene, formula_id, setting_label, elapsed_sec) |>
+  pivot_wider(names_from = setting_label, values_from = elapsed_sec) |>
+  mutate(
+    speedup_2x8 = `4×8 (2 thr)` / `2×8 (4 thr)`,
+    speedup_4x16 = `4×8 (2 thr)` / `4×16 (4 thr)`
+  ) |>
+  select(gene, formula_id, speedup_2x8, speedup_4x16) |>
+  pivot_longer(
+    cols = starts_with("speedup_"),
+    names_to = "alt_setting",
+    values_to = "speedup"
+  ) |>
+  mutate(
+    alt_setting = factor(
+      recode(
+        alt_setting,
+        speedup_2x8 = "2×8 (4 thr)",
+        speedup_4x16 = "4×16 (4 thr)"
+      ),
+      levels = c("2×8 (4 thr)", "4×16 (4 thr)")
+    )
+  )
+
+ggplot(
+  timing_speedup,
+  aes(x = formula_id, y = speedup, fill = alt_setting)
+) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "grey50") +
+  geom_col(position = position_dodge(width = 0.85), width = 0.8) +
+  facet_wrap(~ gene, nrow = 2) +
+  scale_fill_manual(
+    values = c(`2×8 (4 thr)` = "#00A087", `4×16 (4 thr)` = "#3C5488")
+  ) +
+  labs(
+    title = "Speedup vs pilot default (4 chains × 8 CPUs)",
+    subtitle = "Values > 1 mean faster than 4×8; both alternatives use 4 threads/chain",
+    x = NULL, y = "Speedup (4×8 / setting)", fill = "Alternative"
+  ) +
+  theme(
+    legend.position = "bottom",
+    axis.text.x = element_text(angle = 30, hjust = 1)
+  )
+```
+
+```{r}
+#| label: timing-summary-text
+#| results: asis
+
+med_by_setting <- timing |>
+  group_by(setting_label) |>
+  summarise(med_min = median(elapsed_min), .groups = "drop") |>
+  arrange(med_min)
+
+med_age <- median(timing$elapsed_min[timing$family == "age_smooth"])
+med_re <- median(timing$elapsed_min[timing$family == "re_string"])
+
+med_speedup <- timing_speedup |>
+  group_by(alt_setting) |>
+  summarise(med = median(speedup), .groups = "drop")
+
+slowest <- timing |> arrange(desc(elapsed_min)) |> slice(1)
+fastest <- timing |> arrange(elapsed_min) |> slice(1)
+
+cat(glue(
+  "Median elapsed: age-smooth **{round(med_age, 1)} min**, RE ",
+  "**{round(med_re, 1)} min**. Fastest resource setting by median time: ",
+  "**{med_by_setting$setting_label[1]}** ({round(med_by_setting$med_min[1], 1)} min). ",
+  "Median speedup vs 4×8: **{round(med_speedup$med[med_speedup$alt_setting == '2×8 (4 thr)'], 2)}×** ",
+  "for 2×8 and **{round(med_speedup$med[med_speedup$alt_setting == '4×16 (4 thr)'], 2)}×** ",
+  "for 4×16. Slowest cell: **{slowest$gene} / {slowest$formula_id} / ",
+  "{slowest$setting_label}** ({round(slowest$elapsed_min, 1)} min); ",
+  "fastest: **{fastest$gene} / {fastest$formula_id} / {fastest$setting_label}** ",
+  "({round(fastest$elapsed_min, 1)} min). Within age-smooth, k has little systematic ",
+  "effect compared with threads-per-chain."
+))
+```
+
+------------------------------------------------------------------------
+
+# Settings
+
+- **Age-smooth (report §§1–4):** healthy `Normal` only; 4 chains × 400 warmup / 900 iter;
+  `cores = 8`, `threading(2)`, `control = NULL` (brms defaults).  
+- **Strong RE reference (§4):** correlated tissue RE + simple shape;
+  4 × 1500/3000, `adapt_delta = 0.95`, full disease mix.  
+- **formula_bench (§5):** healthy-only; same 400/900 MCMC; formulas AGE-k3/4/5,
+  RE-simple, RE-split; settings 2×8 / 4×8 / 4×16 (threads = floor(CPUs/chains)).  
+- **Displayed full age curves:** `posterior_linpred(transform = FALSE,
+  re_formula = NA)`, `offset = 0`, with ethnicity and assay fixed to their
+  modal training values.  
+- **Displayed brms smooths:** `conditional_smooths(prob = 0.95)` on the same
+  tissue–sex-specific 5th–95th percentile age grids; these are smooth-term
+  contributions, not full linear predictors.  
+- **Baseline estimand:** comprehensive healthy liver `log(μ)` via
+  `posterior_linpred` (smooth: age quantile grid × covariate margins).
+
+------------------------------------------------------------------------
+
+# Saved artefacts
+
+| File | Description |
+|------|-------------|
+| `r params$diagnostics_csv` | Convergence + baseline summaries |
+| `r params$curves_rds` | Full population-level blood/liver age curves |
+| `r params$conditional_smooths_rds` | `conditional_smooths()` term-only curves |
+| `r params$compat_csv` | Predict/linpred smoke tests |
+| `r params$baseline_draws_rds` | Baseline draws for density overlays |
+| `r params$timing_summary_csv` | formula_bench wall-clock times + max R̂ |
+| Smooth RDS | `r params$smooth_out_dir`/`fit_age_smooth_hmc_*.rds` |
+| RE RDS | `r params$strong_out_dir`/`fit_re_*.rds` |
+| Bench fits | `data/processed/formula_bench/fits/fit_*__*__*.rds` |
+
+Re-render with refreshed caches:
+
+```bash
+cd /home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC
+quarto render Jie_HCC_age_smooth_k_grid_eval.qmd -P refresh:true
+```

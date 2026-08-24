@@ -1,0 +1,16 @@
+patient_id	original_patient_id	paper_id	histology	histology_group	n_tumour_epithelial	reconstructed_retained	published_expected_retained
+VAR06	20847	VAR06	lymphoepithelioma-like	HV	606	TRUE	TRUE
+UC04	21032	UC04	CIS	UC	24	FALSE	FALSE
+VAR11	21217	VAR11	squamous + sarcomatoid differentiation	HV	38	FALSE	FALSE
+VAR01	21222	VAR01	micropapillary	HV	317	TRUE	TRUE
+VAR07	21226	VAR07	squamous differentiation	HV	699	TRUE	TRUE
+VAR09	21262	VAR09	small cell + micropapillary	HV	2880	TRUE	TRUE
+VAR05	FG	VAR05	nested	HV	497	TRUE	TRUE
+UC03	HG	UC03	pure UC	UC	193	TRUE	TRUE
+VAR03	JM	VAR03	pleomorphic giant cell-like + micropapillary	HV	809	TRUE	TRUE
+VAR02	PS	VAR02	micropapillary	HV	478	TRUE	TRUE
+VAR08	11734	VAR08	plasmacytoid	HV	564	TRUE	TRUE
+VAR04	12041	VAR04	nested	HV	341	TRUE	TRUE
+UC01	12049	UC01	pure UC	UC	90	FALSE	TRUE
+VAR10	12050	VAR10	pure squamous	HV	97	FALSE	FALSE
+UC02	SG	UC02	pure UC	UC	388	TRUE	TRUE

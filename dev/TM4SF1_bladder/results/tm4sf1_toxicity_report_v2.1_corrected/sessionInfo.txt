@@ -1,0 +1,70 @@
+R version 4.5.3 (2026-03-11)
+Platform: x86_64-conda-linux-gnu
+Running under: Red Hat Enterprise Linux 8.4 (Ootpa)
+
+Matrix products: default
+BLAS/LAPACK: /home/a1237163/miniconda3/envs/R_env/lib/libopenblasp-r0.3.29.so;  LAPACK version 3.12.0
+
+locale:
+ [1] LC_CTYPE=en_US.UTF-8       LC_NUMERIC=C              
+ [3] LC_TIME=en_US.UTF-8        LC_COLLATE=en_US.UTF-8    
+ [5] LC_MONETARY=en_US.UTF-8    LC_MESSAGES=en_US.UTF-8   
+ [7] LC_PAPER=en_US.UTF-8       LC_NAME=C                 
+ [9] LC_ADDRESS=C               LC_TELEPHONE=C            
+[11] LC_MEASUREMENT=en_US.UTF-8 LC_IDENTIFICATION=C       
+
+time zone: Australia/Adelaide
+tzcode source: system (glibc)
+
+attached base packages:
+[1] stats4    stats     graphics  grDevices utils     datasets  methods  
+[8] base     
+
+other attached packages:
+ [1] digest_0.6.39               RColorBrewer_1.1-3         
+ [3] knitr_1.51                  scales_1.4.0               
+ [5] ggplot2_4.0.3               tibble_3.3.1               
+ [7] stringr_1.6.0               purrr_1.2.2                
+ [9] tidyr_1.3.2                 dplyr_1.2.1                
+[11] readr_2.2.0                 readxl_1.5.0               
+[13] targets_1.12.0              posterior_1.7.1            
+[15] edgeR_4.8.2                 limma_3.66.0               
+[17] brms_2.23.1                 Rcpp_1.1.2                 
+[19] HDF5Array_1.38.0            h5mread_1.2.1              
+[21] rhdf5_2.54.1                DelayedArray_0.36.1        
+[23] SparseArray_1.10.10         S4Arrays_1.10.1            
+[25] abind_1.4-8                 Matrix_1.7-5               
+[27] SingleCellExperiment_1.32.0 SummarizedExperiment_1.40.0
+[29] Biobase_2.70.0              GenomicRanges_1.62.1       
+[31] Seqinfo_1.0.0               IRanges_2.44.0             
+[33] S4Vectors_0.48.1            BiocGenerics_0.56.0        
+[35] generics_0.1.4              MatrixGenerics_1.22.0      
+[37] matrixStats_1.5.0          
+
+loaded via a namespace (and not attached):
+ [1] sandwich_3.1-1        rlang_1.3.0           magrittr_2.0.5       
+ [4] multcomp_1.4-30       otel_0.2.0            compiler_4.5.3       
+ [7] loo_2.10.0.9000       systemfonts_1.3.2     callr_3.8.0          
+[10] vctrs_0.7.3           crayon_1.5.3          pkgconfig_2.0.3      
+[13] fastmap_1.2.0         backports_1.5.1       XVector_0.50.0       
+[16] labeling_0.4.3        rmarkdown_2.31        tzdb_0.5.0           
+[19] ps_1.9.3              ragg_1.5.2            bit_4.6.0            
+[22] xfun_0.57             jsonlite_2.0.0        rhdf5filters_1.22.0  
+[25] Rhdf5lib_1.32.0       parallel_4.5.3        prettyunits_1.2.0    
+[28] R6_2.6.1              stringi_1.8.9         cellranger_1.1.0     
+[31] estimability_1.5.1    zoo_1.8-15            bayesplot_1.15.0.9000
+[34] splines_4.5.3         igraph_2.3.1          tidyselect_1.2.1     
+[37] dichromat_2.0-0.1     yaml_2.3.12           codetools_0.2-20     
+[40] processx_3.9.0        lattice_0.22-9        withr_3.0.3          
+[43] bridgesampling_1.2-1  S7_0.2.2              coda_0.19-4.1        
+[46] evaluate_1.0.5        survival_3.8-6        RcppParallel_5.1.11-2
+[49] pillar_1.11.1         tensorA_0.36.2.1      checkmate_2.3.4      
+[52] distributional_0.8.1  vroom_1.7.1           hms_1.1.4            
+[55] rstantools_2.6.0.9000 xtable_1.8-8          base64url_1.4        
+[58] glue_1.8.1            emmeans_2.0.3         tools_4.5.3          
+[61] data.table_1.18.4     locfit_1.5-9.12       mvtnorm_1.4-2        
+[64] grid_4.5.3            nlme_3.1-169          cli_3.6.6            
+[67] textshaping_1.0.5     Brobdingnag_1.2-9     gtable_0.3.6         
+[70] TH.data_1.1-5         htmlwidgets_1.6.4     farver_2.1.2         
+[73] htmltools_0.5.9       lifecycle_1.0.5       secretbase_1.2.2     
+[76] statmod_1.5.2         bit64_4.8.2           MASS_7.3-65          

@@ -1,0 +1,440 @@
+---
+title: "posteriorHCA brms fit compression test"
+date: today
+date-format: "DD MMM YYYY"
+title-block-banner: true
+author: 
+  - name: Chen Zhan
+    orcid: 0000-0002-4794-8339
+    email: chen.zhan@adelaide.edu.au
+    affiliation:
+      - id: sgc
+        name: SAiGENCI, The University of Adelaide
+format: 
+  html:
+    theme: minty
+    df-print: paged
+    code-line-numbers: true
+    embed-resources: true
+    code-fold: true
+    code-fold-default: true
+    toc: true
+    toc-location: left
+    toc-title: "Menu"
+knitr:
+  opts_chunk: 
+    message: false
+    warning: false
+comments:
+  hypothesis: 
+    theme: clean
+editor: source
+abstract: |
+  posteriorHCA brms fit compression test
+---
+
+# Library
+
+```{r}
+#| label: setup
+.libPaths("/hpcfs/users/a1237163/R/x86_64-pc-linux-gnu-library/4.4")
+dyn.load("/home/a1237163/miniconda3/lib/libglpk.so.40")
+library(tidyverse)
+library(tidySummarizedExperiment)
+library(tidySingleCellExperiment)
+library(tidybulk)
+library(SingleCellExperiment)
+library(AnnotationDbi)
+library(org.Hs.eg.db)
+library(ggplot2)
+library(scales)
+library(tidytext)
+library(glue)
+library(targets)
+library(here)
+library(Seurat)
+library(tidyseurat)
+library(patchwork)
+library(vissE)
+library(tidyHeatmap)
+library(circlize)
+library(ggupset)
+library(brms)
+library(edgeR)
+library(magrittr)
+# set_cmdstan_path('/hpcfs/users/a1237163/R/.cmdstan/cmdstan-2.36.0')
+```
+
+# Pre-load and setting
+
+```{r}
+
+library(mclust)
+
+source("/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/R/compress_mclust.R")
+
+ct <- 
+  'plasma' %>% 
+  paste0('V1_',.)
+
+target_pipeline_path = '/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/HPC_posterior/NEW_CELL_TYPE/'
+target_obj_path = file.path(target_pipeline_path, ct, '_targets')
+
+```
+
+
+# Read brms fit file from pipeline
+```{r}
+set.seed(2603)
+
+estimates_chunk_meta <- 
+  tar_meta(
+    starts_with('estimates_chunk_'),
+    store = target_obj_path
+  )
+
+
+estimates_chunk <-
+  tar_read_raw(
+    estimates_chunk_meta$name %>% sample(1),
+    store = target_obj_path
+  )
+
+fit_brms <- estimates_chunk$brms_fit[[1]]
+  
+```
+
+```{r}
+class(fit_brms)
+print(object.size(fit_brms), units = "auto")
+# summary(fit_brms)
+```
+
+
+## Inspect the Original Fit
+
+```{r inspect_fit}
+# Model summary
+# summary(fit_brms)
+
+# Check convergence
+cat("\nConvergence diagnostics:\n")
+cat("Max Rhat:", max(rhat(fit_brms), na.rm = TRUE), "\n")
+cat("Min Bulk ESS:", min(neff_ratio(fit_brms) * 4000, na.rm = TRUE), "\n")
+
+# Original posterior structure
+original_draws <- as_draws_matrix(fit_brms)
+cat("\nOriginal posterior dimensions:", dim(original_draws), "\n")
+cat("Parameters:", colnames(original_draws)[1:10], "...\n")
+```
+
+# Compression
+```{r}
+# "EII" spherical, equal volume
+# "EEI" diagonal, equal volume and shape
+
+fit_brms_compressed <- compress_brmsfit(
+  brmsfit = fit_brms,
+  n_components = 3,      # Use more components for complex posterior
+  # model_name = 'EII',
+  remove_csvs = TRUE    # Keep CSVs (or TRUE to clean up)
+)
+
+```
+```{r}
+print(object.size(fit_brms_compressed$compressed), units = "auto")
+```
+
+Save compressed 
+```{r}
+compressed_file <- "brms_posterior_compressed.rds"
+saveRDS(fit_brms_compressed$compressed, compressed_file, compress = "xz")
+
+
+compressed_size <- file.size(compressed_file)
+cat("\nCompressed size (with xz):", format(compressed_size, big.mark = ","), "bytes\n")
+cat("That's", round(compressed_size / 1024, 2), "KB\n")
+```
+
+# Step 4: Regenerate Posterior Samples
+
+Sample from the compressed posterior distribution.
+
+```{r regenerate_samples}
+# Generate same number of samples as original
+n_draws_original <- nrow(original_draws)
+cat("Generating", n_draws_original, "samples from compressed posterior...\n")
+
+# Sample from compressed distribution
+regenerated_samples <- sample_from_mclust(
+  compressed_rds = compressed_file,
+  n_draws = n_draws_original
+)
+
+cat("Regenerated samples dimensions:", dim(regenerated_samples), "\n")
+cat("Parameters:", colnames(regenerated_samples)[1:10], "...\n")
+
+param_names <- readRDS(compressed_file)$param_names
+
+# Basic quality check: compare means and SDs
+original_means <- colMeans(original_draws[, param_names])
+regenerated_means <- colMeans(regenerated_samples)
+
+original_sds <- apply(original_draws[, param_names], 2, sd)
+regenerated_sds <- apply(regenerated_samples, 2, sd)
+
+cat("\nQuality check - first 5 parameters:\n")
+comparison_df <- data.frame(
+  Parameter = param_names[1:5],
+  Original_Mean = round(original_means[1:5], 3),
+  Regenerated_Mean = round(regenerated_means[1:5], 3),
+  Original_SD = round(original_sds[1:5], 3),
+  Regenerated_SD = round(regenerated_sds[1:5], 3)
+)
+print(comparison_df)
+```
+
+
+# Visualization: Compare Original vs Regenerated Posteriors
+
+With ~`r length(param_names)` parameters we cannot eyeball every marginal,
+so the plots below summarise the comparison along three complementary axes:
+
+1. **Parameter-wide calibration** (one dot per parameter) of posterior means
+   and SDs.
+2. **Marginal density overlays** for a random subset of parameters.
+3. **Joint 2D density** for random parameter pairs, to check whether the
+   compressed mixture preserves dependencies and not just marginals.
+4. **Per-parameter Q-Q** to assess tail fidelity.
+
+```{r viz_setup}
+# Color palette + small helper, kept local to this section.
+src_colors <- c(original = "steelblue", regenerated = "darkgreen")
+
+# Pre-build the two aligned matrices we visualize repeatedly.
+orig_mat  <- as.matrix(original_draws[, param_names, drop = FALSE])
+regen_mat <- as.matrix(regenerated_samples[, param_names, drop = FALSE])
+
+# Drop posterior classes (e.g. draws_matrix) so tidyverse can combine columns.
+orig_mat <- unclass(orig_mat)
+regen_mat <- unclass(regen_mat)
+storage.mode(orig_mat) <- "double"
+storage.mode(regen_mat) <- "double"
+```
+
+## 1. Mean and SD calibration across all parameters
+
+A perfect compression sits exactly on the red identity line; deviations reveal
+which parameters are biased or over/under-dispersed by the GMM approximation.
+
+```{r calibration_plots, fig.width=11, fig.height=5}
+calibration_df <- tibble::tibble(
+  parameter        = param_names,
+  original_mean    = original_means,
+  regenerated_mean = regenerated_means,
+  original_sd      = original_sds,
+  regenerated_sd   = regenerated_sds
+)
+
+p_mean_calib <- ggplot(calibration_df,
+                       aes(x = regenerated_mean, y = original_mean)) +
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed") +
+  geom_point(alpha = 0.4, color = src_colors[["original"]], size = 0.8) +
+  labs(
+    title    = "Posterior means",
+    subtitle = paste(length(param_names), "parameters"),
+    x        = "Regenerated posterior mean",
+    y        = "Original posterior mean"
+  ) +
+  theme_minimal()
+
+# Robust axis limits so extreme outliers do not collapse all points.
+mean_xy <- c(calibration_df$original_mean, calibration_df$regenerated_mean)
+mean_lim <- stats::quantile(mean_xy, probs = c(0.01, 0.99), na.rm = TRUE)
+
+p_mean_calib <- p_mean_calib +
+  coord_equal(xlim = mean_lim, ylim = mean_lim)
+
+p_sd_calib <- ggplot(calibration_df,
+                     aes(x = regenerated_sd, y = original_sd)) +
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed") +
+  geom_point(alpha = 0.4, color = "darkorange", size = 0.8) +
+  labs(
+    title    = "Posterior SDs",
+    subtitle = paste(length(param_names), "parameters"),
+    x        = "Regenerated posterior SD",
+    y        = "Original posterior SD"
+  ) +
+  theme_minimal()
+
+sd_xy <- c(calibration_df$original_sd, calibration_df$regenerated_sd)
+sd_lim <- stats::quantile(sd_xy, probs = c(0.01, 0.99), na.rm = TRUE)
+sd_lim[1] <- max(0, sd_lim[1])  # SD cannot be negative
+
+p_sd_calib <- p_sd_calib +
+  coord_equal(xlim = sd_lim, ylim = sd_lim)
+
+p_mean_calib + p_sd_calib
+```
+
+```{r calibration_summary}
+mean_err <- with(calibration_df, regenerated_mean - original_mean)
+sd_rel   <- with(calibration_df,
+                 (regenerated_sd - original_sd) /
+                 pmax(original_sd, .Machine$double.eps))
+
+calibration_summary <- tibble::tibble(
+  metric = c(
+    "RMSE(mean)",
+    "MAE(mean)",
+    "median |relative SD error|",
+    "max |relative SD error|"
+  ),
+  value = c(
+    sqrt(mean(mean_err^2)),
+    mean(abs(mean_err)),
+    median(abs(sd_rel)),
+    max(abs(sd_rel))
+  )
+)
+print(calibration_summary)
+```
+
+## 2. Marginal density overlays for a random subset
+
+```{r marginal_overlays, fig.width=11, fig.height=8}
+set.seed(42)
+n_show <- 9
+sampled_params <- sample(param_names, min(n_show, length(param_names)))
+
+marginal_df <- dplyr::bind_rows(
+  tibble::as_tibble(orig_mat[, sampled_params, drop = FALSE]) |>
+    tidyr::pivot_longer(dplyr::everything(),
+                        names_to = "parameter", values_to = "value") |>
+    dplyr::mutate(source = "original"),
+  tibble::as_tibble(regen_mat[, sampled_params, drop = FALSE]) |>
+    tidyr::pivot_longer(dplyr::everything(),
+                        names_to = "parameter", values_to = "value") |>
+    dplyr::mutate(source = "regenerated")
+) |>
+  dplyr::mutate(parameter = factor(parameter, levels = sampled_params))
+
+ggplot(marginal_df, aes(x = value, fill = source, color = source)) +
+  geom_density(alpha = 0.35) +
+  facet_wrap(~ parameter, scales = "free", ncol = 3) +
+  scale_fill_manual(values = src_colors) +
+  scale_color_manual(values = src_colors) +
+  labs(
+    title    = "Marginal posterior densities",
+    subtitle = paste("Random subset of", length(sampled_params), "parameters"),
+    x        = "Parameter value",
+    y        = "Density"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+## 3. Joint 2D densities for random parameter pairs
+
+This checks whether the GMM preserves *dependencies* and not just marginals.
+A diagonal-covariance mixture (e.g. `EEI`/`VVI`) cannot represent within-component
+correlations, so off-diagonal "tilts" in original pairs may be lost — these plots
+make any such loss visible.
+
+```{r joint_density, fig.width=11, fig.height=10}
+set.seed(7)
+n_pairs  <- 4
+pair_idx <- replicate(n_pairs, sample(seq_along(param_names), 2),
+                      simplify = FALSE)
+
+pair_plots <- lapply(pair_idx, function(idx) {
+  pp <- param_names[idx]
+  df <- dplyr::bind_rows(
+    tibble::tibble(x = orig_mat[, pp[1]],  y = orig_mat[, pp[2]],
+                   source = "original"),
+    tibble::tibble(x = regen_mat[, pp[1]], y = regen_mat[, pp[2]],
+                   source = "regenerated")
+  )
+  ggplot(df, aes(x = x, y = y, color = source)) +
+    geom_point(alpha = 0.25, size = 0.4) +
+    stat_density_2d(alpha = 0.7, linewidth = 0.4) +
+    scale_color_manual(values = src_colors) +
+    labs(x = pp[1], y = pp[2]) +
+    theme_minimal() +
+    theme(legend.position = "none",
+          axis.title = element_text(size = 8))
+})
+
+patchwork::wrap_plots(pair_plots, ncol = 2) +
+  patchwork::plot_annotation(
+    title    = "Joint posteriors for random parameter pairs",
+    subtitle = "Original (blue) vs regenerated (green)"
+  )
+```
+
+```{r correlation_calibration, fig.width=6, fig.height=6}
+# Quantitative companion to the joint plots: how well are pairwise correlations
+# preserved? We sample a few hundred random pairs and compare correlations.
+set.seed(11)
+n_corr_pairs <- min(500, choose(length(param_names), 2))
+corr_pair_idx <- replicate(
+  n_corr_pairs,
+  sample(seq_along(param_names), 2),
+  simplify = FALSE
+)
+
+corr_df <- purrr::map_dfr(corr_pair_idx, function(idx) {
+  pp <- param_names[idx]
+  tibble::tibble(
+    pair        = paste(pp, collapse = " ~ "),
+    cor_orig    = cor(orig_mat[, pp[1]],  orig_mat[, pp[2]]),
+    cor_regen   = cor(regen_mat[, pp[1]], regen_mat[, pp[2]])
+  )
+})
+
+ggplot(corr_df, aes(x = cor_orig, y = cor_regen)) +
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed") +
+  geom_point(alpha = 0.4, color = "purple", size = 0.9) +
+  coord_equal(xlim = c(-1, 1), ylim = c(-1, 1)) +
+  labs(
+    title    = "Pairwise correlations: original vs regenerated",
+    subtitle = paste(nrow(corr_df), "random parameter pairs"),
+    x        = "cor(original)",
+    y        = "cor(regenerated)"
+  ) +
+  theme_minimal()
+```
+
+## 4. Per-parameter Q-Q plots
+
+Tail behaviour matters for predictive intervals. The Q-Q points should hug
+the red identity line if the GMM captures the full distribution (not just
+mean/SD).
+
+```{r qq_plots, fig.width=11, fig.height=7}
+qq_params <- sampled_params[seq_len(min(6, length(sampled_params)))]
+qq_probs  <- ppoints(200)
+
+qq_df <- purrr::map_dfr(qq_params, function(p) {
+  tibble::tibble(
+    parameter = p,
+    q_orig    = stats::quantile(orig_mat[, p],  probs = qq_probs, names = FALSE),
+    q_regen   = stats::quantile(regen_mat[, p], probs = qq_probs, names = FALSE)
+  )
+}) |>
+  dplyr::mutate(parameter = factor(parameter, levels = qq_params))
+
+ggplot(qq_df, aes(x = q_orig, y = q_regen)) +
+  geom_abline(slope = 1, intercept = 0, color = "red", linetype = "dashed") +
+  geom_point(alpha = 0.6, color = "purple", size = 0.7) +
+  facet_wrap(~ parameter, scales = "free", ncol = 3) +
+  labs(
+    title    = "Q-Q plots: original vs regenerated quantiles",
+    subtitle = "Points on the red line indicate good distributional fidelity",
+    x        = "Original quantiles",
+    y        = "Regenerated quantiles"
+  ) +
+  theme_minimal()
+```
+
+

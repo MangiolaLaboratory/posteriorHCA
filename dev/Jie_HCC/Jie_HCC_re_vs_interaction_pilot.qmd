@@ -1,0 +1,717 @@
+---
+title: "HCC pilot — random-effect vs interaction tissue formula"
+subtitle: "V1_nk liver baseline sanity check on 4 TIMES biomarkers"
+date: today
+date-format: "DD MMM YYYY"
+title-block-banner: true
+author:
+  - name: Chen Zhan
+    orcid: 0000-0002-4794-8339
+    email: chen.zhan@adelaide.edu.au
+    affiliation:
+      - id: sgc
+        name: SAiGENCI, The University of Adelaide
+format:
+  html:
+    theme: minty
+    df-print: paged
+    code-line-numbers: true
+    embed-resources: true
+    code-fold: true
+    code-fold-default: true
+    toc: true
+    toc-location: left
+    toc-title: "Contents"
+knitr:
+  opts_chunk:
+    message: false
+    warning: false
+editor: source
+abstract: |
+  Pilot comparison of two posteriorHCA V1_nk brms parameterisations for the
+  comprehensive healthy liver NK baseline used in the TIMES HCC case study: a
+  random-effect formula that treats tissue-specific covariate slopes as random
+  effects, and a fixed interaction alternative where covariates interact with
+  tissue_groups. This revision refits BOTH families on the login node with a
+  *simplified shape (dispersion) formula* — dropping the ethnicity/tissue-specific
+  shape terms so the shape can borrow power across tissues rather than being
+  limited by small per-tissue samples (liver n = 71) — and, for each family, also
+  refits the previous *rich* shape as a reference. We test the hypothesis that the
+  shape formula, not the mean formula, drives the large posterior SD of the liver
+  baseline, then project the four TIMES HCC cohorts (IF/TC x REC/non-REC) onto the
+  revised baselines and ask which formula best serves the case study by preserving
+  the expected ordering that recurrent cohorts sit farther from healthy than
+  non-recurrent cohorts.
+params:
+  case_dir: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC"
+  model_store_root: "/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/HPC_posterior/NEW_CELL_TYPE"
+  target_cell_type: "nk"
+  baseline_tissue_group: "liver"
+  out_dir: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/re_vs_interaction_pilot"
+  cohort_results_csv: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/Jie_HCC_four_cohort_comprehensive_liver_baseline_mu_tests.csv"
+  n_posterior_draws: 400
+  fit_cores: 32
+  refresh_fits: false
+---
+
+# Motivation
+
+The TIMES HCC case study uses a **comprehensive healthy liver NK baseline**
+from the posteriorHCA `V1_nk` atlas. Each gene is modelled as a
+zero-inflated negative binomial regression on pseudobulk counts with rich
+covariate structure. In production, **tissue-specific deviations** enter as
+random effects:
+
+$$
+\texttt{(1 + age\_decade * sex + ethnicity\_groups | tissue\_groups)}
+$$
+
+This partial pooling is attractive when many tissues contribute information,
+but **liver contributes only 71 of 3,226 NK pseudobulk samples** (2.2%),
+while blood contributes 74%. A concern for the HCC application is that liver
+tissue effects — and liver-specific age/sex/ethnicity slopes — may be
+**shrunk toward the blood-dominated population mean**, appearing as if liver
+biology is embedded in the global fixed effect rather than estimated
+independently.
+
+An alternative is to replace the random-slopes tissue term with **fixed
+interactions**:
+
+$$
+\texttt{age\_decade:tissue\_groups + sex:tissue\_groups + ...}
+$$
+
+This removes hierarchical shrinkage: liver coefficients are estimated only
+from liver rows. The trade-off is a much larger parameter space and potential
+instability when liver sample size is modest.
+
+## The shape (dispersion) formula, revisited
+
+Both families share the same negative-binomial **shape** (dispersion) sub-model.
+In the previous pilot the shape formula carried **tissue- and ethnicity-specific
+terms**, so the liver dispersion was estimated largely from the 71 liver rows.
+We hypothesise that **this shape structure — not the mean formula — is what
+inflates the posterior SD of the liver baseline**: a poorly identified
+per-tissue dispersion widens the joint posterior, including the mean linear
+predictor `log(μ)` we read off as the baseline.
+
+This revision therefore **simplifies the shape formula** so dispersion borrows
+power across all tissues instead of being anchored to small per-tissue samples:
+
+- **Interaction shape** → `shape ~ 1 + disease_groups_altered + assay_groups_altered`
+- **Random-effect shape** → `shape ~ 1 + disease_groups_altered + assay_groups_altered + (1 | tissue_groups)`
+
+To attribute any SD change to the shape formula rather than the mean formula, we
+refit each family under **both** the revised *simple* shape and the previous
+*rich* shape while holding the counts formula fixed.
+
+This report is a **pilot on four TIMES biomarkers** present in the `V1_nk`
+store. It compares **both families** (random-effect and interaction) x **both
+shape variants** (simple and rich). The fits are **precomputed once** by
+`R/HCC_re_vs_interaction_pilot.R` (run on a compute node with `cores = 32`; the
+random-slopes RE fit is too heavy for the login node) and cached as
+`fit_<family>[_rich]_<GENE>.rds` under `params$out_dir`. The training data and
+the rich-shape RE reference are read from the production targets store.
+**Rendering only reads the cached artefacts — it never fits models.**
+
+------------------------------------------------------------------------
+
+# Formulas compared
+
+Each family keeps its own **counts (mean) formula** and is fit under two
+**shape (dispersion) formulas**: the revised *simple* shape and the previous
+*rich* shape. The counts formula is identical across the two shape variants, so
+any difference in the baseline is attributable to the shape sub-model alone.
+
+```{r}
+#| label: formulas
+
+source(file.path(params$case_dir, "R", "re_vs_interaction_helpers.R"))
+specs <- formula_specs()
+
+knitr::kable(data.frame(
+  family = c("random-effect", "random-effect", "random-effect",
+             "interaction", "interaction", "interaction"),
+  component = c("counts", "shape (rich, reference)", "shape (simple, revised)",
+                "counts", "shape (rich, reference)", "shape (simple, revised)"),
+  formula = c(specs$re$counts, specs$re$shape_rich, specs$re$shape_simple,
+              specs$interaction$counts, specs$interaction$shape_rich, specs$interaction$shape_simple)
+))
+```
+
+The random-effect counts formula treats tissue deviations as random slopes; the
+interaction counts formula is their fixed-effect expansion inside
+`tissue_groups`. The **rich shape** carries `ethnicity_groups` (and a tissue
+term), while the **simple shape** drops those so dispersion pools across tissues.
+
+------------------------------------------------------------------------
+
+# Library setup
+
+```{r}
+#| label: setup
+
+suppressPackageStartupMessages({
+  library(tibble)
+  library(tidyr)
+  library(dplyr)
+  library(readr)
+  library(ggplot2)
+  library(forcats)
+  library(scales)
+  library(glue)
+})
+
+theme_set(theme_minimal(base_size = 11))
+dir.create(params$out_dir, recursive = TRUE, showWarnings = FALSE)
+```
+
+------------------------------------------------------------------------
+
+# Load precomputed baselines (fits are NOT run during rendering)
+
+For each gene we fit four brms models — {random-effect, interaction} x {simple,
+rich shape} — with `cores = 32`. The random-slopes RE fit is **expensive and must
+run on a compute node, not the login node and not during rendering**. Fits are
+therefore **precomputed once** by `R/HCC_re_vs_interaction_pilot.R` and cached as
+`fit_re_<GENE>.rds`, `fit_interaction_<GENE>.rds` (revised simple shape) and
+`fit_interaction_rich_<GENE>.rds` (reference); the rich-shape RE reference reuses
+the production store fit. This chunk only **reads** the cached artefacts, so the
+report renders in seconds.
+
+To (re)generate the cache before rendering (on an allocated compute node):
+
+```bash
+module load R/4.5.3-gfbf-2025b
+REFRESH_FITS=true Rscript R/HCC_re_vs_interaction_pilot.R
+```
+
+```{r}
+#| label: run-pilot
+
+model_labels <- c(re = "Random effect", interaction = "Interaction")
+shape_labels <- c(simple = "Simple shape (revised)", rich = "Rich shape (reference)")
+
+comparison_csv <- file.path(params$out_dir, "baseline_comparison_by_formula.csv")
+shape_effect_csv <- file.path(params$out_dir, "baseline_shape_effect.csv")
+draws_csv <- file.path(params$out_dir, "baseline_draws_long.csv")
+
+if (!all(file.exists(comparison_csv, shape_effect_csv, draws_csv))) {
+  stop(
+    "Precomputed pilot artefacts not found in params$out_dir.\n",
+    "Rendering does NOT fit models (the random-slopes RE fit must run on a ",
+    "compute node). Run the batch fitter first, e.g.:\n",
+    "  module load R/4.5.3-gfbf-2025b\n",
+    "  REFRESH_FITS=true Rscript ",
+    file.path(params$case_dir, "R", "HCC_re_vs_interaction_pilot.R"), "\n",
+    "then re-render."
+  )
+}
+
+baseline_summary <- read_csv(comparison_csv, show_col_types = FALSE)
+shape_effect <- read_csv(shape_effect_csv, show_col_types = FALSE)
+draws_df <- read_csv(draws_csv, show_col_types = FALSE)
+
+draws_labelled <- draws_df |>
+  mutate(
+    model_label = recode(model, !!!model_labels),
+    shape_label = recode(shape_variant, !!!shape_labels),
+    model_label = factor(model_label, levels = c("Random effect", "Interaction")),
+    shape_label = factor(shape_label, levels = shape_labels)
+  )
+```
+
+------------------------------------------------------------------------
+
+# NK pseudobulk sample sizes
+
+```{r}
+#| label: sample-size
+
+tissue_sizes <- read_csv(
+  file.path(params$out_dir, "nk_pseudobulk_tissue_sample_sizes.csv"),
+  show_col_types = FALSE
+)
+
+liver_summary <- read_csv(
+  file.path(params$out_dir, "liver_sample_size_summary.csv"),
+  show_col_types = FALSE
+) |>
+  mutate(value = if_else(metric == "nk_pseudobulk_total" | metric == "nk_liver_all_disease" | metric == "nk_liver_normal_in_fit", as.integer(value), value))
+
+liver_summary
+```
+
+Liver is the fifth-largest tissue in NK pseudobulk but remains a small
+fraction of training data relative to blood.
+
+```{r}
+#| label: plot-tissue-sizes
+#| fig-width: 8
+#| fig-height: 5
+
+tissue_sizes |>
+  mutate(
+    tissue_groups = fct_reorder(tissue_groups, n),
+    highlight = if_else(tissue_groups == params$baseline_tissue_group, "liver", "other")
+  ) |>
+  ggplot(aes(x = tissue_groups, y = n, fill = highlight)) +
+  geom_col(width = 0.75) +
+  coord_flip() +
+  scale_fill_manual(values = c(liver = "#E64B35", other = "#4DBBD5"), guide = "none") +
+  scale_y_continuous(labels = label_comma()) +
+  labs(
+    x = NULL,
+    y = "NK pseudobulk samples",
+    title = "Tissue composition of V1_nk training data",
+    subtitle = glue("Liver n = {tissue_sizes$n[tissue_sizes$tissue_groups == params$baseline_tissue_group]}")
+  )
+```
+
+------------------------------------------------------------------------
+
+# Comprehensive liver baseline comparison
+
+For each gene x family x shape we compute the same **comprehensive healthy liver
+baseline** used in the universal HCC case study:
+
+- `disease_groups_altered = Normal`
+- `tissue_groups = liver`
+- `offset = 0`
+- marginalised over the full atlas grid of `sex × age_decade × ethnicity × assay`
+- `posterior_linpred(transform = FALSE)` then averaged across grid rows per draw
+
+```{r}
+#| label: comparison-table
+
+baseline_summary |>
+  mutate(
+    model = recode(model, !!!model_labels),
+    shape = recode(shape_variant, !!!shape_labels),
+    across(where(is.numeric), ~ round(.x, 3))
+  ) |>
+  select(
+    gene, model, shape, fit_source,
+    mean_log_mu, sd_log_mu, median_mu, max_rhat, n_liver_rows
+  ) |>
+  arrange(gene, model, shape)
+```
+
+## Does the shape formula control the baseline SD?
+
+The central question: within each family (holding the counts formula fixed),
+does the **simple shape** shrink the posterior SD of the liver baseline relative
+to the **rich shape**? `sd_ratio_simple_over_rich < 1` and a positive
+`sd_reduction` support the hypothesis.
+
+```{r}
+#| label: shape-effect-table
+
+shape_effect |>
+  mutate(
+    model = recode(model, !!!model_labels),
+    across(where(is.numeric), ~ round(.x, 3))
+  ) |>
+  select(
+    gene, model,
+    sd_log_mu_rich, sd_log_mu_simple, sd_ratio_simple_over_rich, sd_reduction,
+    mean_log_mu_rich, mean_log_mu_simple, mean_shift_simple_minus_rich
+  ) |>
+  arrange(model, gene)
+```
+
+```{r}
+#| label: plot-sd-by-shape
+#| fig-width: 8
+#| fig-height: 4.5
+#| fig-align: center
+
+baseline_summary |>
+  mutate(
+    model_label = factor(recode(model, !!!model_labels),
+                         levels = c("Random effect", "Interaction")),
+    shape_label = factor(recode(shape_variant, !!!shape_labels),
+                         levels = shape_labels)
+  ) |>
+  ggplot(aes(x = gene, y = sd_log_mu, fill = shape_label)) +
+  geom_col(position = position_dodge(width = 0.7), width = 0.65) +
+  facet_wrap(~ model_label) +
+  scale_fill_manual(values = c(
+    `Rich shape (reference)` = "#E64B35",
+    `Simple shape (revised)` = "#4DBBD5"
+  )) +
+  labs(
+    x = NULL,
+    y = "Posterior SD of comprehensive liver log(mu)",
+    fill = NULL,
+    title = "Baseline uncertainty by shape formula",
+    subtitle = "Lower simple-shape bars would confirm the shape controls the SD"
+  ) +
+  theme(legend.position = "bottom")
+```
+
+The overlaid posterior densities make the narrowing (or not) directly visible:
+each panel is a gene, colour is the family, and line type distinguishes the two
+shape formulas.
+
+```{r}
+#| label: plot-baseline-density-by-shape
+#| fig-width: 10
+#| fig-height: 7
+#| fig-align: center
+
+ggplot(draws_labelled, aes(x = baseline_log_mu, colour = model_label, linetype = shape_label)) +
+  geom_density(linewidth = 0.7) +
+  facet_wrap(~ gene, scales = "free") +
+  scale_colour_manual(values = c("Random effect" = "#4DBBD5", "Interaction" = "#E64B35")) +
+  scale_linetype_manual(values = c(
+    `Simple shape (revised)` = "solid",
+    `Rich shape (reference)` = "dashed"
+  )) +
+  labs(
+    x = "Comprehensive liver log(mu)",
+    y = "Density",
+    colour = "Family",
+    linetype = "Shape formula",
+    title = "Baseline posterior by family and shape formula",
+    subtitle = "Solid = revised simple shape; dashed = rich reference shape"
+  ) +
+  theme(legend.position = "bottom")
+```
+
+```{r}
+#| label: shape-effect-text
+#| results: asis
+
+n_narrower <- sum(shape_effect$sd_ratio_simple_over_rich < 1, na.rm = TRUE)
+n_total <- sum(is.finite(shape_effect$sd_ratio_simple_over_rich))
+mean_ratio <- mean(shape_effect$sd_ratio_simple_over_rich, na.rm = TRUE)
+
+cat(glue(
+  "The simple shape yields a narrower baseline in **{n_narrower}/{n_total}** ",
+  "gene x family cells, with a mean SD ratio (simple / rich) of ",
+  "**{round(mean_ratio, 2)}**. ",
+  if (n_narrower > n_total / 2) {
+    "This supports the hypothesis that the shape formula — not the mean formula — is the dominant driver of the liver baseline SD: pooling dispersion across tissues tightens the posterior."
+  } else {
+    "This does not support a dominant shape-formula effect on the baseline SD; the mean formula and sample size likely dominate."
+  }
+))
+```
+
+## Concordance of the two families under the revised shape
+
+Among the **revised (simple-shape)** baselines, how closely do the two families
+agree draw-for-draw? (Draws are matched by index within a gene.)
+
+```{r}
+#| label: plot-scatter
+#| fig-width: 8
+#| fig-height: 7
+
+draws_wide <- draws_df |>
+  filter(shape_variant == "simple") |>
+  select(gene, draw, model, baseline_log_mu) |>
+  pivot_wider(names_from = model, values_from = baseline_log_mu)
+
+ggplot(draws_wide, aes(x = re, y = interaction)) +
+  geom_abline(slope = 1, intercept = 0, linetype = 2, colour = "grey50") +
+  geom_point(alpha = 0.15, size = 0.8) +
+  facet_wrap(~ gene, scales = "free") +
+  labs(
+    x = "Comprehensive liver log(mu) — random-effect (simple shape)",
+    y = "Comprehensive liver log(mu) — interaction (simple shape)",
+    title = "Draw-wise baseline concordance under the revised shape"
+  )
+```
+
+------------------------------------------------------------------------
+
+# HCC cohort projection onto both baselines
+
+The point of the baseline is to serve the TIMES HCC case study. We therefore
+project the four HCC cohorts (`IF`/`TC` x `REC`/`non-REC`) onto **both** baseline
+formulas and ask which one better matches the case-study expectation. Cohort
+`log(μ)` values are the edgeR NB estimates at `offset = 0` produced by the
+universal-baseline report and are **independent of the atlas formula**, so the
+same cohort projections can be overlaid on either baseline density.
+
+```{r}
+#| label: load-cohort-projections
+
+cohort_tests <- read_csv(params$cohort_results_csv, show_col_types = FALSE) |>
+  select(gene, cohort, compartment, recurrence, cohort_log_mu, cohort_se) |>
+  filter(gene %in% unique(draws_df$gene))
+```
+
+## Baseline densities per gene, with HCC cohorts
+
+For each gene we plot the posterior `log(μ)` **density of both revised
+(simple-shape) baselines** (random-effect vs interaction) and overlay the four
+HCC cohort projections as vertical lines — the direct analogue of the universal
+case-study figure, split by model family.
+
+```{r}
+#| label: plot-baseline-density-by-formula
+#| fig-width: 10
+#| fig-height: 7
+#| fig-align: center
+
+model_colours <- c(`Random effect` = "#4DBBD5", Interaction = "#E64B35")
+cohort_colours <- c(
+  IF_REC = "#C23B4A",
+  IF_non_REC = "#2878B5",
+  TC_REC = "#E08A2E",
+  TC_non_REC = "#2D8B57"
+)
+
+draws_plot <- draws_df |>
+  filter(shape_variant == "simple") |>
+  mutate(
+    model = recode(model, !!!model_labels),
+    model = factor(model, levels = c("Random effect", "Interaction"))
+  )
+
+cohort_plot <- cohort_tests |>
+  mutate(cohort = factor(cohort, levels = names(cohort_colours)))
+
+ggplot() +
+  geom_density(
+    data = draws_plot,
+    aes(x = baseline_log_mu, fill = model),
+    colour = NA,
+    alpha = 0.5
+  ) +
+  geom_vline(
+    data = cohort_plot,
+    aes(xintercept = cohort_log_mu, colour = cohort),
+    linewidth = 0.8
+  ) +
+  scale_fill_manual(values = model_colours) +
+  scale_colour_manual(values = cohort_colours) +
+  facet_wrap(~ gene, scales = "free", ncol = 2) +
+  labs(
+    title = "Revised healthy liver NK baseline by family, with HCC cohorts",
+    subtitle = "Filled densities = simple-shape baseline log(mu) per family; lines = edgeR cohort log(mu) at offset 0",
+    x = "log(mu)",
+    y = "Density",
+    fill = "Baseline family",
+    colour = "HCC cohort"
+  ) +
+  theme(
+    legend.position = "bottom",
+    strip.text = element_text(face = "bold")
+  )
+```
+
+## Which baseline serves the case study?
+
+The case study expects **recurrent (REC) cohorts to sit farther from the healthy
+liver NK reference than non-recurrent (non-REC) cohorts**. We quantify each
+cohort's distance from each baseline as a standardized deviation
+`z = (cohort log(μ) − baseline mean log(μ)) / baseline SD`, then compare the
+absolute distance of REC vs non-REC within each gene x compartment. We do this
+for **all four baseline variants** (family x shape) so the shape effect on
+case-study discrimination is visible too — a narrower baseline should give
+*larger* standardized separation.
+
+```{r}
+#| label: baseline-cohort-standardized
+
+baseline_stats <- draws_df |>
+  mutate(
+    model = recode(model, !!!model_labels),
+    shape = recode(shape_variant, !!!shape_labels)
+  ) |>
+  group_by(gene, model, shape) |>
+  summarise(
+    baseline_mean_log_mu = mean(baseline_log_mu),
+    baseline_sd_log_mu = sd(baseline_log_mu),
+    .groups = "drop"
+  )
+
+cohort_projection <- cohort_tests |>
+  inner_join(baseline_stats, by = "gene", relationship = "many-to-many") |>
+  mutate(
+    signed_z = (cohort_log_mu - baseline_mean_log_mu) / baseline_sd_log_mu,
+    abs_z = abs(signed_z)
+  )
+
+cohort_projection |>
+  filter(shape == "Simple shape (revised)") |>
+  select(
+    gene, model, cohort, cohort_log_mu, baseline_mean_log_mu,
+    baseline_sd_log_mu, signed_z, abs_z
+  ) |>
+  mutate(across(where(is.numeric), ~ round(.x, 3))) |>
+  arrange(gene, model, cohort)
+```
+
+```{r}
+#| label: baseline-cohort-margin
+
+recurrence_margin <- cohort_projection |>
+  select(gene, compartment, recurrence, model, shape, abs_z) |>
+  pivot_wider(names_from = recurrence, values_from = abs_z) |>
+  mutate(
+    margin_rec_minus_nonrec = REC - `non-REC`,
+    rec_farther_from_healthy = margin_rec_minus_nonrec > 0
+  )
+
+recurrence_margin |>
+  mutate(across(where(is.numeric), ~ round(.x, 3))) |>
+  arrange(gene, compartment, model, shape)
+```
+
+A **positive `margin_rec_minus_nonrec`** means the REC cohort is farther from the
+healthy baseline than the non-REC cohort — the direction the HCC case study
+predicts. Summarising across all gene x compartment comparisons:
+
+```{r}
+#| label: baseline-choice-summary
+
+baseline_choice <- recurrence_margin |>
+  group_by(model, shape) |>
+  summarise(
+    n_comparisons = n(),
+    n_rec_farther = sum(rec_farther_from_healthy),
+    frac_rec_farther = mean(rec_farther_from_healthy),
+    mean_margin_sd = mean(margin_rec_minus_nonrec),
+    median_margin_sd = median(margin_rec_minus_nonrec),
+    .groups = "drop"
+  ) |>
+  arrange(desc(n_rec_farther), desc(mean_margin_sd))
+
+baseline_choice
+```
+
+```{r}
+#| label: plot-baseline-choice
+#| fig-width: 8
+#| fig-height: 4.5
+#| fig-align: center
+
+baseline_choice |>
+  mutate(model = factor(model, levels = c("Random effect", "Interaction"))) |>
+  ggplot(aes(x = model, y = mean_margin_sd, fill = shape)) +
+  geom_col(position = position_dodge(width = 0.7), width = 0.6) +
+  geom_hline(yintercept = 0, colour = "grey40", linewidth = 0.4) +
+  scale_fill_manual(values = c(
+    `Rich shape (reference)` = "#E64B35",
+    `Simple shape (revised)` = "#4DBBD5"
+  )) +
+  labs(
+    x = NULL,
+    y = "Mean REC - non-REC separation (baseline SD units)",
+    fill = NULL,
+    title = "Case-study discrimination by baseline variant",
+    subtitle = "Higher = recurrent cohorts sit farther from healthy, as expected"
+  ) +
+  theme(legend.position = "bottom")
+```
+
+```{r}
+#| label: baseline-choice-text
+#| results: asis
+
+best <- baseline_choice |> slice(1)
+re_simple <- baseline_choice |>
+  filter(model == "Random effect", shape == "Simple shape (revised)")
+int_simple <- baseline_choice |>
+  filter(model == "Interaction", shape == "Simple shape (revised)")
+
+cat(glue(
+  "Among the revised (simple-shape) candidates, the ",
+  "**{re_simple$model}** baseline recovers the expected ",
+  "REC-farther-from-healthy ordering in ",
+  "{re_simple$n_rec_farther}/{re_simple$n_comparisons} cases (mean separation ",
+  "{round(re_simple$mean_margin_sd, 2)} SD), versus ",
+  "{int_simple$n_rec_farther}/{int_simple$n_comparisons} and ",
+  "{round(int_simple$mean_margin_sd, 2)} SD for the {int_simple$model} baseline. ",
+  "Across all four variants, the best case-study discrimination comes from the ",
+  "**{best$model} / {best$shape}** baseline. "
+))
+```
+
+**Reading this together with the shape result.** Because the cohort projections
+are fixed, the standardized REC vs non-REC separation scales inversely with the
+baseline SD. So whichever variant most tightens the baseline (see the shape
+section above) also delivers the cleanest case-study discrimination. If the
+simple shape narrows the baseline as hypothesised, the revised baselines should
+push recurrent cohorts *farther* outside the healthy envelope than the rich
+reference — exactly the behaviour the HCC proximity score relies on. The
+partial-pooling random-effect family remains the more conservative, better-identified
+liver reference at liver n = 71.
+
+------------------------------------------------------------------------
+
+# Interpretation
+
+```{r}
+#| label: interpretation-text
+#| results: asis
+
+n_genes <- dplyr::n_distinct(baseline_summary$gene)
+n_narrower <- sum(shape_effect$sd_ratio_simple_over_rich < 1, na.rm = TRUE)
+n_total <- sum(is.finite(shape_effect$sd_ratio_simple_over_rich))
+mean_ratio <- mean(shape_effect$sd_ratio_simple_over_rich, na.rm = TRUE)
+mean_shift <- mean(abs(shape_effect$mean_shift_simple_minus_rich), na.rm = TRUE)
+
+cat(glue(
+  "Across {n_genes} genes and both families, simplifying the shape formula ",
+  "narrows the liver baseline in {n_narrower}/{n_total} cells ",
+  "(mean SD ratio {round(mean_ratio, 2)}), while shifting the baseline mean by ",
+  "only {round(mean_shift, 2)} log units on average. ",
+  if (n_narrower > n_total / 2 && mean_ratio < 1) {
+    "This is consistent with the shape (dispersion) formula — not the mean formula — being the dominant driver of baseline uncertainty: letting dispersion pool across tissues tightens the posterior without moving the mean."
+  } else {
+    "The shape formula is therefore not the dominant driver of baseline uncertainty here."
+  }
+))
+```
+
+**Shape (dispersion) formula.** The revised *simple* shape drops the
+ethnicity/tissue-specific dispersion terms so the negative-binomial shape is
+estimated by pooling across all tissues instead of leaning on the 71 liver rows.
+The SD-by-shape comparison isolates this effect while holding each family's mean
+formula fixed.
+
+**Random-effect family.** Liver tissue intercepts and slopes are partially
+pooled toward a blood-informed population mean. This reduces variance but can
+bias liver estimates toward the dominant tissue when liver-specific signal is
+weak. The rich-shape RE reference is the well-converged production fit.
+
+**Interaction family.** Liver is estimated without mean-model shrinkage but at
+the cost of many tissue × covariate coefficients; with 21 tissues and sparse
+liver covariate combinations the fits can be unstable (wide baselines,
+divergences), and a rich shape compounds this.
+
+**Implication for HCC.** A tighter, better-identified liver baseline directly
+sharpens the healthy-proximity score, because the standardized REC vs non-REC
+separation scales inversely with baseline SD. If the simple shape is confirmed
+to control the SD, the revised baselines are preferable for the case study;
+choosing between the two families is then a bias/variance trade-off to settle in
+downstream HCC ranking tests.
+
+------------------------------------------------------------------------
+
+# Saved artefacts
+
+All pre-computed outputs live under `r params$out_dir`:
+
+| File | Description |
+|------|-------------|
+| `fit_re_<GENE>.rds` | Random-effect fit, revised simple shape |
+| `fit_re_rich_<GENE>.rds` | Random-effect reference (rich shape); the RE rich reference reuses the production store fit |
+| `fit_interaction_<GENE>.rds` | Interaction fit, revised simple shape |
+| `fit_interaction_rich_<GENE>.rds` | Interaction reference (rich shape) |
+| `baseline_comparison_by_formula.csv` | Baseline summary per gene x family x shape |
+| `baseline_shape_effect.csv` | Simple-vs-rich SD ratio / reduction per gene x family |
+| `baseline_draws_long.csv` / `.rds` | Draw-wise log(μ) (with `model`, `shape_variant`) |
+| `nk_pseudobulk_tissue_sample_sizes.csv` | Tissue counts |
+| `liver_sample_size_summary.csv` | Key sample-size metrics |
+| `formula_spec.txt` | Counts + both shape formulas per family |
+
+The HCC cohort projection lines are read (not written) from the universal
+case-study output `r params$cohort_results_csv`
+(`cohort_log_mu` = edgeR NB estimate at `offset = 0` per gene x cohort).

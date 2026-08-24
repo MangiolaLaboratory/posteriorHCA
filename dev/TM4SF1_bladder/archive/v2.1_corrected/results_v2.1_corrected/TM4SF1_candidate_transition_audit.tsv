@@ -1,0 +1,6 @@
+key	in_v1	in_v2	in_v2.1	transition
+endothelial | tissue | female reproductive system | NA | NA | NA	TRUE	TRUE	TRUE	retained
+endothelial | tissue | integumentary system (skin) | NA | NA | NA	TRUE	FALSE	FALSE	disappeared
+endothelial | tissue_age | liver | NA | 4 | NA	FALSE	TRUE	FALSE	none
+endothelial | tissue_sex | female reproductive system | female | NA | NA	TRUE	FALSE	FALSE	disappeared
+endothelial | tissue_sex | integumentary system (skin) | male | NA | NA	TRUE	FALSE	FALSE	disappeared

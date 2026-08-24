@@ -1,0 +1,7 @@
+"donor_id","condition","disease","source_GSE","geo_accession","tissue","tissue_group","sex","age","smoking_status","smoking_cessation","pack_years","bmi"
+"JKPF1","IPF","IPF","GSE285246","GSE285246","lung","respiratory system","Male","76","former","41 years","5","25.83"
+"JKPF2","IPF","IPF","GSE285246","GSE285246","lung","respiratory system","Male","69","former","2 years","47","26.6"
+"JKPF3","IPF","IPF","GSE285246","GSE285246","lung","respiratory system","Male","80","former","25  years","35","25.3"
+"JK06","control","healthy","GSE173896","GSE173896","lung","respiratory system","Male","58","never","Never","0","19.247015610651975"
+"JK11","control","healthy","GSE173896","GSE173896","lung","respiratory system","Female","56","never","Never","0","24.606858903443928"
+"JK12","control","healthy","GSE173896","GSE173896","lung","respiratory system","Male","33","never","Never","0","23.243801652892564"

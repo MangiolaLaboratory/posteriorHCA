@@ -1,0 +1,13 @@
+patient_id	original_patient_id	paper_id	histology	histology_group	sample_type	broad_cell_type	pseudobulk_id	n_cells	library_size	reconstructed_n150_threshold_met	published_cohort_member	published_tumour_epithelial_cells	cell_count_delta_vs_published
+VAR06	20847	VAR06	lymphoepithelioma-like	HV	tumour	epithelial	tumour_epithelial__VAR06__20847__VAR06__lymphoepithelioma-like__HV__tumour__epithelial	606	1685896	TRUE	TRUE	645	-39
+VAR01	21222	VAR01	micropapillary	HV	tumour	epithelial	tumour_epithelial__VAR01__21222__VAR01__micropapillary__HV__tumour__epithelial	317	703088	TRUE	TRUE	358	-41
+VAR07	21226	VAR07	squamous differentiation	HV	tumour	epithelial	tumour_epithelial__VAR07__21226__VAR07__squamous-differentiation__HV__tumour__epithelial	699	1547542	TRUE	TRUE	848	-149
+VAR09	21262	VAR09	small cell + micropapillary	HV	tumour	epithelial	tumour_epithelial__VAR09__21262__VAR09__small-cell-micropapillary__HV__tumour__epithelial	2880	14512125	TRUE	TRUE	2917	-37
+VAR05	FG	VAR05	nested	HV	tumour	epithelial	tumour_epithelial__VAR05__FG__VAR05__nested__HV__tumour__epithelial	497	1080347	TRUE	TRUE	428	69
+UC03	HG	UC03	pure UC	UC	tumour	epithelial	tumour_epithelial__UC03__HG__UC03__pure-UC__UC__tumour__epithelial	193	430421	TRUE	TRUE	163	30
+VAR03	JM	VAR03	pleomorphic giant cell-like + micropapillary	HV	tumour	epithelial	tumour_epithelial__VAR03__JM__VAR03__pleomorphic-giant-cell-like-micropapillary__HV__tumour__epithelial	809	2473725	TRUE	TRUE	812	-3
+VAR02	PS	VAR02	micropapillary	HV	tumour	epithelial	tumour_epithelial__VAR02__PS__VAR02__micropapillary__HV__tumour__epithelial	478	893560	TRUE	TRUE	479	-1
+VAR08	11734	VAR08	plasmacytoid	HV	tumour	epithelial	tumour_epithelial__VAR08__11734__VAR08__plasmacytoid__HV__tumour__epithelial	564	7519443	TRUE	TRUE	568	-4
+VAR04	12041	VAR04	nested	HV	tumour	epithelial	tumour_epithelial__VAR04__12041__VAR04__nested__HV__tumour__epithelial	341	4035509	TRUE	TRUE	342	-1
+UC01	12049	UC01	pure UC	UC	tumour	epithelial	tumour_epithelial__UC01__12049__UC01__pure-UC__UC__tumour__epithelial	90	657666	FALSE	TRUE	605	-515
+UC02	SG	UC02	pure UC	UC	tumour	epithelial	tumour_epithelial__UC02__SG__UC02__pure-UC__UC__tumour__epithelial	388	1180208	TRUE	TRUE	388	0

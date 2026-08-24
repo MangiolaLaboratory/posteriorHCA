@@ -1,0 +1,51 @@
+cell_type	tissue_groups	allowed_sex	n_allowed_sex_levels	reports_tissue_sex	rule_source
+epithelial	brainstem and cerebellar structures	male	1	FALSE	atlas-observed single sex
+epithelial	breast	female	1	FALSE	hard biological constraint
+epithelial	cardiovascular system	female	1	FALSE	atlas-observed single sex
+epithelial	cerebral lobes and cortical areas	female, male	2	TRUE	atlas-observed both sexes
+epithelial	digestive system (general)	female	1	FALSE	atlas-observed single sex
+epithelial	female reproductive system	female	1	FALSE	hard biological constraint
+epithelial	general brain and major structures	male	1	FALSE	atlas-observed single sex
+epithelial	integumentary system (skin)	female, male	2	TRUE	prespecified both-sex tissue
+epithelial	large intestine	female, male	2	TRUE	atlas-observed both sexes
+epithelial	limbic and basal systems	male	1	FALSE	atlas-observed single sex
+epithelial	liver	female, male	2	TRUE	atlas-observed both sexes
+epithelial	miscellaneous glands	female, male	2	TRUE	atlas-observed both sexes
+epithelial	nasal, oral, and pharyngeal regions	female, male	2	TRUE	atlas-observed both sexes
+epithelial	prostate	male	1	FALSE	hard biological constraint
+epithelial	renal system	female, male	2	TRUE	prespecified both-sex tissue
+epithelial	respiratory system	female, male	2	TRUE	prespecified both-sex tissue
+epithelial	sensory-related structures	female, male	2	TRUE	atlas-observed both sexes
+epithelial	small intestine	female, male	2	TRUE	atlas-observed both sexes
+epithelial	thymus	female, male	2	TRUE	atlas-observed both sexes
+epithelial	trachea	female, male	2	TRUE	atlas-observed both sexes
+epithelial	vasculature	female	1	FALSE	atlas-observed single sex
+endothelial	adipose tissue	female, male	2	TRUE	atlas-observed both sexes
+endothelial	brainstem and cerebellar structures	female, male	2	TRUE	atlas-observed both sexes
+endothelial	breast	female	1	FALSE	hard biological constraint
+endothelial	cardiovascular system	female, male	2	TRUE	atlas-observed both sexes
+endothelial	cerebral lobes and cortical areas	female, male	2	TRUE	atlas-observed both sexes
+endothelial	digestive system (general)	female	1	FALSE	atlas-observed single sex
+endothelial	endocrine system	female	1	FALSE	atlas-observed single sex
+endothelial	female reproductive system	female	1	FALSE	hard biological constraint
+endothelial	general brain and major structures	female, male	2	TRUE	atlas-observed both sexes
+endothelial	integumentary system (skin)	female, male	2	TRUE	prespecified both-sex tissue
+endothelial	large intestine	female, male	2	TRUE	atlas-observed both sexes
+endothelial	limbic and basal systems	female, male	2	TRUE	atlas-observed both sexes
+endothelial	liver	female, male	2	TRUE	atlas-observed both sexes
+endothelial	lymphatic system	female, male	2	TRUE	atlas-observed both sexes
+endothelial	miscellaneous glands	female, male	2	TRUE	atlas-observed both sexes
+endothelial	muscular system (skeletal muscles)	female, male	2	TRUE	atlas-observed both sexes
+endothelial	nasal, oral, and pharyngeal regions	female, male	2	TRUE	atlas-observed both sexes
+endothelial	oesophagus	female, male	2	TRUE	atlas-observed both sexes
+endothelial	ovary	female	1	FALSE	atlas-observed single sex
+endothelial	pancreas	female, male	2	TRUE	atlas-observed both sexes
+endothelial	prostate	male	1	FALSE	hard biological constraint
+endothelial	renal system	female, male	2	TRUE	prespecified both-sex tissue
+endothelial	respiratory system	female, male	2	TRUE	prespecified both-sex tissue
+endothelial	sensory-related structures	female, male	2	TRUE	atlas-observed both sexes
+endothelial	small intestine	female, male	2	TRUE	atlas-observed both sexes
+endothelial	spleen	female, male	2	TRUE	atlas-observed both sexes
+endothelial	thymus	female, male	2	TRUE	atlas-observed both sexes
+endothelial	trachea	female, male	2	TRUE	atlas-observed both sexes
+endothelial	vasculature	male	1	FALSE	atlas-observed single sex

@@ -103,7 +103,7 @@ get_model_ready <- function(cache_directory = get_default_cache_dir(), use_cache
 #' @param cache_directory Character. Directory to store the cached file. Defaults to the standard cache directory.
 #' @param use_cache Logical. If TRUE, uses the cached version if available.
 #' @param container Character. Name of the container in Nectar object storage.
-#' @param prefix Character. Prefix (folder name) in the container.
+#' @param prefix Character. Prefix (folder path) in the container. Use `""` for files at the container root.
 #' @param filename Character. Name of the file to download.
 #' @return List. Always returns a list with 'status' (success/not_found/error/empty), 'path' (local file path if successful, NULL otherwise), 'url' (requested URL), and optionally 'error' (error message for error cases).
 #' @export
@@ -113,22 +113,26 @@ get_model_ready <- function(cache_directory = get_default_cache_dir(), use_cache
 get_file_ready <- function(cache_directory = get_default_cache_dir(), 
                           use_cache = TRUE,
                           container,
-                          prefix,
+                          prefix = '',
                           filename) {
   
   # Validate inputs
   if (missing(container) || is.null(container) || container == "") {
     cli_abort("Container name must be specified")
   }
-  if (missing(prefix) || is.null(prefix) || prefix == "") {
-    cli_abort("Prefix must be specified")
-  }
   if (missing(filename) || is.null(filename) || filename == "") {
     cli_abort("Filename must be specified")
   }
+  if (is.null(prefix)) {
+    prefix <- ""
+  }
   
   # Construct the object path in the storage
-  object_path <- paste(prefix, filename, sep = "/")
+  object_path <- if (nzchar(prefix)) {
+    paste(prefix, filename, sep = "/")
+  } else {
+    filename
+  }
   
   # Construct the direct download URL (auth token is fixed)
   auth_token <- "AUTH_b0a86a29c8b74630aac35f471cfe1396"
@@ -136,7 +140,11 @@ get_file_ready <- function(cache_directory = get_default_cache_dir(),
   file_url <- paste(base_url, auth_token, container, object_path, sep = "/")
   
   # Construct the local file path maintaining the same structure
-  local_dir <- file.path(cache_directory, container, prefix)
+  local_dir <- if (nzchar(prefix)) {
+    file.path(cache_directory, container, prefix)
+  } else {
+    file.path(cache_directory, container)
+  }
   local_path <- file.path(local_dir, filename)
   
   # Check if file exists and use_cache is TRUE

@@ -1,0 +1,2 @@
+level	n_raw	n_after_min_300_genes	n_after_min_500_umis	n_after_max_20pct_mito	n_after_doublet_filter	n_doublets_removed
+overall	56192	28996	28634	26620	26402	218

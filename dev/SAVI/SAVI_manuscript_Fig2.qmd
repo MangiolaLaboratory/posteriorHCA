@@ -1,0 +1,3593 @@
+---
+title: "posteriorHCA Figure 2 — SAVI manuscript figure"
+subtitle: "External population-reference audit of a published STING-activation signature"
+date: today
+date-format: "DD MMM YYYY"
+title-block-banner: true
+author:
+  - name: Chen Zhan
+    orcid: 0000-0002-4794-8339
+    email: chen.zhan@adelaide.edu.au
+    affiliation:
+      - id: sgc
+        name: SAiGENCI, The University of Adelaide
+format:
+  html:
+    theme: minty
+    df-print: paged
+    code-line-numbers: true
+    embed-resources: true
+    code-fold: true
+    code-fold-default: true
+    toc: true
+    toc-location: left
+    toc-title: "Contents"
+knitr:
+  opts_chunk:
+    message: false
+    warning: false
+    fig.retina: 2
+editor: source
+abstract: |
+  Dedicated manuscript-figure report for the SAVI case (Nature Methods
+  double-column canvas, max 183 mm × 220 mm; no panel titles/subtitles).
+  Panel a freezes the observed cohort design and regenerates healthy-blood
+  support from the production `V1_monocytic` model frame. Panel b tests
+  published composition directions with a patient-level 15-compartment
+  `sccomp` model, calibrates equal-average and metadata-standardised HCA
+  references against study controls, and gates external-reference inference.
+  Panel c audits the 16-gene covered STING signature with subject-coupled NB
+  log-μ contrasts and an HCA-standardised reference. Panel f tests
+  subject-deletion influence on the two main signature estimands. Panels d–e
+  remain scaffolded until their analyses pass gates. The Nature blueprint PDF is
+  layout reference only; no schematic numbers are treated as results.
+params:
+  case_dir: "/home/a1237163/lab/chen/posteriorHCA/dev/SAVI"
+  fig_dir: "/home/a1237163/lab/chen/posteriorHCA/dev/SAVI/figures"
+  data_dir: "/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/dev/SAVI/data"
+  model_store_root: "/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/HPC_posterior/NEW_CELL_TYPE"
+  target_cell_type: "monocytic"
+  fig_width_mm: 183
+  fig_height_mm: 220
+  panel_a_height_mm: 58
+  panel_b_height_mm: 70
+  run_sccomp_panel_b: false
+  run_hca_panel_b: false
+  panel_b_prediction_draws: 4000
+  panel_b_pair_draws: 20000
+  panel_b_rope_pp: 1
+  run_panel_c_rebuild: false
+  savi_seurat_gz: "/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/dev/SAVI/data/GSE226598_SeuratObject_SAVI.rds.gz"
+  savi_pseudobulk_rds: "/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/dev/SAVI/data/GSE226598_SAVI_pseudobulk_Sample_CellType.rds"
+  estimates_rds: "/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/dev/SAVI/data/SAVI_estimates_chunk.rds"
+  pseudobulk_h5ad: "/home/a1237163/lab/Mangiola_ImmuneAtlas/zenodo/pseudobulk_se.h5ad"
+  sccomp_estimates_rds: "/home/a1237163/lab/Mangiola_ImmuneAtlas/taskforce_shared_folder/sccomp_on_cellNexus_1_0_12/estimates_age_decade___L3___disease_TRUE___immune_only_TRUE.rds"
+---
+
+# Scope
+
+**Defensible claim (Fig. 2).** posteriorHCA adds an external population-scale
+healthy reference to a small, internally controlled rare-disease study. After
+matching target and atlas cell populations and treating biological subjects as
+inferential units, the comprehensive query tests whether the published
+STING-activation signature (and covered constituents) remains shifted relative
+to a broader healthy mean; the metadata-conditioned query tests whether
+demographic standardisation resolves reference-domain shift before an external
+contrast is interpreted as disease associated.
+
+**This report.** Build the manuscript multipanel from audited tables. **Panels
+a–c and f are complete in this draft.** Panel c uses subject-coupled NB cohort
+locations and evaluates HCA contrasts after study-control calibration. Panel f
+tests whether those signature conclusions depend on individual subjects.
+Panels d–e remain placeholders until their analyses are finished. Helper
+functions and `theme_multipanel` live in this file (no external theme source
+required at render time).
+
+**Colour / mark grammar (locked).**
+
+| Element | Legend (full) | Plot text (short) | Encoding |
+|---|---|---|---|
+| Study healthy control | Control | CTRL | green `#009E73`, circle |
+| Pre-therapy SAVI | Untreated SAVI | Untreated | vermilion `#D55E00`, diamond |
+| Post–JAK-inhibitor SAVI | JAK-inhibitor treated | Treated | purple `#7A5195`, square |
+| Sex | female / male | — | `RColorBrewer` PRGn (`colmap_sex`) |
+| Comprehensive HCA | — | — | charcoal grey |
+| Metadata-conditioned HCA | — | — | teal |
+
+Figure panels follow Nature Methods style: axis labels and legends only
+(no plot titles or subtitles); canvas ≤ 183 mm wide × 220 mm high.
+
+------------------------------------------------------------------------
+
+# Setup
+
+```{r}
+#| label: setup
+
+suppressPackageStartupMessages({
+  library(tibble)
+  library(dplyr)
+  library(tidyr)
+  library(stringr)
+  library(ggplot2)
+  library(patchwork)
+  library(targets)
+  library(SummarizedExperiment)
+  library(S4Vectors)
+  library(scales)
+  library(RColorBrewer)
+  library(sccomp)
+})
+
+# Use headless-safe raster devices for Quarto/knitr figure previews on HPC.
+options(bitmapType = "cairo")
+
+dir.create(params$fig_dir, recursive = TRUE, showWarnings = FALSE)
+
+model_path <- file.path(
+  params$model_store_root,
+  paste0("V1_", params$target_cell_type)
+)
+
+# Nature Methods double-column: max 183 mm wide × 220 mm high.
+mm_to_in <- function(mm) mm / 25.4
+fig_w_in <- mm_to_in(params$fig_width_mm)
+fig_h_in <- mm_to_in(params$fig_height_mm)
+panel_a_h_in <- mm_to_in(params$panel_a_height_mm)
+panel_b_h_in <- mm_to_in(params$panel_b_height_mm)
+
+panel_b_counts_rds <- file.path(params$data_dir, "SAVI_panel_b_celltype_counts.rds")
+panel_b_fit_rds <- file.path(
+  params$data_dir,
+  "SAVI_panel_b_sccomp_shared15_untreated_control_hmc.rds"
+)
+panel_b_hca_predict_rds <- file.path(
+  params$data_dir,
+  "SAVI_panel_b_hca_predict_donor_marginal_shared15_v3.rds"
+)
+panel_c_effects_rds <- file.path(params$data_dir, "SAVI_panel_c_effects.rds")
+panel_c_sample_logmu_rds <- file.path(
+  params$data_dir,
+  "SAVI_panel_c_sample_logmu.rds"
+)
+panel_c_hca_logmu_rds <- file.path(
+  params$data_dir,
+  "SAVI_panel_c_hca_logmu_draws.rds"
+)
+panel_c_se_rds <- file.path(params$data_dir, "SAVI_panel_c_se_monocytic.rds")
+panel_c_gene_order <- c(
+  "ADRB2", "PTGS2", "AQP9", "OTUD1", "PTX3", "TGIF1", "TSC22D2", "ZBTB43",
+  "ZFP36L2", "JARID2", "KLF4", "TREM1", "ANKRD28", "ANXA1", "PLAUR", "IL1B"
+)
+panel_c_contrast_levels <- c(
+  "untreated - study control",
+  "untreated - HCA",
+  "paired untreated - treated",
+  "study control - HCA"
+)
+panel_c_contrast_labs <- c(
+  "untreated - study control" = "Untreated - CTRL",
+  "untreated - HCA" = "Untreated - HCA",
+  "paired untreated - treated" = "Untreated - treated",
+  "study control - HCA" = "CTRL - HCA"
+)
+panel_f_effects_rds <- file.path(params$data_dir, "SAVI_panel_f_subject_influence.rds")
+
+# Figure grammar colours.
+col_ctrl <- "#009E73"
+col_untreated <- "#D55E00"
+col_treated <- "#7A5195"
+col_hca <- "#8C8C8C"
+col_meta <- "#2A9D8F"
+col_dark <- "#3F3F3F"
+col_mid <- "#777777"
+col_light <- "#D9D9D9"
+
+colmap_sex <- setNames(
+  RColorBrewer::brewer.pal(3, "PRGn")[c(1, 3)],
+  c("female", "male")
+)
+
+state_levels <- c("control", "untreated", "treated")
+# Legend: full names. In-plot annotations: short forms (CTRL / Untreated / Treated).
+state_labels <- c(
+  control = "Control",
+  untreated = "Untreated SAVI",
+  treated = "JAK-inhibitor treated"
+)
+state_labels_short <- c(
+  control = "CTRL",
+  untreated = "Untreated",
+  treated = "Treated"
+)
+state_colours <- c(
+  control = col_ctrl,
+  untreated = col_untreated,
+  treated = col_treated
+)
+# shape 21 circle, 23 diamond, 22 square; fill = sex (PRGn).
+state_shapes <- c(control = 21, untreated = 23, treated = 22)
+
+theme_multipanel <-
+  theme_bw() +
+  theme(
+    panel.border = element_blank(),
+    axis.line = element_line(linewidth = 0.1),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    legend.position = "bottom",
+    strip.background = element_blank(),
+    axis.title.y = element_text(margin = margin(0, 0, 0, 0), size = 7),
+    axis.title.x = element_text(margin = margin(0, 0, 0, 0), size = 7),
+    panel.spacing.x = unit(0.1, "lines"),
+    axis.text.x = element_text(size = 6),
+    axis.text.y = element_text(size = 6),
+    strip.text.x = element_text(size = 7),
+    strip.text.y = element_text(size = 7),
+    legend.key.size = unit(4, "mm"),
+    legend.title = element_text(size = 7),
+    legend.text = element_text(size = 6),
+    strip.clip = "off",
+    # Nature Methods: caption carries titles; panels stay label-free.
+    plot.title = element_blank(),
+    plot.subtitle = element_blank(),
+    plot.tag = element_text(size = 8, face = "bold"),
+    axis.line.x = element_line(linewidth = 0.2),
+    axis.line.y = element_line(linewidth = 0.2),
+    axis.ticks.x = element_line(linewidth = 0.2),
+    axis.ticks.y = element_line(linewidth = 0.2),
+    plot.margin = margin(2, 4, 2, 2)
+  )
+
+save_panel_pdf <- function(plot, filename, width_mm, height_mm) {
+  path <- file.path(params$fig_dir, filename)
+  ggsave(
+    filename = path,
+    plot = plot,
+    width = width_mm,
+    height = height_mm,
+    units = "mm",
+    dpi = 600,
+    device = cairo_pdf
+  )
+  path
+}
+```
+
+------------------------------------------------------------------------
+
+# Panel a — Observed cohort design and HCA training support
+
+**Purpose.** Factual evidence of what posteriorHCA can condition on: source
+library ages, sequencing batches / chemistry, repeated measures, family links,
+and unique healthy-blood donor age support in the frozen `V1_monocytic` frame.
+
+**Rules enforced here.**
+
+- One point = one library; subjects (not cells) are biological units.
+- C1 / C2 are two **healthy study controls** whose GEO age is only labelled
+  `Adult` (no year). They stay in a categorical `Adult; exact age unavailable`
+  box — no imputed age on the axis.
+- P5 uses **10.5 years** (source Fig. 1a), not the legacy eight-year imputation.
+- HCA counts are regenerated from the production model frame (not copied from
+  the blueprint).
+
+## Freeze the 17-library source metadata table
+
+Ages, sex and STING batch come from GEO GSE226598. Subject / family / treatment
+annotations follow de Cevins *et al.* (2023) Fig. 1a and the case-study
+specification. Chemistry: STING1 = 10x 3′ v2; STING2 / STING3 = 10x 3′ v3.
+
+```{r}
+#| label: panel-a-savi-libraries
+
+savi_libraries <- tibble::tribble(
+  ~library_id,          ~subject_id, ~state,      ~sex,     ~age_years, ~age_status, ~sting_batch, ~chemistry,   ~family_role,              ~tx_label,
+  "C7",                 "C7",        "control",   "female",         5, "exact",     "STING1",     "10x 3′ v2",  NA_character_,             NA_character_,
+  "C8_aunt_P1_STING",   "C8",        "control",   "female",        36, "exact",     "STING1",     "10x 3′ v2",  "paternal aunt of P1",     NA_character_,
+  "C9_mother_P1_STING", "C9",        "control",   "female",        35, "exact",     "STING1",     "10x 3′ v2",  "mother of P1",            NA_character_,
+  "P1_STING_ht",        "P1",        "untreated", "female",         4, "exact",     "STING1",     "10x 3′ v2",  "proband",                 NA_character_,
+  "P1_STING_ht_T",      "P1",        "treated",   "female",         8, "exact",     "STING1",     "10x 3′ v2",  "proband",                 "R52",
+  "P1_STING_ht_T2",     "P1",        "treated",   "female",         8, "exact",     "STING1",     "10x 3′ v2",  "proband",                 "T2",
+  "P2_STING_ht",        "P2",        "untreated", "male",          31, "exact",     "STING1",     "10x 3′ v2",  "uncle of P1",             NA_character_,
+  "P2_STING_ht_T",      "P2",        "treated",   "male",          34, "exact",     "STING1",     "10x 3′ v2",  "uncle of P1",             "R1",
+  "C10",                "C10",       "control",   "male",          10, "exact",     "STING2",     "10x 3′ v3",  NA_character_,             NA_character_,
+  "C11",                "C11",       "control",   "male",          16, "exact",     "STING2",     "10x 3′ v3",  NA_character_,             NA_character_,
+  "P4_STING_ht",        "P4",        "untreated", "male",           7, "exact",     "STING2",     "10x 3′ v3",  NA_character_,             NA_character_,
+  "P4_STING_ht_T",      "P4",        "treated",   "male",           9, "exact",     "STING2",     "10x 3′ v3",  NA_character_,             "R13",
+  "P6_STING_ht",        "P6",        "untreated", "male",           8, "exact",     "STING2",     "10x 3′ v3",  NA_character_,             NA_character_,
+  "P6_STING_ht_T",      "P6",        "treated",   "male",          10, "exact",     "STING2",     "10x 3′ v3",  NA_character_,             "R13",
+  "C1",                 "C1",        "control",   "male",          NA, "adult_unavailable", "STING3", "10x 3′ v3", NA_character_,          NA_character_,
+  "C2",                 "C2",        "control",   "male",          NA, "adult_unavailable", "STING3", "10x 3′ v3", NA_character_,          NA_character_,
+  "P5_STING",           "P5",        "untreated", "male",        10.5, "source_fig1a", "STING3",  "10x 3′ v3",  NA_character_,             NA_character_
+) |>
+  dplyr::mutate(
+    state = factor(state, levels = state_levels),
+    sex = factor(sex, levels = c("female", "male")),
+    batch_row = factor(
+      paste0(sting_batch, " · ", dplyr::recode(chemistry, "10x 3′ v2" = "v2", "10x 3′ v3" = "v3")),
+      levels = c("STING1 · v2", "STING2 · v3", "STING3 · v3")
+    ),
+    display_id = dplyr::case_when(
+      subject_id == "P5" ~ "P5",
+      !is.na(tx_label) ~ tx_label,
+      state == "untreated" ~ subject_id,
+      TRUE ~ NA_character_
+    )
+  )
+
+stopifnot(nrow(savi_libraries) == 17L)
+stopifnot(dplyr::n_distinct(savi_libraries$subject_id) == 12L)
+
+savi_libraries |>
+  dplyr::select(
+    library_id, subject_id, state, sex, age_years, age_status,
+    sting_batch, chemistry, family_role, tx_label
+  )
+```
+
+```{r}
+#| label: panel-a-lane-offsets
+# Vertical jitter within a batch row so co-located libraries remain readable.
+# Label offsets are hand-tuned: ggrepel / fixed nudges fail on the STING2 7–10
+# cluster and the P1 R52/T2 same-age stack.
+
+assign_lanes <- function(df, lane_step = 0.32) {
+  df |>
+    dplyr::group_by(batch_row, age_years, age_status) |>
+    dplyr::arrange(state, subject_id, library_id, .by_group = TRUE) |>
+    dplyr::mutate(
+      n_here = dplyr::n(),
+      lane = if (dplyr::n() == 1L) {
+        0
+      } else {
+        (dplyr::row_number() - (dplyr::n() + 1) / 2) * lane_step
+      },
+      y_plot = as.numeric(batch_row) + lane
+    ) |>
+    dplyr::ungroup()
+}
+
+# Explicit label anchors (years on x, batch-lane units on y).
+label_offset_tbl <- tibble::tribble(
+  ~library_id,       ~label_dx, ~label_dy,
+  "P1_STING_ht",           0.0,      0.40, # P1
+  "P1_STING_ht_T",        -2.0,      0.48, # R52 left / above
+  "P1_STING_ht_T2",        2.0,     -0.48, # T2 right / below
+  "P2_STING_ht",           0.0,      0.40, # P2
+  "P2_STING_ht_T",         0.0,      0.40, # R1
+  "P4_STING_ht",          -0.9,      0.48, # P4 above-left
+  "P6_STING_ht",          -0.9,     -0.48, # P6 below-left
+  "P4_STING_ht_T",         0.9,      0.48, # R13 (P4) above-right
+  "P6_STING_ht_T",         0.9,     -0.48, # R13 (P6) below-right
+  "P5_STING",              0.0,      0.40  # P5
+)
+
+savi_exact <- savi_libraries |>
+  dplyr::filter(age_status != "adult_unavailable") |>
+  assign_lanes() |>
+  dplyr::left_join(label_offset_tbl, by = "library_id") |>
+  dplyr::mutate(
+    label_dx = dplyr::coalesce(label_dx, 0),
+    label_dy = dplyr::coalesce(label_dy, 0.40)
+  )
+
+savi_adult <- savi_libraries |>
+  dplyr::filter(age_status == "adult_unavailable")
+
+savi_connectors <- savi_exact |>
+  dplyr::group_by(subject_id) |>
+  dplyr::filter(dplyr::n() > 1L) |>
+  dplyr::arrange(age_years, state, library_id, .by_group = TRUE) |>
+  dplyr::ungroup()
+```
+
+## Regenerate frozen `V1_monocytic` healthy-blood support
+
+No-refit audit from the production `pseudobulk_sample` target: healthy blood
+(`tissue_groups == "blood"`, `disease_groups___altered == "Normal"`), then
+deduplicate by `donor_id`.
+
+```{r}
+#| label: panel-a-hca-support
+
+pseudobulk_sample <- targets::tar_read(
+  pseudobulk_sample,
+  store = file.path(model_path, "_targets")
+)
+
+hca_cd <- SummarizedExperiment::colData(pseudobulk_sample) |>
+  as.data.frame() |>
+  tibble::as_tibble()
+
+hca_healthy_blood <- hca_cd |>
+  dplyr::filter(
+    .data$tissue_groups == "blood",
+    as.character(.data$disease_groups___altered) == "Normal"
+  ) |>
+  dplyr::mutate(
+    age_years = as.numeric(.data$age_years),
+    sex = as.character(.data$sex),
+    assay_groups_altered = as.character(.data$assay_groups___altered),
+    dataset_id_altered = as.character(.data$dataset_id___altered)
+  )
+
+stopifnot(nrow(hca_healthy_blood) > 0L)
+
+hca_donors <- hca_healthy_blood |>
+  dplyr::group_by(.data$donor_id) |>
+  dplyr::summarise(
+    sex = dplyr::first(stats::na.omit(.data$sex)),
+    age_years = stats::median(.data$age_years, na.rm = TRUE),
+    age_decade = dplyr::first(stats::na.omit(as.character(.data$age_decade))),
+    n_samples = dplyr::n(),
+    .groups = "drop"
+  ) |>
+  dplyr::mutate(
+    sex = factor(.data$sex, levels = c("female", "male")),
+    age_bin = cut(
+      .data$age_years,
+      breaks = seq(0, 90, by = 10),
+      right = FALSE,
+      include.lowest = TRUE
+    )
+  )
+
+hca_support_summary <- tibble::tibble(
+  n_donors = nrow(hca_donors),
+  n_samples = nrow(hca_healthy_blood),
+  n_datasets = dplyr::n_distinct(hca_healthy_blood$dataset_id_altered),
+  n_assay_groups = dplyr::n_distinct(hca_healthy_blood$assay_groups_altered),
+  n_samples_10x3 = sum(
+    hca_healthy_blood$assay_groups_altered == "10x Genomics 3",
+    na.rm = TRUE
+  ),
+  age_min = min(hca_donors$age_years, na.rm = TRUE),
+  age_max = max(hca_donors$age_years, na.rm = TRUE)
+)
+
+# Provisional overlap audit against GSE226598 accessions / SAVI citation strings.
+overlap_hits <- hca_healthy_blood |>
+  dplyr::mutate(
+    haystack = paste(
+      dplyr::coalesce(as.character(.data$sample_id), ""),
+      dplyr::coalesce(as.character(.data$dataset_id), ""),
+      dplyr::coalesce(as.character(.data$title), ""),
+      dplyr::coalesce(as.character(.data$citation), ""),
+      dplyr::coalesce(as.character(.data$url), ""),
+      sep = " "
+    )
+  ) |>
+  dplyr::filter(
+    stringr::str_detect(
+      .data$haystack,
+      stringr::regex("GSE226598|GSM70799|de Cevins|SAVI", ignore_case = TRUE)
+    )
+  )
+
+overlap_status <- if (nrow(overlap_hits) == 0L) {
+  "absent (no GSE226598 / SAVI string match in current healthy-blood frame)"
+} else {
+  sprintf("observed (%d rows matched accession/citation strings)", nrow(overlap_hits))
+}
+
+hca_support_summary
+```
+
+```{r}
+#| label: panel-a-support-flags
+
+# Per exact-age SAVI library: is the collection age inside observed HCA donor ages?
+age_support <- range(hca_donors$age_years, na.rm = TRUE)
+
+savi_query_support <- savi_libraries |>
+  dplyr::mutate(
+    support_flag = dplyr::case_when(
+      age_status == "adult_unavailable" ~ "marginalised",
+      is.na(age_years) ~ "marginalised",
+      age_years >= age_support[1] & age_years <= age_support[2] ~ "observed",
+      TRUE ~ "outside support"
+    ),
+    assay_support = dplyr::if_else(
+      hca_support_summary$n_samples_10x3 > 0L,
+      "observed (harmonised 10x Genomics 3)",
+      "outside support"
+    )
+  )
+
+savi_query_support |>
+  dplyr::count(support_flag, assay_support)
+```
+
+## Draw panel A
+
+```{r}
+#| label: panel-a-helpers
+
+plot_panel_a_collections <- function(exact_df, connector_df, adult_df) {
+  y_labs <- levels(exact_df$batch_row)
+
+  p_main <- ggplot2::ggplot() +
+    ggplot2::geom_hline(
+      yintercept = seq_along(y_labs),
+      colour = col_light,
+      linewidth = 0.25
+    ) +
+    ggplot2::geom_path(
+      data = connector_df,
+      ggplot2::aes(x = age_years, y = y_plot, group = subject_id),
+      colour = col_mid,
+      linewidth = 0.35,
+      alpha = 0.85
+    ) +
+    ggplot2::geom_point(
+      data = exact_df,
+      ggplot2::aes(
+        x = age_years,
+        y = y_plot,
+        shape = state,
+        colour = state,
+        fill = sex
+      ),
+      size = 1.7,
+      stroke = 0.45
+    ) +
+    ggplot2::geom_segment(
+      data = exact_df |> dplyr::filter(!is.na(display_id)),
+      ggplot2::aes(
+        x = age_years,
+        xend = age_years + label_dx,
+        y = y_plot,
+        yend = y_plot + label_dy
+      ),
+      colour = col_mid,
+      linewidth = 0.2,
+      alpha = 0.7
+    ) +
+    ggplot2::geom_text(
+      data = exact_df |> dplyr::filter(!is.na(display_id)),
+      ggplot2::aes(
+        x = age_years + label_dx,
+        y = y_plot + label_dy,
+        label = display_id
+      ),
+      size = 2.5,
+      colour = col_dark,
+      vjust = 0.5,
+      hjust = 0.5
+    ) +
+    ggplot2::scale_shape_manual(
+      values = state_shapes,
+      labels = state_labels,
+      name = NULL,
+      guide = ggplot2::guide_legend(order = 1, override.aes = list(fill = "white"))
+    ) +
+    ggplot2::scale_colour_manual(
+      values = state_colours,
+      labels = state_labels,
+      name = NULL,
+      guide = ggplot2::guide_legend(order = 1)
+    ) +
+    ggplot2::scale_fill_manual(
+      values = colmap_sex,
+      breaks = c("female", "male"),
+      labels = c("female", "male"),
+      name = NULL,
+      guide = ggplot2::guide_legend(
+        order = 2,
+        override.aes = list(shape = 21, colour = col_dark)
+      )
+    ) +
+    ggplot2::scale_y_continuous(
+      breaks = seq_along(y_labs),
+      labels = y_labs,
+      limits = c(0.25, length(y_labs) + 0.75)
+    ) +
+    ggplot2::scale_x_continuous(
+      limits = c(0, 40),
+      breaks = seq(0, 40, by = 10),
+      expand = ggplot2::expansion(mult = c(0.01, 0.02))
+    ) +
+    ggplot2::coord_cartesian(clip = "off") +
+    ggplot2::labs(x = "Age at collection (years)", y = NULL) +
+    theme_multipanel +
+    ggplot2::theme(
+      legend.position = "bottom",
+      legend.box = "horizontal",
+      legend.margin = margin(0, 0, 0, 0),
+      axis.line.y = element_blank(),
+      axis.ticks.y = element_blank()
+    )
+
+  # Separate non-numeric Adult category (C1/C2); do not invent an age interval.
+  p_adult <- ggplot2::ggplot() +
+    ggplot2::annotate(
+      "text",
+      x = 0.5, y = 3.15,
+      label = "C7/8/9 · P1/2",
+      size = 1.7,
+      colour = col_mid
+    ) +
+    ggplot2::annotate(
+      "text",
+      x = 0.5, y = 2.15,
+      label = "C10/11 · P4/6",
+      size = 1.7,
+      colour = col_mid
+    ) +
+    ggplot2::annotate(
+      "rect",
+      xmin = 0.06, xmax = 0.94, ymin = 0.85, ymax = 1.55,
+      fill = "white",
+      colour = col_ctrl,
+      linewidth = 0.4
+    ) +
+    ggplot2::annotate(
+      "text",
+      x = 0.5, y = 1.32,
+      label = "C1/C2 · Adult",
+      size = 2.1,
+      fontface = "bold",
+      colour = col_dark
+    ) +
+    ggplot2::annotate(
+      "text",
+      x = 0.5, y = 1.05,
+      label = "exact age unavailable",
+      size = 1.8,
+      colour = col_mid
+    ) +
+    ggplot2::scale_x_continuous(limits = c(0, 1), expand = c(0, 0)) +
+    ggplot2::scale_y_continuous(limits = c(0.55, 3.55)) +
+    ggplot2::labs(x = NULL, y = NULL) +
+    ggplot2::theme_void() +
+    ggplot2::theme(plot.margin = margin(8, 4, 18, 2))
+
+  # p_main + p_adult + patchwork::plot_layout(widths = c(4.2, 1.15))
+  p_main
+}
+
+plot_panel_a_hca_continuous <- function(donors, support_summary, savi_marks, overlap_status) {
+  brks <- seq(0, 90, by = 10)
+
+  hist_counts <- donors |>
+    dplyr::mutate(
+      bin_i = pmin(
+        findInterval(.data$age_years, brks, all.inside = TRUE),
+        length(brks) - 1L
+      )
+    ) |>
+    dplyr::count(bin_i, sex, name = "n") |>
+    tidyr::complete(
+      bin_i = seq_len(length(brks) - 1L),
+      sex = factor(c("female", "male"), levels = c("female", "male")),
+      fill = list(n = 0L)
+    ) |>
+    dplyr::left_join(
+      tibble::tibble(
+        bin_i = seq_len(length(brks) - 1L),
+        xmid = (brks[-length(brks)] + brks[-1]) / 2
+      ),
+      by = "bin_i"
+    ) |>
+    dplyr::mutate(sex = factor(sex, levels = c("male", "female")))
+
+  age_marks <- savi_marks |>
+    dplyr::distinct(age_years, sex) |>
+    dplyr::mutate(sex = factor(sex, levels = c("female", "male")))
+
+  ggplot2::ggplot(hist_counts, ggplot2::aes(x = xmid, y = n, fill = sex)) +
+    ggplot2::geom_col(width = 9.2, colour = NA) +
+    ggplot2::geom_vline(
+      data = age_marks,
+      ggplot2::aes(xintercept = age_years, colour = sex),
+      linewidth = 0.35,
+      alpha = 0.95
+    ) +
+    ggplot2::scale_fill_manual(
+      values = colmap_sex,
+      breaks = c("female", "male"),
+      labels = c("female", "male"),
+      name = NULL
+    ) +
+    ggplot2::scale_colour_manual(
+      values = colmap_sex,
+      breaks = c("female", "male"),
+      guide = "none"
+    ) +
+    ggplot2::scale_x_continuous(
+      limits = c(0, 90),
+      breaks = c(0, 30, 60, 90),
+      expand = c(0, 0)
+    ) +
+    ggplot2::scale_y_continuous(expand = ggplot2::expansion(mult = c(0, 0.08))) +
+    ggplot2::labs(
+      x = "Unique donor age (years)",
+      y = NULL
+    ) +
+    theme_multipanel +
+    ggplot2::theme(
+      legend.position = "bottom",
+      legend.margin = margin(0, 0, 0, 0)
+    )
+}
+```
+```{r}
+#| label: panel-a-draw
+#| fig-width: 7.2
+#| fig-height: 2.3
+#| fig-cap: "Figure 2a. Observed SAVI collections (left) and frozen V1_monocytic healthy-blood donor-age support (right)."
+
+savi_age_marks <- savi_exact |>
+  dplyr::distinct(age_years, sex)
+
+p_a_left <- plot_panel_a_collections(savi_exact, savi_connectors, savi_adult)
+p_a_right <- plot_panel_a_hca_continuous(
+  donors = hca_donors,
+  support_summary = hca_support_summary,
+  savi_marks = savi_age_marks,
+  overlap_status = overlap_status
+)
+
+panel_a <- (p_a_left | p_a_right) +
+  patchwork::plot_layout(widths = c(1.35, 1))
+
+panel_a
+```
+```{r}
+#| label: panel-a-audit-text
+
+cat(
+  sprintf(
+    paste(
+      "Panel a audit: %d libraries from %d subjects;",
+      "HCA healthy blood = %d donors / %d samples / %d datasets / %d assay groups;",
+      "%d samples in harmonised `10x Genomics 3`;",
+      "donor age range %.1f–%.1f years;",
+      "training-overlap status: %s.",
+      "Support flags — observed: %d; marginalised (C1/C2 Adult): %d; outside: %d.\n"
+    ),
+    nrow(savi_libraries),
+    dplyr::n_distinct(savi_libraries$subject_id),
+    hca_support_summary$n_donors,
+    hca_support_summary$n_samples,
+    hca_support_summary$n_datasets,
+    hca_support_summary$n_assay_groups,
+    hca_support_summary$n_samples_10x3,
+    hca_support_summary$age_min,
+    hca_support_summary$age_max,
+    overlap_status,
+    sum(savi_query_support$support_flag == "observed"),
+    sum(savi_query_support$support_flag == "marginalised"),
+    sum(savi_query_support$support_flag == "outside support")
+  )
+)
+```
+
+------------------------------------------------------------------------
+
+# Panel b — Composition directions
+
+Panel b asks whether seven published PBMC composition directions (de Cevins
+*et al.* Fig. 1E) are recovered relative to study controls and two HCA healthy
+references. Calibration of the healthy references is reported before the
+disease contrasts so that HCA differences are not interpreted as disease
+effects when study controls already reveal reference-domain shift.
+
+## B1. Finest defensible SAVI–HCA harmonisation
+
+The 23 SAVI labels and 26 HCA L3 labels are mapped to the same 15-part
+composition. Seven prespecified T/NK compartments form the testing family;
+seven matched B/myeloid/DC compartments retain nuisance-lineage information;
+only genuinely unmatched or ambiguous populations enter `residual`.
+
+```{r}
+#| label: panel-b-harmonisation
+
+# The seven primary compartments follow the order in the source figure.
+display_compartments <- c(
+  "Naive CD4 T",
+  "Eff./memory CD4",
+  "Naive CD8 T",
+  "Eff./memory CD8",
+  "NK",
+  "MAIT",
+  "gamma-delta T"
+)
+
+# Additional matched lineages remain separate in the likelihood. This avoids
+# asking one heterogeneous residual component to absorb B, myeloid and DC mass.
+compartment_levels <- c(
+  display_compartments,
+  "Naive/transitional B",
+  "Memory B",
+  "Plasma cells",
+  "Classical monocytes",
+  "Non-classical monocytes",
+  "cDC",
+  "pDC",
+  "residual"
+)
+
+# Every SAVI label is assigned explicitly; no new label can silently enter the
+# residual category without failing the coverage check in the next chunk.
+celltype_to_compartment <- tibble::tribble(
+  ~cell_type,              ~compartment,
+  "0. Naive CD4",          "Naive CD4 T",
+  "3. CM CD4",             "Eff./memory CD4",
+  "4. EM CD4",             "Eff./memory CD4",
+  "8. TE CD4",             "Eff./memory CD4",
+  "9. Tregs and TE CD4",   "Eff./memory CD4",
+  "2. Naive CD8",          "Naive CD8 T",
+  "14. CM CD8",            "Eff./memory CD8",
+  "15. EM CD8",            "Eff./memory CD8",
+  "7. TE CD8",             "Eff./memory CD8",
+  "10. NK",                "NK",
+  "26. NK CD56bright",     "NK",
+  "22. MAIT",              "MAIT",
+  "16. gd T cells",        "gamma-delta T",
+  "1. Naive B",            "Naive/transitional B",
+  "6. Transitionnal B",    "Naive/transitional B",
+  "13. Memory B",          "Memory B",
+  "25. Plasmablasts",      "Plasma cells",
+  "5. Classical monocytes", "Classical monocytes",
+  "12. Non-classical monocytes", "Non-classical monocytes",
+  "20. cDCs",              "cDC",
+  "27. pDCs",              "pDC",
+  "11. CD3+ B cells",      "residual",
+  "17. Disease-associated monocytes", "residual"
+)
+
+# Source-reported direction (context arrows only).
+source_direction <- tibble::tibble(
+  compartment = factor(display_compartments, levels = display_compartments),
+  source_arrow = c("+", "-", "+", "-", "-", "-", "-")
+)
+
+# Library metadata reused from panel a (group + sequencing batch).
+panel_b_sample_meta <- savi_libraries |>
+  dplyr::transmute(
+    sample_id = library_id,
+    subject_id,
+    group = dplyr::recode(
+      as.character(state),
+      control = "control",
+      untreated = "untreated",
+      treated = "treated"
+    ),
+    sequencing_batch = sting_batch
+  ) |>
+  dplyr::mutate(
+    group = factor(group, levels = c("control", "untreated", "treated")),
+    sequencing_batch = factor(
+      sequencing_batch,
+      levels = c("STING1", "STING2", "STING3")
+    )
+  )
+
+# All 26 HCA L3 types are also assigned explicitly. L3 types without a SAVI
+# counterpart remain in `residual` so posterior compositions retain unit mass.
+l3_to_compartment <- tibble::tribble(
+  ~cell_type,         ~compartment,
+  "b memory",         "Memory B",
+  "b naive",          "Naive/transitional B",
+  "cd14 mono",        "Classical monocytes",
+  "cd16 mono",        "Non-classical monocytes",
+  "cdc",              "cDC",
+  "pdc",              "pDC",
+  "plasma",           "Plasma cells",
+  "cd4 naive",        "Naive CD4 T",
+  "cd4 tcm",          "Eff./memory CD4",
+  "cd4 fh em",        "Eff./memory CD4",
+  "cd4 th1 em",       "Eff./memory CD4",
+  "cd4 th17 em",      "Eff./memory CD4",
+  "cd4 th2 em",       "Eff./memory CD4",
+  "cd4 th1/th17 em",  "Eff./memory CD4",
+  "treg",             "Eff./memory CD4",
+  "cd8 naive",        "Naive CD8 T",
+  "cd8 tcm",          "Eff./memory CD8",
+  "cd8 tem",          "Eff./memory CD8",
+  "nk",               "NK",
+  "mait",             "MAIT",
+  "tgd",              "gamma-delta T",
+  "granulocyte",      "residual",
+  "ilc",              "residual",
+  "macrophage",       "residual",
+  "mast",             "residual",
+  "nkt",              "residual"
+)
+
+stopifnot(nrow(celltype_to_compartment) == 23L)
+stopifnot(nrow(l3_to_compartment) == 26L)
+stopifnot(!anyDuplicated(celltype_to_compartment$cell_type))
+stopifnot(!anyDuplicated(l3_to_compartment$cell_type))
+
+celltype_to_compartment
+l3_to_compartment
+```
+
+## B2. SAVI counts and independent-subject model
+
+### Construct the 15-part count composition
+
+```{r}
+#| label: panel-b-counts
+# CellType counts from the GEO Seurat object (cached when present).
+
+if (file.exists(panel_b_counts_rds)) {
+  panel_b_celltype_counts <- readRDS(panel_b_counts_rds)
+} else {
+  stopifnot(file.exists(params$savi_seurat_gz))
+  message("Building panel_b_counts_rds from Seurat: ", params$savi_seurat_gz)
+
+  read_geo_rds_gz <- function(path) {
+    con <- gzcon(gzfile(path))
+    on.exit(close(con), add = TRUE)
+    readRDS(con)
+  }
+
+  seurat_savi <- read_geo_rds_gz(params$savi_seurat_gz)
+  md <- seurat_savi@meta.data
+  rm(seurat_savi)
+  gc()
+
+  stopifnot(all(c("Sample", "Category", "CellType") %in% colnames(md)))
+
+  panel_b_celltype_counts <- md |>
+    tibble::rownames_to_column("cell_id") |>
+    dplyr::transmute(
+      sample_id = as.character(.data$Sample),
+      Category = as.character(.data$Category),
+      cell_type = as.character(.data$CellType)
+    ) |>
+    dplyr::count(.data$sample_id, .data$Category, .data$cell_type, name = "n_cells")
+
+  dir.create(dirname(panel_b_counts_rds), recursive = TRUE, showWarnings = FALSE)
+  saveRDS(panel_b_celltype_counts, panel_b_counts_rds, compress = "xz")
+}
+
+# Fail loudly if the source annotation changes. The mapping is intended to be
+# an explicit biological decision, not an automatic string-matching step.
+stopifnot(setequal(
+  unique(panel_b_celltype_counts$cell_type),
+  celltype_to_compartment$cell_type
+))
+
+panel_b_counts <- panel_b_celltype_counts |>
+  dplyr::left_join(celltype_to_compartment, by = "cell_type") |>
+  dplyr::group_by(.data$sample_id, .data$compartment) |>
+  dplyr::summarise(n_cells = sum(.data$n_cells), .groups = "drop") |>
+  tidyr::complete(
+    sample_id = panel_b_sample_meta$sample_id,
+    compartment = compartment_levels,
+    fill = list(n_cells = 0L)
+  ) |>
+  dplyr::inner_join(panel_b_sample_meta, by = "sample_id") |>
+  dplyr::mutate(
+    compartment = factor(.data$compartment, levels = compartment_levels)
+  )
+
+# Each library's 15 compartments must sum to its original total cell count.
+panel_b_count_check <- panel_b_counts |>
+  dplyr::group_by(.data$sample_id, .data$group, .data$sequencing_batch) |>
+  dplyr::summarise(
+    n_cells = sum(.data$n_cells),
+    n_compartments = dplyr::n(),
+    .groups = "drop"
+  )
+
+stopifnot(nrow(panel_b_counts) == 17L * length(compartment_levels))
+stopifnot(all(panel_b_count_check$n_compartments == length(compartment_levels)))
+
+panel_b_raw_total_check <- panel_b_celltype_counts |>
+  dplyr::group_by(.data$sample_id) |>
+  dplyr::summarise(raw_n_cells = sum(.data$n_cells), .groups = "drop") |>
+  dplyr::inner_join(
+    panel_b_count_check |>
+      dplyr::transmute(
+        sample_id = .data$sample_id,
+        aggregated_n_cells = .data$n_cells
+      ),
+    by = "sample_id"
+  )
+
+stopifnot(nrow(panel_b_raw_total_check) == 17L)
+stopifnot(all(panel_b_raw_total_check$raw_n_cells ==
+              panel_b_raw_total_check$aggregated_n_cells))
+
+# The inferential comparison uses the 12 independent untreated/control subjects.
+# Treated repeated measures are not needed for this hypothesis and are excluded
+# rather than being treated as independent libraries.
+panel_b_analysis_counts <- panel_b_counts |>
+  dplyr::filter(.data$group %in% c("control", "untreated")) |>
+  dplyr::mutate(
+    group = factor(as.character(.data$group), levels = c("control", "untreated"))
+  )
+
+stopifnot(dplyr::n_distinct(panel_b_analysis_counts$sample_id) == 12L)
+stopifnot(dplyr::n_distinct(panel_b_analysis_counts$subject_id) == 12L)
+
+panel_b_count_check
+```
+
+### Fit the untreated/control composition
+
+```{r}
+#| label: panel-b-sccomp-fit
+# Fifteen-compartment multi-beta-binomial on untreated/control subjects:
+# ~ group + sequencing_batch (HMC).
+
+if (file.exists(panel_b_fit_rds) && !isTRUE(params$run_sccomp_panel_b)) {
+  panel_b_fit <- readRDS(panel_b_fit_rds)
+} else {
+  message("Fitting panel_b sccomp HMC model...")
+  panel_b_fit <- sccomp::sccomp_estimate(
+    panel_b_analysis_counts,
+    formula_composition = ~ group + sequencing_batch,
+    formula_variability = ~ 1,
+    sample = "sample_id",
+    cell_group = "compartment",
+    abundance = "n_cells",
+    cores = min(6L, max(1L, parallel::detectCores() - 2L)),
+    inference_method = "hmc",
+    verbose = TRUE
+  )
+  dir.create(dirname(panel_b_fit_rds), recursive = TRUE, showWarnings = FALSE)
+  saveRDS(panel_b_fit, panel_b_fit_rds, compress = "xz")
+}
+
+stopifnot(identical(attr(panel_b_fit, "inference_method"), "hmc"))
+stopifnot(nrow(attr(panel_b_fit, "model_input")$X) == 12L)
+panel_b_fit
+```
+
+## B3. SAVI posterior on the common probability scale
+
+The native coefficient-scale `sccomp_test()` is retained only as a sensitivity
+analysis. Every displayed comparison is instead calculated from posterior
+latent mean proportions and tested with the same percentage-point ROPE.
+
+```{r}
+#| label: panel-b-native-sensitivity
+
+panel_b_native_tested <- sccomp::sccomp_test(
+  panel_b_fit,
+  contrasts = "groupuntreated"
+)
+```
+
+### Standardise SAVI predictions over sequencing batch
+
+```{r}
+#| label: panel-b-savi-prediction
+
+panel_b_newdata <- tidyr::expand_grid(
+  group = factor(c("control", "untreated"),
+                 levels = c("control", "untreated")),
+  sequencing_batch = factor(c("STING1", "STING2", "STING3"),
+                            levels = c("STING1", "STING2", "STING3"))
+) |>
+  dplyr::mutate(
+    sample_id = paste(.data$group, .data$sequencing_batch, sep = "__"),
+    target_weight = 1 / 3
+  )
+
+panel_b_pred_draws <- sccomp::sccomp_predict(
+  panel_b_fit,
+  new_data = panel_b_newdata,
+  number_of_draws = as.integer(params$panel_b_prediction_draws),
+  mcmc_seed = 20260808L,
+  summary_instead_of_draws = FALSE
+)
+
+# sccomp_predict returns the latent softmax mean. Verify closure before
+# standardising each group equally over the three sequencing batches.
+panel_b_prediction_sum_check <- panel_b_pred_draws |>
+  dplyr::group_by(.data$.draw, .data$sample_id) |>
+  dplyr::summarise(total = sum(.data$proportion), .groups = "drop")
+
+stopifnot(max(abs(panel_b_prediction_sum_check$total - 1)) < 1e-5)
+
+panel_b_group_draws <- panel_b_pred_draws |>
+  dplyr::group_by(.data$.draw, .data$group, .data$compartment) |>
+  dplyr::summarise(
+    proportion = stats::weighted.mean(.data$proportion, .data$target_weight),
+    .groups = "drop"
+  )
+
+panel_b_group_sum_check <- panel_b_group_draws |>
+  dplyr::group_by(.data$.draw, .data$group) |>
+  dplyr::summarise(total = sum(.data$proportion), .groups = "drop")
+
+stopifnot(max(abs(panel_b_group_sum_check$total - 1)) < 1e-5)
+```
+
+### Define the common probability-point test
+
+```{r}
+#| label: panel-b-probability-test
+
+summarise_panel_b_pp_test <- function(draws, rope_pp) {
+  stopifnot(all(c("contrast", "compartment", "delta_pp") %in% names(draws)))
+
+  draws |>
+    dplyr::filter(.data$compartment %in% display_compartments) |>
+    dplyr::group_by(.data$contrast, .data$compartment) |>
+    dplyr::summarise(
+      estimate = stats::median(.data$delta_pp),
+      .lower = unname(stats::quantile(.data$delta_pp, 0.025)),
+      .upper = unname(stats::quantile(.data$delta_pp, 0.975)),
+      p_increase = mean(.data$delta_pp > rope_pp),
+      p_decrease = mean(.data$delta_pp < -rope_pp),
+      .groups = "drop"
+    ) |>
+    dplyr::mutate(
+      pp_pH0 = 1 - pmax(.data$p_increase, .data$p_decrease),
+      posterior_direction = dplyr::if_else(
+        .data$p_increase >= .data$p_decrease,
+        "increase",
+        "decrease"
+      )
+    ) |>
+    dplyr::group_by(.data$contrast) |>
+    dplyr::arrange(.data$pp_pH0, .by_group = TRUE) |>
+    dplyr::mutate(
+      pp_FDR = cummean(.data$pp_pH0),
+      discovery = .data$pp_FDR <= 0.05
+    ) |>
+    dplyr::ungroup()
+}
+
+# Internal baseline: untreated minus study control, with both group means
+# evaluated over the same sequencing-batch target distribution.
+panel_b_uc_draws <- panel_b_group_draws |>
+  dplyr::filter(.data$group %in% c("control", "untreated")) |>
+  tidyr::pivot_wider(names_from = "group", values_from = "proportion") |>
+  dplyr::mutate(
+    delta_pp = 100 * (.data$untreated - .data$control),
+    contrast = "untreated - study control"
+  )
+
+panel_b_uc <- summarise_panel_b_pp_test(
+  panel_b_uc_draws,
+  rope_pp = params$panel_b_rope_pp
+)
+```
+
+## B4. Healthy HCA reference populations
+
+The comprehensive baseline equal-averages age and sex over the observed healthy
+HCA age×sex profiles (unweighted g-computation on the response scale). The
+personalised baselines use the SAVI subjects' age and sex; unknown control ages
+are integrated over the HCA age distribution conditional on known sex. Both
+targets fix healthy blood and the same `10x Genomics 3` assay, while dataset and
+ethnicity effects are handled identically so that their difference isolates
+demographic personalisation.
+
+### Build equal-average and SAVI-standardised metadata profiles
+
+```{r}
+#| label: panel-b-hca-targets
+
+# Comprehensive target: average probabilities within each posterior draw over
+# unique observed age-decade × sex profiles with equal weight. That is
+# unweighted g-computation on the response scale; donor-frequency weights would
+# instead emphasise common demographic cells, and setting every covariate to NA
+# would predict at an average coefficient. Donors remain the units used to
+# enumerate which age/sex profiles exist (repeat samples from one donor do not
+# create extra profiles), but they do not weight the average.
+panel_b_hca_comprehensive_meta <- hca_donors |>
+  dplyr::transmute(
+    age_decade = as.character(.data$age_decade),
+    sex = as.character(.data$sex)
+  ) |>
+  dplyr::filter(
+    !is.na(.data$age_decade),
+    .data$sex %in% c("female", "male")
+  ) |>
+  dplyr::count(.data$age_decade, .data$sex, name = "n_donors") |>
+  dplyr::mutate(
+    target_weight = 1 / dplyr::n(),
+    reference_target = "comprehensive_hca",
+    source_subject_id = NA_character_,
+    sample_id = paste0(
+      "hca_comprehensive_age", .data$age_decade, "_", .data$sex
+    )
+  )
+
+panel_b_hca_comprehensive_n_donors <- sum(
+  panel_b_hca_comprehensive_meta$n_donors
+)
+panel_b_hca_comprehensive_n_excluded <-
+  nrow(hca_donors) - panel_b_hca_comprehensive_n_donors
+
+panel_b_hca_personalised_untreated_meta <- savi_libraries |>
+  dplyr::filter(as.character(.data$state) == "untreated") |>
+  dplyr::transmute(
+    age_decade = dplyr::if_else(
+      is.na(.data$age_years),
+      NA_character_,
+      as.character(ceiling(.data$age_years / 10))
+    ),
+    sex = as.character(.data$sex),
+    reference_target = "personalised_untreated_hca",
+    source_subject_id = as.character(.data$subject_id),
+    sample_id = paste0("hca_untreated_", .data$subject_id),
+    target_weight = 1 / dplyr::n()
+  )
+
+# Known-age study controls contribute one seventh each. C1 and C2 have known
+# sex but unknown exact age, so each subject's one-seventh mass is distributed
+# over the donor-derived HCA age distribution conditional on male sex.
+panel_b_control_target_source <- savi_libraries |>
+  dplyr::filter(as.character(.data$state) == "control") |>
+  dplyr::transmute(
+    age_decade = dplyr::if_else(
+      is.na(.data$age_years),
+      NA_character_,
+      as.character(ceiling(.data$age_years / 10))
+    ),
+    sex = as.character(.data$sex),
+    source_subject_id = as.character(.data$subject_id)
+  )
+
+panel_b_n_controls <- dplyr::n_distinct(
+  panel_b_control_target_source$source_subject_id
+)
+
+panel_b_hca_age_given_sex <- panel_b_hca_comprehensive_meta |>
+  dplyr::group_by(.data$sex) |>
+  dplyr::mutate(
+    conditional_age_weight = .data$n_donors / sum(.data$n_donors)
+  ) |>
+  dplyr::ungroup() |>
+  dplyr::select("age_decade", "sex", "conditional_age_weight")
+
+panel_b_hca_personalised_control_known <- panel_b_control_target_source |>
+  dplyr::filter(!is.na(.data$age_decade)) |>
+  dplyr::mutate(
+    reference_target = "personalised_control_hca",
+    sample_id = paste0("hca_control_", .data$source_subject_id),
+    target_weight = 1 / panel_b_n_controls
+  )
+
+panel_b_hca_personalised_control_missing <- panel_b_control_target_source |>
+  dplyr::filter(is.na(.data$age_decade)) |>
+  dplyr::select(-"age_decade") |>
+  dplyr::inner_join(
+    panel_b_hca_age_given_sex,
+    by = "sex",
+    relationship = "many-to-many"
+  ) |>
+  dplyr::mutate(
+    reference_target = "personalised_control_hca",
+    sample_id = paste0(
+      "hca_control_", .data$source_subject_id,
+      "_age", .data$age_decade
+    ),
+    target_weight = .data$conditional_age_weight / panel_b_n_controls
+  )
+
+panel_b_hca_personalised_control_meta <- dplyr::bind_rows(
+  panel_b_hca_personalised_control_known,
+  panel_b_hca_personalised_control_missing
+) |>
+  dplyr::select(
+    "age_decade", "sex", "reference_target", "source_subject_id",
+    "sample_id", "target_weight"
+  )
+
+panel_b_hca_metadata <- dplyr::bind_rows(
+  panel_b_hca_comprehensive_meta,
+  panel_b_hca_personalised_untreated_meta,
+  panel_b_hca_personalised_control_meta
+) |>
+  dplyr::mutate(
+    # Hold technical context and tissue/disease eligibility constant for both
+    # comprehensive and personalised targets. Dataset and ethnicity are treated
+    # identically through the model's average-effect convention.
+    assay_groups___altered = "10x Genomics 3",
+    disease_groups___altered = "Normal",
+    tissue_groups = "blood",
+    ethnicity_groups_imputed = NA_character_,
+    dataset_id___altered = NA_character_,
+    profile_signature = paste(
+      .data$sample_id,
+      dplyr::coalesce(.data$age_decade, "NA"),
+      dplyr::coalesce(.data$sex, "NA"),
+      .data$reference_target,
+      .data$assay_groups___altered,
+      .data$disease_groups___altered,
+      .data$tissue_groups,
+      format(.data$target_weight, digits = 17, scientific = FALSE),
+      sep = "|"
+    )
+  )
+
+panel_b_hca_weight_check <- panel_b_hca_metadata |>
+  dplyr::group_by(.data$reference_target) |>
+  dplyr::summarise(total_weight = sum(.data$target_weight), .groups = "drop")
+
+stopifnot(all(abs(panel_b_hca_weight_check$total_weight - 1) < 1e-12))
+stopifnot(dplyr::n_distinct(panel_b_hca_personalised_untreated_meta$sample_id) == 5L)
+stopifnot(dplyr::n_distinct(
+  panel_b_hca_personalised_control_meta$source_subject_id
+) == 7L)
+
+panel_b_hca_weight_check
+```
+
+### Generate or validate the full-L3 HCA prediction cache
+
+```{r}
+#| label: panel-b-hca-prediction
+
+# A valid Panel-b cache retains every HCA L3 component. Filtering before broad
+# aggregation would lose compositional mass and under-count broad compartments.
+hca_predict <- NULL
+if (file.exists(panel_b_hca_predict_rds) && !isTRUE(params$run_hca_panel_b)) {
+  hca_candidate <- readRDS(panel_b_hca_predict_rds)
+  hca_required_columns <- c(
+    "sample_id", "profile_signature", "reference_target", "target_weight", "cell_type",
+    "proportion", ".draw"
+  )
+
+  if (all(hca_required_columns %in% names(hca_candidate)) &&
+      setequal(
+        unique(hca_candidate$profile_signature),
+        panel_b_hca_metadata$profile_signature
+      )) {
+    hca_candidate_sum <- hca_candidate |>
+      dplyr::group_by(.data$.draw, .data$sample_id) |>
+      dplyr::summarise(total = sum(.data$proportion), .groups = "drop")
+
+    if (max(abs(hca_candidate_sum$total - 1)) < 1e-5) {
+      hca_predict <- hca_candidate
+    } else {
+      message("Ignoring incomplete Panel-b HCA cache: retained L3 mass does not sum to one.")
+    }
+  } else {
+    message("Ignoring incompatible Panel-b HCA cache: target profiles or columns changed.")
+  }
+}
+
+if (is.null(hca_predict)) {
+  stopifnot(file.exists(params$sccomp_estimates_rds))
+  message("Building full harmonised Panel-b HCA prediction cache...")
+
+  sccomp_est <- readRDS(params$sccomp_estimates_rds)
+
+  hca_predict <- sccomp_est |>
+    sccomp::sccomp_predict(
+      formula_composition = NULL,
+      new_data = panel_b_hca_metadata,
+      number_of_draws = as.integer(params$panel_b_prediction_draws),
+      mcmc_seed = 20260809L,
+      summary_instead_of_draws = FALSE
+    ) |>
+    dplyr::rename(cell_type = "L3") |>
+    dplyr::select(
+      dplyr::any_of(c(
+        "sample_id", "profile_signature", "reference_target", "target_weight",
+        "source_subject_id", "age_decade", "sex", "cell_type", "proportion", ".draw"
+      ))
+    )
+
+  dir.create(dirname(panel_b_hca_predict_rds), recursive = TRUE, showWarnings = FALSE)
+  saveRDS(hca_predict, panel_b_hca_predict_rds, compress = "xz")
+  rm(sccomp_est)
+  gc()
+}
+
+stopifnot(setequal(unique(hca_predict$sample_id), panel_b_hca_metadata$sample_id))
+stopifnot(setequal(unique(hca_predict$cell_type), l3_to_compartment$cell_type))
+
+hca_profile_sum_check <- hca_predict |>
+  dplyr::group_by(.data$.draw, .data$sample_id) |>
+  dplyr::summarise(total = sum(.data$proportion), .groups = "drop")
+
+stopifnot(max(abs(hca_profile_sum_check$total - 1)) < 1e-5)
+```
+
+### Aggregate HCA L3 draws to the shared 15-part composition
+
+```{r}
+#| label: panel-b-hca-harmonised-draws
+
+hca_profile_comp_draws <- hca_predict |>
+  dplyr::left_join(l3_to_compartment, by = "cell_type") |>
+  dplyr::group_by(
+    .data$.draw, .data$sample_id, .data$reference_target,
+    .data$target_weight, .data$compartment
+  ) |>
+  dplyr::summarise(proportion = sum(.data$proportion), .groups = "drop")
+
+hca_profile_comp_sum_check <- hca_profile_comp_draws |>
+  dplyr::group_by(.data$.draw, .data$sample_id) |>
+  dplyr::summarise(total = sum(.data$proportion), .groups = "drop")
+
+stopifnot(max(abs(hca_profile_comp_sum_check$total - 1)) < 1e-5)
+
+hca_comp_draws <- hca_profile_comp_draws |>
+  dplyr::group_by(.data$.draw, .data$reference_target, .data$compartment) |>
+  dplyr::summarise(
+    proportion = sum(.data$target_weight * .data$proportion),
+    .groups = "drop"
+  )
+
+hca_comp_sum_check <- hca_comp_draws |>
+  dplyr::group_by(.data$.draw, .data$reference_target) |>
+  dplyr::summarise(total = sum(.data$proportion), .groups = "drop")
+
+stopifnot(max(abs(hca_comp_sum_check$total - 1)) < 1e-5)
+```
+
+## B5. Independent cross-model posterior pairing
+
+SAVI and HCA are separately fitted Bayesian models, so draw indices have no
+cross-model pairing. We sample their indices independently and apply each pair
+to the full composition, preserving within-draw dependence among cell types.
+
+```{r}
+#| label: panel-b-cross-model-pairs
+
+untreated_draws <- panel_b_group_draws |>
+  dplyr::filter(.data$group == "untreated") |>
+  dplyr::transmute(
+    .draw = .data$.draw,
+    compartment = .data$compartment,
+    case_proportion = .data$proportion
+  )
+
+control_draws <- panel_b_group_draws |>
+  dplyr::filter(.data$group == "control") |>
+  dplyr::transmute(
+    .draw = .data$.draw,
+    compartment = .data$compartment,
+    case_proportion = .data$proportion
+  )
+
+set.seed(20260810L)
+panel_b_cross_fit_pairs <- tibble::tibble(
+  .pair = seq_len(as.integer(params$panel_b_pair_draws)),
+  .draw_savi = sample(
+    unique(untreated_draws$.draw),
+    as.integer(params$panel_b_pair_draws),
+    replace = TRUE
+  ),
+  .draw_hca = sample(
+    unique(hca_comp_draws$.draw),
+    as.integer(params$panel_b_pair_draws),
+    replace = TRUE
+  )
+)
+```
+
+## B6. Healthy-reference calibration — conclusion first
+
+Calibration compares the study controls with each HCA reference under the same
+probability-point estimand and seven-compartment testing family. This is an
+interpretation gate: failure indicates that an untreated–HCA contrast contains
+residual reference-domain shift as well as disease-associated composition.
+
+```{r}
+#| label: panel-b-hca-calibration
+
+# Study controls should be compatible with HCA after population marginalisation
+# or control-metadata standardisation. The same cross-model draw pairs are used
+# for all compartments, preserving compositional dependence.
+panel_b_hca_calibration_draws <- panel_b_cross_fit_pairs |>
+  dplyr::left_join(
+    control_draws,
+    by = c(".draw_savi" = ".draw"),
+    relationship = "many-to-many"
+  ) |>
+  dplyr::left_join(
+    hca_comp_draws |>
+      dplyr::filter(.data$reference_target %in% c(
+        "comprehensive_hca", "personalised_control_hca"
+      )) |>
+      dplyr::rename(hca_proportion = "proportion"),
+    by = c(".draw_hca" = ".draw", "compartment"),
+    relationship = "many-to-many"
+  ) |>
+  dplyr::mutate(
+    delta_pp = 100 * (.data$case_proportion - .data$hca_proportion),
+    contrast = dplyr::recode(
+      .data$reference_target,
+      comprehensive_hca = "study control - comprehensive HCA",
+      personalised_control_hca = "study control - personalised HCA"
+    )
+  )
+
+panel_b_hca_calibration <- summarise_panel_b_pp_test(
+  panel_b_hca_calibration_draws,
+  rope_pp = params$panel_b_rope_pp
+)
+
+panel_b_calibration_discoveries <- panel_b_hca_calibration |>
+  dplyr::group_by(.data$contrast) |>
+  dplyr::summarise(
+    n_discoveries = sum(.data$discovery),
+    discovered_compartments = paste(
+      as.character(.data$compartment[.data$discovery]),
+      collapse = ", "
+    ),
+    .groups = "drop"
+  ) |>
+  dplyr::mutate(
+    discovered_compartments = dplyr::if_else(
+      .data$n_discoveries == 0L,
+      "None",
+      .data$discovered_compartments
+    )
+  )
+
+panel_b_comprehensive_calibration_n <- panel_b_calibration_discoveries |>
+  dplyr::filter(.data$contrast == "study control - comprehensive HCA") |>
+  dplyr::pull(.data$n_discoveries)
+
+panel_b_personalised_calibration_n <- panel_b_calibration_discoveries |>
+  dplyr::filter(.data$contrast == "study control - personalised HCA") |>
+  dplyr::pull(.data$n_discoveries)
+
+panel_b_personalised_calibration_types <- panel_b_calibration_discoveries |>
+  dplyr::filter(.data$contrast == "study control - personalised HCA") |>
+  dplyr::pull(.data$discovered_compartments)
+
+panel_b_comprehensive_discovery_term <- ifelse(
+  panel_b_comprehensive_calibration_n == 1L,
+  "discovery",
+  "discoveries"
+)
+
+panel_b_calibration_conclusion <- dplyr::case_when(
+  panel_b_personalised_calibration_n == 0L &&
+    panel_b_comprehensive_calibration_n == 0L ~ paste(
+      "Neither HCA reference produced a calibration discovery among the seven",
+      "prespecified compartments. This supports interpreting the subsequent",
+      "untreated–HCA contrasts as disease-associated shifts within the tested",
+      "composition and model assumptions."
+    ),
+  panel_b_personalised_calibration_n == 0L ~ paste0(
+    "The comprehensive reference produced ",
+    panel_b_comprehensive_calibration_n,
+    " calibration ", panel_b_comprehensive_discovery_term,
+    ", whereas the personalised reference",
+    " produced none. Metadata standardisation therefore improved transportability;",
+    " the personalised HCA contrast is the primary external-reference result and",
+    " the comprehensive contrast quantifies population-reference shift."
+  ),
+  TRUE ~ paste0(
+    "The comprehensive and personalised references produced ",
+    panel_b_comprehensive_calibration_n, " and ",
+    panel_b_personalised_calibration_n,
+    " calibration discoveries, respectively. Personalisation did not resolve",
+    " the healthy-reference mismatch; the personalised discoveries were ",
+    "(",
+    panel_b_personalised_calibration_types,
+    "). The HCA disease contrasts therefore retain residual reference-domain",
+    " shift and are reported as sensitivity analyses; the study-control contrast",
+    " remains the primary disease comparison."
+  )
+)
+```
+
+```{r}
+#| label: panel-b-calibration-conclusion
+#| results: asis
+
+cat("**Calibration conclusion.** ", panel_b_calibration_conclusion, "\n\n", sep = "")
+```
+
+```{r}
+#| label: panel-b-calibration-summary
+
+panel_b_calibration_discoveries |>
+  dplyr::mutate(
+    baseline = dplyr::recode(
+      .data$contrast,
+      `study control - comprehensive HCA` = "Comprehensive HCA",
+      `study control - personalised HCA` = "Personalised HCA"
+    )
+  ) |>
+  dplyr::select(
+    baseline,
+    `FDR discoveries (of 7)` = .data$n_discoveries,
+    `Discovered compartments` = .data$discovered_compartments
+  ) |>
+  knitr::kable(
+    caption = "Healthy-reference calibration is evaluated before disease contrasts."
+  )
+```
+
+## B7. Disease contrasts conditional on calibration
+
+Open circles compare untreated SAVI with study controls. Grey diamonds compare
+untreated SAVI with the equal-average comprehensive HCA population; teal
+triangles use HCA predictions standardised to the untreated subjects' age and
+sex. All use a 1-percentage-point ROPE and Bayesian FDR across the same seven
+prespecified compartments.
+
+```{r}
+#| label: panel-b-disease-contrasts
+
+panel_b_uh_draws <- panel_b_cross_fit_pairs |>
+  dplyr::left_join(
+    untreated_draws,
+    by = c(".draw_savi" = ".draw"),
+    relationship = "many-to-many"
+  ) |>
+  dplyr::left_join(
+    hca_comp_draws |>
+      dplyr::filter(.data$reference_target %in% c(
+        "comprehensive_hca", "personalised_untreated_hca"
+      )) |>
+      dplyr::rename(hca_proportion = "proportion"),
+    by = c(".draw_hca" = ".draw", "compartment"),
+    relationship = "many-to-many"
+  ) |>
+  dplyr::mutate(
+    delta_pp = 100 * (.data$case_proportion - .data$hca_proportion),
+    contrast = dplyr::recode(
+      .data$reference_target,
+      comprehensive_hca = "untreated - comprehensive HCA",
+      personalised_untreated_hca = "untreated - personalised HCA"
+    )
+  )
+
+panel_b_uh <- summarise_panel_b_pp_test(
+  panel_b_uh_draws,
+  rope_pp = params$panel_b_rope_pp
+)
+
+panel_b_effects <- dplyr::bind_rows(panel_b_uc, panel_b_uh) |>
+  dplyr::mutate(
+    compartment = factor(
+      as.character(.data$compartment),
+      levels = display_compartments
+    ),
+    contrast = factor(
+      .data$contrast,
+      levels = c(
+        "untreated - study control",
+        "untreated - comprehensive HCA",
+        "untreated - personalised HCA"
+      )
+    )
+  ) |>
+  dplyr::filter(!is.na(.data$compartment)) |>
+  dplyr::left_join(source_direction, by = "compartment")
+
+panel_b_effects |>
+  dplyr::arrange(.data$compartment, .data$contrast)
+```
+
+### Plot the three calibrated comparison targets
+
+```{r}
+#| label: panel-b-helpers
+
+plot_panel_b_composition <- function(effects_df) {
+  y_labels <- effects_df |>
+    dplyr::distinct(.data$compartment, .data$source_arrow) |>
+    dplyr::mutate(
+      y_lab = paste(.data$source_arrow, as.character(.data$compartment))
+    ) |>
+    dplyr::arrange(.data$compartment)
+
+  lab_map <- setNames(
+    y_labels$y_lab,
+    as.character(y_labels$compartment)
+  )
+
+  contrast_breaks <- c(
+    "untreated - study control",
+    "untreated - comprehensive HCA",
+    "untreated - personalised HCA"
+  )
+  contrast_labels <- c(
+    "Study control",
+    "Comprehensive HCA",
+    "Personalised HCA"
+  )
+  contrast_colours <- c(
+    "untreated - study control" = col_dark,
+    "untreated - comprehensive HCA" = col_hca,
+    "untreated - personalised HCA" = col_meta
+  )
+  contrast_fills <- c(
+    "untreated - study control" = "white",
+    "untreated - comprehensive HCA" = col_hca,
+    "untreated - personalised HCA" = col_meta
+  )
+  contrast_shapes <- c(
+    "untreated - study control" = 21,
+    "untreated - comprehensive HCA" = 23,
+    "untreated - personalised HCA" = 24
+  )
+  contrast_dodge <- ggplot2::position_dodge(width = 0.55)
+
+  ggplot2::ggplot(
+    effects_df,
+    ggplot2::aes(y = .data$compartment, group = .data$contrast)
+  ) +
+    ggplot2::geom_vline(
+      xintercept = 0,
+      colour = col_mid,
+      linetype = "22",
+      linewidth = 0.35
+    ) +
+    ggplot2::geom_linerange(
+      ggplot2::aes(
+        xmin = .data$.lower,
+        xmax = .data$.upper,
+        x = .data$estimate,
+        colour = .data$contrast
+      ),
+      linewidth = 0.45,
+      position = contrast_dodge
+    ) +
+    ggplot2::geom_point(
+      ggplot2::aes(
+        x = .data$estimate,
+        colour = .data$contrast,
+        fill = .data$contrast,
+        shape = .data$contrast,
+        size = .data$discovery
+      ),
+      stroke = 0.55,
+      position = contrast_dodge
+    ) +
+    ggplot2::scale_colour_manual(
+      values = contrast_colours,
+      breaks = contrast_breaks,
+      labels = contrast_labels,
+      name = NULL
+    ) +
+    ggplot2::scale_fill_manual(
+      values = contrast_fills,
+      breaks = contrast_breaks,
+      labels = contrast_labels,
+      name = NULL
+    ) +
+    ggplot2::scale_shape_manual(
+      values = contrast_shapes,
+      breaks = contrast_breaks,
+      labels = contrast_labels,
+      name = NULL
+    ) +
+    ggplot2::scale_size_manual(values = c(`FALSE` = 1.7, `TRUE` = 2.4), guide = "none") +
+    ggplot2::scale_y_discrete(
+      limits = rev(display_compartments),
+      labels = lab_map
+    ) +
+    ggplot2::scale_x_continuous(
+      breaks = c(-20, -10, 0, 10, 20)
+    ) +
+    ggplot2::coord_cartesian(xlim = c(-22, 22), clip = "off") +
+    ggplot2::labs(
+      x = "Composition difference (percentage points)",
+      y = NULL
+    ) +
+    theme_multipanel +
+    ggplot2::theme(
+      legend.position = "bottom",
+      legend.direction = "horizontal",
+      legend.key.width = grid::unit(4, "mm"),
+      legend.spacing.x = grid::unit(1.5, "mm"),
+      plot.margin = margin(4, 8, 4, 4)
+    )
+}
+```
+
+```{r}
+#| label: panel-b-draw
+#| fig-width: 6
+#| fig-height: 8
+#| fig-cap: "Figure 2b. Posterior mean-composition tests versus study controls, the equal-average comprehensive HCA population and SAVI-standardised personalised HCA. Calibration is reported before these disease contrasts. Larger symbols meet Bayesian FDR ≤ 0.05 for a 1-percentage-point ROPE."
+
+panel_b <- plot_panel_b_composition(panel_b_effects)
+
+panel_b
+```
+
+### Reproducibility and sensitivity audit
+
+```{r}
+#| label: panel-b-audit-text
+
+panel_b_native_sensitivity <- panel_b_native_tested |>
+  dplyr::filter(.data$compartment %in% display_compartments) |>
+  dplyr::transmute(
+    compartment = .data$compartment,
+    native_c_effect = .data$c_effect,
+    native_c_lower = .data$c_lower,
+    native_c_upper = .data$c_upper,
+    native_c_pH0 = .data$c_pH0,
+    native_c_FDR = .data$c_FDR
+  )
+
+panel_b_test_audit <- panel_b_effects |>
+  dplyr::mutate(
+    matches_source = dplyr::case_when(
+      .data$source_arrow == "+" ~ .data$estimate > 0,
+      .data$source_arrow == "-" ~ .data$estimate < 0,
+      TRUE ~ NA
+    )
+  )
+
+panel_b_internal_audit <- panel_b_test_audit |>
+  dplyr::filter(.data$contrast == "untreated - study control") |>
+  dplyr::left_join(panel_b_native_sensitivity, by = "compartment") |>
+  dplyr::mutate(
+    native_matches_source = dplyr::case_when(
+      .data$source_arrow == "+" ~ .data$native_c_effect > 0,
+      .data$source_arrow == "-" ~ .data$native_c_effect < 0,
+      TRUE ~ NA
+    )
+  )
+
+hca_missing_mapped_types <- setdiff(
+  l3_to_compartment$cell_type,
+  unique(hca_predict$cell_type)
+)
+
+cat(
+  sprintf(
+    paste(
+      "Panel b audit: %d raw GEO labels -> %d shared compartments;",
+      "HMC fit on %d independent untreated/control subjects;",
+      "formula ~ group + sequencing_batch;",
+      "comprehensive HCA target equal-averages %d age/sex profiles",
+      "(from %d healthy donors; %d missing age or sex excluded);",
+      "all displayed contrasts use a %.2f-pp ROPE and Bayesian FDR across 7 compartments;",
+      "%d case posterior draws, %d HCA posterior draws and %d independent cross-fit pairs;",
+      "full HCA cache contains %d L3 types and %d expected mapping types are absent;",
+      "maximum HCA closure error = %.3g.\n"
+    ),
+    dplyr::n_distinct(panel_b_celltype_counts$cell_type),
+    length(compartment_levels),
+    dplyr::n_distinct(panel_b_analysis_counts$subject_id),
+    nrow(panel_b_hca_comprehensive_meta),
+    panel_b_hca_comprehensive_n_donors,
+    panel_b_hca_comprehensive_n_excluded,
+    params$panel_b_rope_pp,
+    dplyr::n_distinct(panel_b_group_draws$.draw),
+    dplyr::n_distinct(hca_comp_draws$.draw),
+    nrow(panel_b_cross_fit_pairs),
+    dplyr::n_distinct(hca_predict$cell_type),
+    length(hca_missing_mapped_types),
+    max(abs(hca_profile_sum_check$total - 1))
+  )
+)
+
+panel_b_test_audit |>
+  dplyr::arrange(.data$compartment, .data$contrast) |>
+  dplyr::select(
+    compartment, source_arrow, estimate, .lower, .upper,
+    p_increase, p_decrease, pp_pH0, pp_FDR, discovery, matches_source, contrast
+  )
+
+panel_b_hca_calibration |>
+  dplyr::arrange(.data$compartment, .data$contrast) |>
+  dplyr::select(
+    compartment, estimate, .lower, .upper,
+    p_increase, p_decrease, pp_pH0, pp_FDR, discovery, contrast
+  )
+
+panel_b_internal_audit |>
+  dplyr::select(
+    compartment, estimate, pp_FDR, native_c_effect, native_c_lower,
+    native_c_upper, native_c_FDR, matches_source, native_matches_source
+  )
+
+panel_b_calibration_discoveries
+```
+
+------------------------------------------------------------------------
+
+# Panel c — Covered signature log-μ audit
+
+**Method (cohort log-μ analysis aligned with Panel b).** Both sides target the
+NB location parameter on the shared **offset-zero** log-μ scale used by the
+monocytic atlas models:
+
+- **SAVI cohorts:** counts from repeated libraries within one subject×state are
+  first added, with their exposures added on the natural scale. Gene-wise cohort
+  log-μ is then re-estimated by `edgeR::mglmOneGroup()` using trended NB
+  dispersions estimated from all shared genes. A subject-level Bayesian
+  bootstrap supplies the same Dirichlet weight vector to all 16 genes, so gene
+  correlations induced by the study subjects are retained in the signature
+  summary without zero-only discrete resamples producing infinite log-μ limits.
+- **HCA comprehensive reference:** `posterior_linpred(transform = FALSE)` is
+  standardized to the same observed healthy-HCA age×sex profiles and profile
+  weights used by Panel b. Ethnicity is equal-standardized over fitted levels;
+  healthy blood, `10x Genomics 3`, and `offset = 0` are fixed. An unseen-study
+  dataset intercept (`NEW_STUDY_SAVI`) is drawn from the hierarchical population
+  (`allow_new_levels = TRUE`, `sample_new_levels = "gaussian"`).
+
+**Population.** Cluster **17. Disease-associated monocytes** (case-study
+population). Blueprint monocyte 5+12+17 alignment is a declared sensitivity, not
+this panel.
+
+**Four aligned log2 contrasts.** (1) untreated − study control; (2) untreated −
+HCA; (3) paired untreated − treated (P1/P2/P4/P6; P1's two treated libraries
+are collapsed before modelling); (4) study control − HCA. Every interval is
+formed from a complete replicate of the relevant contrast. The top strip is the
+equal-weight mean across the 16 genes *inside each replicate*, rather than a
+bootstrap over 16 fixed gene estimates. Study-only intervals are subject-level
+Bayesian-bootstrap intervals; HCA intervals independently pair a Bayesian-
+bootstrap replicate with draws from the separately fitted HCA gene posteriors
+and are therefore modular hybrid, not joint-model, intervals. Because the HCA
+genes were fitted separately, their posterior cross-gene covariance is not
+estimable and is not manufactured by matching nominal draw indices.
+
+Set `params$run_panel_c_rebuild: true` to force rebuild of all panel-c caches.
+
+## C1. Covered gene set and helpers
+
+```{r}
+#| label: panel-c-setup
+
+suppressPackageStartupMessages({
+  library(SeuratObject)
+  library(AnnotationDbi)
+  library(org.Hs.eg.db)
+  library(tidybulk)
+  library(tidySummarizedExperiment)
+  library(brms)
+  library(edgeR)
+})
+
+merge_summarized_experiments <- function(...) {
+  ses <- list(...)
+  assay_names <- Reduce(intersect, lapply(ses, SummarizedExperiment::assayNames))
+  genes <- Reduce(intersect, lapply(ses, rownames))
+  if (!length(assay_names) || !length(genes)) {
+    stop("No shared assays/genes between SummarizedExperiment objects.")
+  }
+  ses <- lapply(ses, function(se) se[genes, , drop = FALSE])
+  cds <- lapply(ses, function(se) as.data.frame(SummarizedExperiment::colData(se)))
+  all_nms <- Reduce(union, lapply(cds, names))
+  cds <- lapply(cds, function(cd) {
+    for (nm in setdiff(all_nms, names(cd))) cd[[nm]] <- NA
+    cd[, all_nms, drop = FALSE]
+  })
+  assays <- stats::setNames(
+    lapply(assay_names, function(an) {
+      do.call(base::cbind, lapply(ses, function(se) {
+        base::as.matrix(SummarizedExperiment::assay(se, an))
+      }))
+    }),
+    assay_names
+  )
+  SummarizedExperiment::SummarizedExperiment(
+    assays = assays,
+    colData = S4Vectors::DataFrame(
+      do.call(rbind, cds),
+      row.names = unlist(lapply(ses, colnames), use.names = FALSE)
+    ),
+    rowData = SummarizedExperiment::rowData(ses[[1]])
+  )
+}
+
+build_hca_covariate_grid <- function(fit, age_sex_target) {
+  # Comprehensive target:
+  #   fixed       — blood, Normal, 10x Genomics 3, offset = 0
+  #   standardize — observed HCA age×sex profiles at Panel-b target weights
+  #   ethnicity   — equal-standardize fitted levels within each profile
+  #   dataset     — unseen study level; drawn hierarchically under
+  #                 allow_new_levels = TRUE, sample_new_levels = "gaussian"
+  factor_levels <- function(v) {
+    lv <- if (is.factor(v)) {
+      levels(v)
+    } else {
+      sort(unique(as.character(v)))
+    }
+    lv[!is.na(lv) & nzchar(lv)]
+  }
+
+  fd <- fit$data
+  age_lv <- factor_levels(fd$age_decade)
+  sex_lv <- factor_levels(fd$sex)
+  eth_lv <- factor_levels(fd$ethnicity_groups)
+  assay_lv <- factor_levels(fd$assay_groups_altered)
+  if (!"10x Genomics 3" %in% assay_lv) {
+    stop("`10x Genomics 3` is absent from the fitted assay support.")
+  }
+  if (!length(eth_lv)) {
+    stop("Ethnicity levels are absent from the fitted model data.")
+  }
+
+  target <- age_sex_target |>
+    dplyr::transmute(
+      age_decade = as.character(.data$age_decade),
+      sex = as.character(.data$sex),
+      age_sex_weight = as.numeric(.data$target_weight)
+    ) |>
+    dplyr::distinct()
+
+  stopifnot(abs(sum(target$age_sex_weight) - 1) < 1e-12)
+  if (!all(target$age_decade %in% age_lv) || !all(target$sex %in% sex_lv)) {
+    stop("Panel-b age×sex target contains levels absent from a Panel-c fit.")
+  }
+
+  tidyr::crossing(target, ethnicity_groups = eth_lv) |>
+    dplyr::mutate(
+      disease_groups_altered = "Normal",
+      tissue_groups = "blood",
+      assay_groups_altered = "10x Genomics 3",
+      dataset_id_altered = "NEW_STUDY_SAVI",
+      offset = 0,
+      counts = 1,
+      profile_weight = .data$age_sex_weight / length(eth_lv)
+    )
+}
+
+# Cache key for the comprehensive linpred target (bump when the estimand changes).
+panel_c_hca_profile_id <- panel_b_hca_comprehensive_meta |>
+  dplyr::transmute(
+    id = paste(
+      as.character(.data$age_decade), as.character(.data$sex),
+      format(.data$target_weight, digits = 17, scientific = FALSE),
+      sep = ":"
+    )
+  ) |>
+  dplyr::pull(.data$id) |>
+  sort() |>
+  paste(collapse = ";")
+
+panel_c_estimates_info <- file.info(params$estimates_rds)
+panel_c_hca_grid_id <- paste(
+  "v3_fixed=blood+Normal+10xGenomics3+offset0",
+  paste0("age_sex_target=", panel_c_hca_profile_id),
+  "ethnicity=equal_fitted_levels",
+  "dataset=NEW_STUDY_SAVI_gaussian_new_level",
+  paste0("fit_size=", panel_c_estimates_info$size),
+  paste0("fit_mtime=", as.numeric(panel_c_estimates_info$mtime)),
+  sep = "|"
+)
+
+panel_c_tail_p <- function(x) {
+  stopifnot(length(x) > 0L, all(is.finite(x)))
+  p_lo <- (1 + sum(x <= 0)) / (length(x) + 1)
+  p_hi <- (1 + sum(x >= 0)) / (length(x) + 1)
+  min(1, 2 * min(p_lo, p_hi))
+}
+
+summarise_panel_c_draw_matrix <- function(
+  delta,
+  genes,
+  contrast_name,
+  uncertainty_method,
+  n_case,
+  n_reference,
+  is_aggregate = FALSE
+) {
+  delta <- as.matrix(delta)
+  stopifnot(ncol(delta) == length(genes))
+
+  tibble::tibble(
+    gene = genes,
+    estimate = apply(delta, 2, stats::median, na.rm = TRUE),
+    .lower = apply(delta, 2, stats::quantile, probs = 0.025, na.rm = TRUE),
+    .upper = apply(delta, 2, stats::quantile, probs = 0.975, na.rm = TRUE),
+    tail_p = apply(delta, 2, panel_c_tail_p),
+    contrast = contrast_name,
+    n_resamples = nrow(delta),
+    n_case = n_case,
+    n_reference = n_reference,
+    uncertainty_method = uncertainty_method,
+    is_aggregate = is_aggregate
+  )
+}
+
+tibble::tibble(
+  gene = panel_c_gene_order,
+  rank = seq_along(panel_c_gene_order)
+)
+```
+
+## C2. Merge SAVI cluster 17 with atlas reference and set TMM offsets
+
+```{r}
+#| label: panel-c-merge-se
+
+rebuild_panel_c_se <- isTRUE(params$run_panel_c_rebuild) || !file.exists(panel_c_se_rds)
+
+if (!rebuild_panel_c_se) {
+  .panel_c_se_cache <- readRDS(panel_c_se_rds)
+  se_monocytic_panel_c <- .panel_c_se_cache$se_monocytic
+  panel_c_ref_sample_name <- .panel_c_se_cache$ref_sample_name
+  message(
+    "Loaded panel-c SE: ",
+    nrow(se_monocytic_panel_c), " genes x ",
+    ncol(se_monocytic_panel_c), " samples"
+  )
+} else {
+  message("Building panel-c SE merge + TMMwsp ...")
+  stopifnot(file.exists(params$savi_pseudobulk_rds))
+  stopifnot(file.exists(params$pseudobulk_h5ad))
+
+  SAVI_pseudobulk_sobj <-
+    readRDS(params$savi_pseudobulk_rds) |>
+    subset(subset = CellType == "17. Disease-associated monocytes")
+
+  counts_sym <- as.matrix(
+    SeuratObject::LayerData(SAVI_pseudobulk_sobj, assay = "RNA", layer = "counts")
+  )
+  sym <- rownames(counts_sym)
+  ensg <- AnnotationDbi::mapIds(
+    org.Hs.eg.db::org.Hs.eg.db,
+    keys = sym,
+    column = "ENSEMBL",
+    keytype = "SYMBOL",
+    multiVals = "first"
+  )
+  keep <- !is.na(ensg) & !duplicated(ensg)
+  ensg <- ensg[keep]
+  counts_ens <- counts_sym[keep, , drop = FALSE]
+  rownames(counts_ens) <- ensg
+
+  cd_savi <- as.data.frame(SAVI_pseudobulk_sobj@meta.data)
+  rownames(cd_savi) <- colnames(counts_ens)
+  cd_savi$sample_role <- "savi_pseudobulk"
+  cd_savi$offset <- 0L
+  if (!"cell_type_unified_ensemble" %in% names(cd_savi)) {
+    cd_savi$cell_type_unified_ensemble <- cd_savi$CellType
+  }
+
+  se_savi_ensembl <- SummarizedExperiment::SummarizedExperiment(
+    assays = list(counts = counts_ens),
+    colData = S4Vectors::DataFrame(cd_savi, row.names = colnames(counts_ens)),
+    rowData = S4Vectors::DataFrame(gene_symbol = sym[keep], row.names = ensg)
+  )
+
+  pseudobulk_sample <- targets::tar_read(
+    pseudobulk_sample,
+    store = file.path(model_path, "_targets")
+  )
+  # Point DelayedArray/HDF5 backend to the local h5ad-backed matrix.
+  pseudobulk_sample@assays@data@listData[["counts"]]@seed@seed@seed@filepath <-
+    params$pseudobulk_h5ad
+  ref_sample <-
+    pseudobulk_sample[, SummarizedExperiment::colData(pseudobulk_sample)$offset == 0]
+  SummarizedExperiment::colData(ref_sample)$sample_role <- "reference"
+
+  se_monocytic_panel_c <- merge_summarized_experiments(se_savi_ensembl, ref_sample)
+  panel_c_ref_sample_name <-
+    se_monocytic_panel_c |>
+    SummarizedExperiment::colData() |>
+    as.data.frame() |>
+    dplyr::filter(.data$sample_role == "reference") |>
+    rownames()
+
+  se_monocytic_panel_c <-
+    se_monocytic_panel_c |>
+    tidybulk::scale_abundance(
+      method = "TMMwsp",
+      reference_sample = panel_c_ref_sample_name
+    ) |>
+    dplyr::mutate(offset = log(1 / .data$multiplier))
+
+  dir.create(dirname(panel_c_se_rds), recursive = TRUE, showWarnings = FALSE)
+  saveRDS(
+    list(
+      se_monocytic = se_monocytic_panel_c,
+      ref_sample_name = panel_c_ref_sample_name
+    ),
+    panel_c_se_rds,
+    compress = "xz"
+  )
+}
+
+tibble::tibble(
+  n_features = nrow(se_monocytic_panel_c),
+  n_samples = ncol(se_monocytic_panel_c),
+  n_savi = sum(
+    SummarizedExperiment::colData(se_monocytic_panel_c)$sample_role ==
+      "savi_pseudobulk"
+  ),
+  n_reference = sum(
+    SummarizedExperiment::colData(se_monocytic_panel_c)$sample_role ==
+      "reference"
+  ),
+  ref_sample = panel_c_ref_sample_name[[1]]
+)
+```
+
+## C3. Library metadata and offset-centred log-rate audit
+
+```{r}
+#| label: panel-c-sample-logmu
+
+cd_panel_c <- as.data.frame(SummarizedExperiment::colData(se_monocytic_panel_c)) |>
+  tibble::rownames_to_column("col_id")
+savi_cd_panel_c <- cd_panel_c |>
+  dplyr::filter(.data$sample_role == "savi_pseudobulk")
+stopifnot(nrow(savi_cd_panel_c) > 0L)
+stopifnot(all(c("offset", "multiplier") %in% names(savi_cd_panel_c)))
+
+rd_panel_c <- as.data.frame(SummarizedExperiment::rowData(se_monocytic_panel_c))
+sym_col <- if ("gene_symbol" %in% names(rd_panel_c)) {
+  "gene_symbol"
+} else if ("gene_name" %in% names(rd_panel_c)) {
+  "gene_name"
+} else {
+  stop("No gene symbol column in panel-c rowData.")
+}
+
+panel_c_feature_map <- tibble::tibble(
+  .feature = rownames(rd_panel_c),
+  gene = as.character(rd_panel_c[[sym_col]])
+) |>
+  dplyr::filter(.data$gene %in% panel_c_gene_order)
+stopifnot(nrow(panel_c_feature_map) == length(panel_c_gene_order))
+
+panel_c_counts <- as.matrix(
+  SummarizedExperiment::assay(se_monocytic_panel_c, "counts")
+)
+
+panel_c_sample_meta <- savi_cd_panel_c |>
+  dplyr::mutate(
+    sample_id = as.character(dplyr::coalesce(
+      as.character(.data$Sample),
+      .data$col_id
+    )),
+    Category = as.character(.data$Category),
+    group = dplyr::recode(
+      .data$Category,
+      CTRL = "control",
+      SAVI = "untreated",
+      SAVI_treated = "treated"
+    ),
+    subject_id = dplyr::case_when(
+      grepl("^P1", .data$sample_id) ~ "P1",
+      grepl("^P2", .data$sample_id) ~ "P2",
+      grepl("^P4", .data$sample_id) ~ "P4",
+      grepl("^P5", .data$sample_id) ~ "P5",
+      grepl("^P6", .data$sample_id) ~ "P6",
+      grepl("^C", .data$sample_id) ~ .data$sample_id,
+      TRUE ~ .data$sample_id
+    ),
+    offset = as.numeric(.data$offset)
+  )
+
+panel_c_sample_cache_id <- paste(
+  "v2_offset_log_rate_audit",
+  paste(panel_c_gene_order, collapse = ","),
+  paste(
+    panel_c_sample_meta$col_id,
+    panel_c_sample_meta$subject_id,
+    panel_c_sample_meta$group,
+    format(panel_c_sample_meta$offset, digits = 17, scientific = FALSE),
+    sep = ":",
+    collapse = ";"
+  ),
+  paste(
+    as.numeric(panel_c_counts[
+      panel_c_feature_map$.feature[match(panel_c_gene_order, panel_c_feature_map$gene)],
+      panel_c_sample_meta$col_id,
+      drop = FALSE
+    ]),
+    collapse = ","
+  ),
+  sep = "|"
+)
+
+rebuild_panel_c_sample <- isTRUE(params$run_panel_c_rebuild) ||
+  !file.exists(panel_c_sample_logmu_rds)
+
+if (!rebuild_panel_c_sample) {
+  panel_c_sample_cache <- readRDS(panel_c_sample_logmu_rds)
+  if (is.list(panel_c_sample_cache) &&
+      identical(panel_c_sample_cache$cache_id, panel_c_sample_cache_id)) {
+    panel_c_sample_logmu <- panel_c_sample_cache$data
+    message("Loaded panel-c offset-log-rate audit: ", nrow(panel_c_sample_logmu), " rows")
+  } else {
+    message("Ignoring stale Panel-c sample cache: inputs or policy changed.")
+    rebuild_panel_c_sample <- TRUE
+  }
+}
+
+if (rebuild_panel_c_sample) {
+  panel_c_sample_logmu <- lapply(panel_c_gene_order, function(g) {
+    fid <- panel_c_feature_map$.feature[match(g, panel_c_feature_map$gene)]
+    y <- as.numeric(panel_c_counts[fid, panel_c_sample_meta$col_id])
+    panel_c_sample_meta |>
+      dplyr::mutate(
+        gene = g,
+        .feature = fid,
+        observed_count = y,
+        # Diagnostic only: this transformed observation is not an estimate of
+        # latent NB log-mu. All inferential contrasts below use mglmOneGroup().
+        offset_log_rate = log(y + 0.5) - .data$offset
+      )
+  }) |>
+    dplyr::bind_rows()
+
+  saveRDS(
+    list(data = panel_c_sample_logmu, cache_id = panel_c_sample_cache_id),
+    panel_c_sample_logmu_rds,
+    compress = "xz"
+  )
+}
+
+stopifnot(nrow(panel_c_sample_logmu) == length(panel_c_gene_order) * nrow(panel_c_sample_meta))
+
+panel_c_sample_logmu |>
+  dplyr::group_by(.data$group) |>
+  dplyr::summarise(
+    n_rows = dplyr::n(),
+    offset_min = min(.data$offset),
+    offset_max = max(.data$offset),
+    log_rate_min = min(.data$offset_log_rate),
+    log_rate_max = max(.data$offset_log_rate),
+    .groups = "drop"
+  )
+```
+
+## C4. HCA grand-mean log μ draws at offset 0
+
+```{r}
+#| label: panel-c-hca-logmu
+
+rebuild_panel_c_hca <- isTRUE(params$run_panel_c_rebuild) ||
+  !file.exists(panel_c_hca_logmu_rds)
+
+if (!rebuild_panel_c_hca) {
+  panel_c_hca_cache <- readRDS(panel_c_hca_logmu_rds)
+  if (is.list(panel_c_hca_cache) &&
+      all(c("draws", "grid_id") %in% names(panel_c_hca_cache))) {
+    panel_c_hca_draws <- panel_c_hca_cache$draws
+    cached_grid_id <- panel_c_hca_cache$grid_id
+  } else {
+    panel_c_hca_draws <- NULL
+    cached_grid_id <- NULL
+  }
+  if (is.null(panel_c_hca_draws) ||
+      !all(c("gene", ".draw", "hca_log_mu") %in% names(panel_c_hca_draws)) ||
+      !setequal(unique(panel_c_hca_draws$gene), panel_c_gene_order) ||
+      !identical(cached_grid_id, panel_c_hca_grid_id)) {
+    message("Ignoring Panel-c HCA cache: comprehensive grid policy changed.")
+    rebuild_panel_c_hca <- TRUE
+  } else if (abs(
+    stats::median(panel_c_hca_draws$hca_log_mu) -
+      stats::median(panel_c_sample_logmu$offset_log_rate)
+  ) >= 8) {
+    message(
+      "HCA/sample scale mismatch; rebuilding HCA draws."
+    )
+    rebuild_panel_c_hca <- TRUE
+  } else {
+    message("Loaded panel-c HCA draws: ", nrow(panel_c_hca_draws), " rows")
+  }
+}
+
+if (rebuild_panel_c_hca) {
+  stopifnot(file.exists(params$estimates_rds))
+  panel_c_estimates <- readRDS(params$estimates_rds)
+  stopifnot(all(panel_c_gene_order %in% panel_c_estimates$gene))
+
+  hca_list <- vector("list", length(panel_c_gene_order))
+  names(hca_list) <- panel_c_gene_order
+  panel_c_hca_grid_n <- NA_integer_
+  for (g in panel_c_gene_order) {
+    message("HCA linpred ", g, " ...")
+    fit <- panel_c_estimates$brms_fit[[match(g, panel_c_estimates$gene)]]
+    nd <- build_hca_covariate_grid(
+      fit,
+      age_sex_target = panel_b_hca_comprehensive_meta
+    )
+    panel_c_hca_grid_n <- nrow(nd)
+    stopifnot(abs(sum(nd$profile_weight) - 1) < 1e-12)
+    lp <- brms::posterior_linpred(
+      fit,
+      newdata = nd,
+      transform = FALSE,
+      re_formula = NULL,
+      allow_new_levels = TRUE,
+      sample_new_levels = "gaussian"
+    )
+    # Weighted g-computation on E_grid[log(mu)]. This is a mean log-rate
+    # (geometric-mean mu) estimand, not log(E_grid[mu]).
+    gm <- as.numeric(lp %*% nd$profile_weight)
+    hca_list[[g]] <- tibble::tibble(
+      gene = g,
+      .draw = seq_along(gm),
+      hca_log_mu = gm
+    )
+  }
+  panel_c_hca_draws <- dplyr::bind_rows(hca_list)
+  saveRDS(
+    list(
+      draws = panel_c_hca_draws,
+      grid_id = panel_c_hca_grid_id,
+      n_grid_profiles = panel_c_hca_grid_n,
+      estimand = "weighted mean log(mu); Panel-b age-sex target"
+    ),
+    panel_c_hca_logmu_rds,
+    compress = "xz"
+  )
+}
+
+tibble::tibble(
+  grid_id = panel_c_hca_grid_id,
+  n_draws_total = nrow(panel_c_hca_draws)
+) |>
+  print()
+
+panel_c_hca_draws |>
+  dplyr::group_by(.data$gene) |>
+  dplyr::summarise(
+    n_draws = dplyr::n(),
+    median_log_mu = stats::median(.data$hca_log_mu),
+    .groups = "drop"
+  ) |>
+  dplyr::mutate(gene = factor(.data$gene, levels = panel_c_gene_order)) |>
+  dplyr::arrange(.data$gene)
+```
+
+## C5. Subject-coupled NB contrasts and 16-gene aggregate
+
+```{r}
+#| label: panel-c-effects
+
+panel_c_n_boot <- 2000L
+panel_c_effects_cache_id <- paste(
+  "v5_subject_coupled_nb_bayesian_bootstrap_independent_hca_gene_draws",
+  paste0("n_boot=", panel_c_n_boot),
+  paste0("sample=", panel_c_sample_cache_id),
+  paste0("hca=", panel_c_hca_grid_id),
+  "dispersion=edgeR_trended_all_shared_genes",
+  "repeat_libraries=sum_counts_and_exposure",
+  sep = "|"
+)
+
+rebuild_panel_c_effects <- isTRUE(params$run_panel_c_rebuild) ||
+  isTRUE(rebuild_panel_c_sample) ||
+  isTRUE(rebuild_panel_c_hca) ||
+  !file.exists(panel_c_effects_rds)
+
+if (!rebuild_panel_c_effects) {
+  panel_c_effects_cache <- readRDS(panel_c_effects_rds)
+  if (is.list(panel_c_effects_cache) &&
+      identical(panel_c_effects_cache$cache_id, panel_c_effects_cache_id) &&
+      is.data.frame(panel_c_effects_cache$data)) {
+    panel_c_effects <- panel_c_effects_cache$data
+    message("Loaded panel-c effects: ", nrow(panel_c_effects), " rows")
+  } else {
+    message("Ignoring stale Panel-c effects cache: inputs or policy changed.")
+    rebuild_panel_c_effects <- TRUE
+  }
+}
+
+if (rebuild_panel_c_effects) {
+  panel_c_signature_ids <- panel_c_feature_map$.feature[
+    match(panel_c_gene_order, panel_c_feature_map$gene)
+  ]
+  stopifnot(!anyNA(panel_c_signature_ids), !anyDuplicated(panel_c_signature_ids))
+
+  log_sum_exp <- function(x) {
+    m <- max(x)
+    m + log(sum(exp(x - m)))
+  }
+
+  # One independent column per subject×state. For repeated libraries, add raw
+  # counts and add their model exposures exp(offset) before returning to log scale.
+  collapse_subject_state <- function(counts, meta) {
+    keys <- meta |>
+      dplyr::distinct(.data$subject_id, .data$group) |>
+      dplyr::arrange(.data$group, .data$subject_id) |>
+      dplyr::mutate(sample_key = paste(.data$subject_id, .data$group, sep = "__"))
+
+    collapsed_counts <- do.call(cbind, lapply(seq_len(nrow(keys)), function(i) {
+      idx <- which(
+        meta$subject_id == keys$subject_id[[i]] &
+          meta$group == keys$group[[i]]
+      )
+      rowSums(counts[, meta$col_id[idx], drop = FALSE])
+    }))
+    colnames(collapsed_counts) <- keys$sample_key
+    rownames(collapsed_counts) <- rownames(counts)
+
+    keys$offset <- vapply(seq_len(nrow(keys)), function(i) {
+      idx <- which(
+        meta$subject_id == keys$subject_id[[i]] &
+          meta$group == keys$group[[i]]
+      )
+      log_sum_exp(meta$offset[idx])
+    }, numeric(1))
+
+    list(counts = collapsed_counts, meta = keys)
+  }
+
+  panel_c_subject_data <- collapse_subject_state(
+    panel_c_counts,
+    panel_c_sample_meta
+  )
+
+  # Estimate NB dispersions with all shared genes, not just the selected 16.
+  fit_panel_c_dispersion <- function(counts, meta, design) {
+    dge <- edgeR::DGEList(counts = counts, samples = meta)
+    dge$offset <- matrix(
+      meta$offset,
+      nrow = nrow(dge),
+      ncol = ncol(dge),
+      byrow = TRUE
+    )
+    keep <- edgeR::filterByExpr(dge, design = design)
+    signature_idx <- match(panel_c_signature_ids, rownames(dge))
+    stopifnot(!anyNA(signature_idx))
+    keep[signature_idx] <- TRUE
+    dge <- dge[keep, , keep.lib.sizes = FALSE]
+    dge <- edgeR::estimateDisp(dge, design, robust = TRUE)
+    fit <- edgeR::glmQLFit(dge, design, robust = TRUE)
+    dispersion <- if (!is.null(dge$trended.dispersion)) {
+      dge$trended.dispersion
+    } else if (!is.null(dge$tagwise.dispersion)) {
+      dge$tagwise.dispersion
+    } else {
+      rep_len(dge$common.dispersion, nrow(dge))
+    }
+    names(dispersion) <- rownames(dge)
+    list(dge = dge, fit = fit, dispersion = dispersion)
+  }
+
+  subject_counts <- panel_c_subject_data$counts
+  subject_meta <- panel_c_subject_data$meta
+
+  uc_meta <- subject_meta |>
+    dplyr::filter(.data$group %in% c("control", "untreated")) |>
+    dplyr::mutate(group = factor(.data$group, levels = c("control", "untreated")))
+  uc_counts <- subject_counts[, uc_meta$sample_key, drop = FALSE]
+  uc_design <- stats::model.matrix(~ 0 + group, data = uc_meta)
+  colnames(uc_design) <- sub("^group", "", colnames(uc_design))
+  uc_fit <- fit_panel_c_dispersion(uc_counts, uc_meta, uc_design)
+  uc_dispersion <- unname(uc_fit$dispersion[panel_c_signature_ids])
+
+  paired_subjects <- intersect(
+    subject_meta$subject_id[subject_meta$group == "untreated"],
+    subject_meta$subject_id[subject_meta$group == "treated"]
+  )
+  paired_meta <- subject_meta |>
+    dplyr::filter(
+      .data$subject_id %in% paired_subjects,
+      .data$group %in% c("untreated", "treated")
+    ) |>
+    dplyr::mutate(
+      subject_id = factor(.data$subject_id, levels = sort(paired_subjects)),
+      state = factor(.data$group, levels = c("treated", "untreated"))
+    ) |>
+    dplyr::arrange(.data$subject_id, .data$state)
+  paired_counts <- subject_counts[, paired_meta$sample_key, drop = FALSE]
+  paired_design <- stats::model.matrix(~ subject_id + state, data = paired_meta)
+  paired_fit <- fit_panel_c_dispersion(paired_counts, paired_meta, paired_design)
+  paired_dispersion <- unname(paired_fit$dispersion[panel_c_signature_ids])
+
+  signature_counts_uc <- uc_counts[panel_c_signature_ids, , drop = FALSE]
+  signature_counts_paired <- paired_counts[panel_c_signature_ids, , drop = FALSE]
+
+  mglm_signature <- function(counts, offsets, dispersion, weights = NULL) {
+    as.numeric(edgeR::mglmOneGroup(
+      counts,
+      offset = offsets,
+      dispersion = dispersion,
+      weights = weights
+    ))
+  }
+
+  draw_dirichlet_weights <- function(n) {
+    w <- stats::rexp(n)
+    n * w / sum(w)
+  }
+
+  # A common subject-weight vector is used for every gene in a replicate. This
+  # is the key coupling that the previous gene-bootstrap aggregate did not
+  # preserve. Continuous positive weights also avoid infinite MLEs caused by a
+  # discrete bootstrap replicate containing only zero-count subjects.
+  bayes_bootstrap_unpaired <- function(n_boot, seed) {
+    idx_u <- which(uc_meta$group == "untreated")
+    idx_c <- which(uc_meta$group == "control")
+    out_u <- matrix(NA_real_, nrow = n_boot, ncol = length(panel_c_gene_order))
+    out_c <- out_u
+    set.seed(seed)
+    for (b in seq_len(n_boot)) {
+      wu <- draw_dirichlet_weights(length(idx_u))
+      wc <- draw_dirichlet_weights(length(idx_c))
+      out_u[b, ] <- mglm_signature(
+        signature_counts_uc[, idx_u, drop = FALSE],
+        uc_meta$offset[idx_u],
+        uc_dispersion,
+        weights = wu
+      )
+      out_c[b, ] <- mglm_signature(
+        signature_counts_uc[, idx_c, drop = FALSE],
+        uc_meta$offset[idx_c],
+        uc_dispersion,
+        weights = wc
+      )
+    }
+    colnames(out_u) <- panel_c_gene_order
+    colnames(out_c) <- panel_c_gene_order
+    list(untreated = out_u, control = out_c)
+  }
+
+  bayes_bootstrap_paired <- function(n_boot, seed) {
+    key <- paste(as.character(paired_meta$subject_id), paired_meta$group, sep = "__")
+    out <- matrix(NA_real_, nrow = n_boot, ncol = length(panel_c_gene_order))
+    set.seed(seed)
+    for (b in seq_len(n_boot)) {
+      w <- draw_dirichlet_weights(length(paired_subjects))
+      iu <- match(paste(paired_subjects, "untreated", sep = "__"), key)
+      it <- match(paste(paired_subjects, "treated", sep = "__"), key)
+      u <- mglm_signature(
+        signature_counts_paired[, iu, drop = FALSE],
+        paired_meta$offset[iu],
+        paired_dispersion,
+        weights = w
+      )
+      t <- mglm_signature(
+        signature_counts_paired[, it, drop = FALSE],
+        paired_meta$offset[it],
+        paired_dispersion,
+        weights = w
+      )
+      out[b, ] <- u - t
+    }
+    colnames(out) <- panel_c_gene_order
+    out
+  }
+
+  uc_boot <- bayes_bootstrap_unpaired(panel_c_n_boot, seed = 20260809L)
+  paired_boot <- bayes_bootstrap_paired(panel_c_n_boot, seed = 20260810L)
+
+  hca_matrix <- panel_c_hca_draws |>
+    dplyr::select(.data$.draw, .data$gene, .data$hca_log_mu) |>
+    tidyr::pivot_wider(names_from = .data$gene, values_from = .data$hca_log_mu) |>
+    dplyr::arrange(.data$.draw)
+  stopifnot(all(panel_c_gene_order %in% names(hca_matrix)))
+  hca_draw_id <- hca_matrix$.draw
+  hca_matrix <- as.matrix(hca_matrix[, panel_c_gene_order, drop = FALSE])
+
+  # Each gene was fitted in a separate brms model. Equal numeric draw indices
+  # therefore are not joint posterior draws and must not be used to manufacture
+  # cross-gene dependence. Sample one posterior draw independently per gene,
+  # while retaining the genuine across-gene coupling in each SAVI Bayesian-
+  # bootstrap draw.
+  set.seed(20260811L)
+  hca_idx <- matrix(
+    sample.int(
+      nrow(hca_matrix),
+      panel_c_n_boot * length(panel_c_gene_order),
+      replace = TRUE
+    ),
+    nrow = panel_c_n_boot,
+    ncol = length(panel_c_gene_order),
+    dimnames = list(NULL, panel_c_gene_order)
+  )
+  hca_pair <- vapply(seq_along(panel_c_gene_order), function(j) {
+    hca_matrix[hca_idx[, j], j]
+  }, numeric(panel_c_n_boot))
+  colnames(hca_pair) <- panel_c_gene_order
+
+  delta_matrices <- list(
+    "untreated - study control" =
+      (uc_boot$untreated - uc_boot$control) / log(2),
+    "untreated - HCA" =
+      (uc_boot$untreated - hca_pair) / log(2),
+    "paired untreated - treated" = paired_boot / log(2),
+    "study control - HCA" =
+      (uc_boot$control - hca_pair) / log(2)
+  )
+
+  n_untreated <- sum(uc_meta$group == "untreated")
+  n_control <- sum(uc_meta$group == "control")
+  n_paired <- length(paired_subjects)
+  n_hca_donors <- panel_b_hca_comprehensive_n_donors
+
+  effects <- dplyr::bind_rows(
+    summarise_panel_c_draw_matrix(
+      delta_matrices[["untreated - study control"]],
+      panel_c_gene_order,
+      "untreated - study control",
+      "subject-level Bayesian bootstrap of NB cohort locations",
+      n_untreated,
+      n_control
+    ),
+    summarise_panel_c_draw_matrix(
+      delta_matrices[["untreated - HCA"]],
+      panel_c_gene_order,
+      "untreated - HCA",
+      "subject-level Bayesian bootstrap independently paired with HCA posterior",
+      n_untreated,
+      n_hca_donors
+    ),
+    summarise_panel_c_draw_matrix(
+      delta_matrices[["paired untreated - treated"]],
+      panel_c_gene_order,
+      "paired untreated - treated",
+      "paired-subject Bayesian bootstrap of NB cohort locations",
+      n_paired,
+      n_paired
+    ),
+    summarise_panel_c_draw_matrix(
+      delta_matrices[["study control - HCA"]],
+      panel_c_gene_order,
+      "study control - HCA",
+      "subject-level Bayesian bootstrap independently paired with HCA posterior",
+      n_control,
+      n_hca_donors
+    )
+  ) |>
+    dplyr::group_by(.data$contrast) |>
+    dplyr::mutate(q_value = stats::p.adjust(.data$tail_p, method = "BH")) |>
+    dplyr::ungroup()
+
+  aggregate_matrices <- lapply(delta_matrices, function(x) {
+    matrix(rowMeans(x), ncol = 1L)
+  })
+  agg <- dplyr::bind_rows(
+    summarise_panel_c_draw_matrix(
+      aggregate_matrices[["untreated - study control"]],
+      "16-gene covered subset",
+      "untreated - study control",
+      "subject-coupled 16-gene Bayesian bootstrap",
+      n_untreated,
+      n_control,
+      is_aggregate = TRUE
+    ),
+    summarise_panel_c_draw_matrix(
+      aggregate_matrices[["untreated - HCA"]],
+      "16-gene covered subset",
+      "untreated - HCA",
+      "subject-coupled Bayesian bootstrap independently paired with HCA posterior",
+      n_untreated,
+      n_hca_donors,
+      is_aggregate = TRUE
+    ),
+    summarise_panel_c_draw_matrix(
+      aggregate_matrices[["paired untreated - treated"]],
+      "16-gene covered subset",
+      "paired untreated - treated",
+      "paired-subject-coupled 16-gene Bayesian bootstrap",
+      n_paired,
+      n_paired,
+      is_aggregate = TRUE
+    ),
+    summarise_panel_c_draw_matrix(
+      aggregate_matrices[["study control - HCA"]],
+      "16-gene covered subset",
+      "study control - HCA",
+      "subject-coupled Bayesian bootstrap independently paired with HCA posterior",
+      n_control,
+      n_hca_donors,
+      is_aggregate = TRUE
+    )
+  ) |>
+    dplyr::mutate(q_value = stats::p.adjust(.data$tail_p, method = "BH"))
+
+  panel_c_effects <- dplyr::bind_rows(agg, effects) |>
+    dplyr::mutate(
+      gene = factor(
+        .data$gene,
+        levels = c("16-gene covered subset", panel_c_gene_order)
+      ),
+      contrast = factor(.data$contrast, levels = panel_c_contrast_levels)
+    )
+
+  panel_c_effects_cache <- list(
+    data = panel_c_effects,
+    cache_id = panel_c_effects_cache_id,
+    paired_subjects = paired_subjects,
+    hca_draw_ids_sampled = matrix(
+      hca_draw_id[hca_idx],
+      nrow = panel_c_n_boot,
+      ncol = length(panel_c_gene_order),
+      dimnames = list(NULL, panel_c_gene_order)
+    )
+  )
+  saveRDS(panel_c_effects_cache, panel_c_effects_rds, compress = "xz")
+}
+
+panel_c_effects <- panel_c_effects |>
+  dplyr::mutate(
+    gene = factor(
+      as.character(.data$gene),
+      levels = c("16-gene covered subset", panel_c_gene_order)
+    ),
+    contrast = factor(
+      as.character(.data$contrast),
+      levels = panel_c_contrast_levels
+    ),
+    contrast_lab = factor(
+      unname(panel_c_contrast_labs[as.character(.data$contrast)]),
+      levels = unname(panel_c_contrast_labs)
+    )
+  )
+
+stopifnot(nrow(panel_c_effects) == 4L * (1L + length(panel_c_gene_order)))
+stopifnot(all(panel_c_gene_order %in% as.character(panel_c_effects$gene)))
+stopifnot(all(is.finite(unlist(panel_c_effects[c(
+  "estimate", ".lower", ".upper", "tail_p", "q_value"
+)]))))
+
+panel_c_effects |>
+  dplyr::filter(.data$is_aggregate) |>
+  dplyr::select(
+    .data$contrast, .data$estimate, .data$.lower, .data$.upper,
+    .data$tail_p, .data$q_value, .data$n_case, .data$n_reference
+  )
+```
+
+## C6. Plot the four aligned contrasts
+
+```{r}
+#| label: panel-c-helpers
+
+plot_panel_c_logmu <- function(effects_df) {
+  gene_levels <- levels(effects_df$gene)
+  agg_df <- effects_df |> dplyr::filter(.data$is_aggregate)
+  gene_df <- effects_df |> dplyr::filter(!.data$is_aggregate)
+  x_rng <- range(c(effects_df$.lower, effects_df$.upper), finite = TRUE)
+  x_pad <- diff(x_rng) * 0.05
+
+  ggplot2::ggplot(effects_df, ggplot2::aes(y = .data$gene)) +
+    ggplot2::geom_vline(
+      xintercept = 0,
+      colour = col_mid,
+      linetype = "22",
+      linewidth = 0.35
+    ) +
+    ggplot2::geom_linerange(
+      data = gene_df,
+      ggplot2::aes(xmin = .data$.lower, xmax = .data$.upper, x = .data$estimate),
+      colour = col_dark,
+      linewidth = 0.35
+    ) +
+    ggplot2::geom_point(
+      data = gene_df,
+      ggplot2::aes(x = .data$estimate),
+      shape = 16,
+      size = 1.35,
+      colour = col_dark
+    ) +
+    ggplot2::geom_linerange(
+      data = agg_df,
+      ggplot2::aes(xmin = .data$.lower, xmax = .data$.upper, x = .data$estimate),
+      colour = col_untreated,
+      linewidth = 0.55
+    ) +
+    ggplot2::geom_point(
+      data = agg_df,
+      ggplot2::aes(x = .data$estimate),
+      shape = 23,
+      size = 2.2,
+      fill = col_untreated,
+      colour = col_dark,
+      stroke = 0.4
+    ) +
+    ggplot2::facet_grid(cols = ggplot2::vars(.data$contrast_lab)) +
+    ggplot2::scale_y_discrete(limits = rev(gene_levels)) +
+    ggplot2::coord_cartesian(
+      xlim = c(x_rng[1] - x_pad, x_rng[2] + x_pad),
+      clip = "off"
+    ) +
+    ggplot2::labs(
+      x = expression(log[2] ~ "fold change (offset-centred" ~ mu * ")"),
+      y = NULL
+    ) +
+    theme_multipanel +
+    ggplot2::theme(
+      strip.text.x = ggplot2::element_text(size = 6),
+      axis.text.y = ggplot2::element_text(size = 5.5),
+      panel.spacing.x = grid::unit(0.4, "lines"),
+      plot.margin = margin(4, 6, 4, 2)
+    )
+}
+```
+
+```{r}
+#| label: panel-c-draw
+#| fig-width: 7.2
+#| fig-height: 4.8
+#| fig-cap: "Figure 2c. Covered 16-gene STING signature on the offset-zero NB log-μ scale. Top diamond: equal-weight signature effect calculated inside each subject-coupled replicate. Lines are 95% subject-level Bayesian-bootstrap intervals for study contrasts and Bayesian-bootstrap × HCA-posterior hybrid intervals for HCA contrasts. Columns: untreated versus study control, untreated versus comprehensive HCA, paired untreated versus treated, and study control versus HCA. Population: disease-associated monocytes (cluster 17)."
+
+panel_c <- plot_panel_c_logmu(panel_c_effects)
+panel_c
+
+
+```
+
+## C7. Calibration-gated result
+
+```{r}
+#| label: panel-c-result-text
+#| include: false
+
+panel_c_aggregate_row <- function(contrast_name) {
+  panel_c_effects |>
+    dplyr::filter(
+      .data$is_aggregate,
+      as.character(.data$contrast) == contrast_name
+    ) |>
+    dplyr::slice(1)
+}
+
+panel_c_format_result <- function(x) {
+  sprintf(
+    "%.2f (95%% interval %.2f to %.2f; q = %s)",
+    x$estimate,
+    x$.lower,
+    x$.upper,
+    format.pval(x$q_value, digits = 2, eps = 0.001)
+  )
+}
+
+panel_c_result_calibration <- panel_c_aggregate_row("study control - HCA")
+panel_c_result_primary <- panel_c_aggregate_row("untreated - study control")
+panel_c_result_hca <- panel_c_aggregate_row("untreated - HCA")
+panel_c_result_treatment <- panel_c_aggregate_row("paired untreated - treated")
+```
+
+**Reading Panel c.** Interpret study control − HCA first. If that calibration
+contrast remains shifted, untreated − HCA contains residual reference-domain
+shift and is a sensitivity analysis; untreated − study control remains the
+primary disease contrast. The paired treatment contrast is supported only when
+its subject-coupled aggregate interval excludes zero. Gene-wise `q_value` is
+an exploratory BH adjustment of empirical two-sided sign-tail probabilities
+across the 16 genes within each contrast; aggregate values use the four
+prespecified signature contrasts. These are modular posterior-tail summaries,
+not likelihood-ratio p-values with a frequentist FDR guarantee.
+
+**Current result.** Calibration does not pass on the expression scale: the
+study-control − HCA aggregate is
+`r panel_c_format_result(panel_c_result_calibration)`, showing that the
+comprehensive HCA reference is systematically lower than the SAVI study controls
+for this signature. The primary untreated − study-control contrast is
+`r panel_c_format_result(panel_c_result_primary)`; the larger untreated − HCA
+contrast, `r panel_c_format_result(panel_c_result_hca)`, therefore contains both
+disease-associated signal and reference-domain shift. The paired untreated −
+treated contrast is `r panel_c_format_result(panel_c_result_treatment)`, consistent
+with attenuation after treatment in these four paired subjects, but it is not a
+population-wide treatment-efficacy claim.
+
+## C8. Audit and artifact paths
+
+```{r}
+#| label: panel-c-audit
+
+panel_c_agg <- panel_c_effects |> dplyr::filter(.data$is_aggregate)
+
+panel_c_direction <- panel_c_effects |>
+  dplyr::filter(!.data$is_aggregate) |>
+  dplyr::mutate(
+    direction = dplyr::case_when(
+      .data$q_value <= 0.05 & .data$estimate > 0 ~ "positive",
+      .data$q_value <= 0.05 & .data$estimate < 0 ~ "negative",
+      TRUE ~ "unresolved"
+    )
+  ) |>
+  dplyr::count(.data$contrast, .data$direction) |>
+  tidyr::pivot_wider(
+    names_from = .data$direction,
+    values_from = .data$n,
+    values_fill = 0L
+  )
+
+list(
+  aggregate = panel_c_agg |>
+    dplyr::select(
+      .data$contrast, .data$estimate, .data$.lower, .data$.upper,
+      .data$tail_p, .data$q_value, .data$n_case, .data$n_reference,
+      .data$uncertainty_method
+    ),
+  constituent_directions = panel_c_direction,
+  artifacts = tibble::tibble(
+    artifact = c("se_monocytic", "sample_log_rate_audit", "hca_draws", "effects"),
+    path = c(
+      panel_c_se_rds,
+      panel_c_sample_logmu_rds,
+      panel_c_hca_logmu_rds,
+      panel_c_effects_rds
+    ),
+    exists = file.exists(c(
+      panel_c_se_rds,
+      panel_c_sample_logmu_rds,
+      panel_c_hca_logmu_rds,
+      panel_c_effects_rds
+    ))
+  )
+)
+```
+
+------------------------------------------------------------------------
+
+# Panel f — Subject and family influence
+
+**Purpose.** Ask whether Panel c's two main signature estimands
+(untreated − comprehensive HCA; untreated − study control) depend on one or a
+few of the 12 biological subjects. HCA draws stay fixed; only the SAVI target
+side is refit after each deletion.
+
+**Method.** Collapse libraries to one subject×state column (sum counts; sum
+exposures). For each deletion, recompute gene-wise untreated and control
+locations with `edgeR::mglmOneGroup`, then form log2 contrasts. Deleted
+medians are the leave-one-out point estimates. Full-data diamonds and intervals
+come from Panel c. Gene rows on the main plot are the 16-gene aggregate plus up
+to five constituents selected by deletion range \(R_g\), preferring genes whose
+direction category flips.
+
+## F1. Subjects and deletion sets
+
+```{r}
+#| label: panel-f-subjects
+
+# Harmonise control IDs (C8/C9) to short display names used in the cohort table.
+panel_f_meta <- panel_c_sample_meta |>
+  dplyr::mutate(
+    person = dplyr::case_when(
+      grepl("^P1", .data$sample_id) ~ "P1",
+      grepl("^P2", .data$sample_id) ~ "P2",
+      grepl("^P4", .data$sample_id) ~ "P4",
+      grepl("^P5", .data$sample_id) ~ "P5",
+      grepl("^P6", .data$sample_id) ~ "P6",
+      grepl("^C8", .data$sample_id) ~ "C8",
+      grepl("^C9", .data$sample_id) ~ "C9",
+      TRUE ~ .data$sample_id
+    )
+  )
+
+panel_f_people <- sort(unique(panel_f_meta$person))
+
+# Named deletion sets: 12 single-person deletions + two family sets (audit).
+panel_f_deletions <- c(
+  stats::setNames(lapply(panel_f_people, identity), panel_f_people),
+  list(
+    `C8+C9` = c("C8", "C9"),
+    `P1/P2/C8/C9` = c("P1", "P2", "C8", "C9")
+  )
+)
+
+tibble::tibble(
+  n_people = length(panel_f_people),
+  people = paste(panel_f_people, collapse = ", "),
+  n_deletion_sets = length(panel_f_deletions)
+)
+```
+
+## F2. Subject×state counts for the 16 genes
+
+```{r}
+#| label: panel-f-subject-counts
+
+panel_f_feature_ids <- panel_c_feature_map$.feature[
+  match(panel_c_gene_order, panel_c_feature_map$gene)
+]
+
+# One column per person × group; repeated libraries are added on the count and
+# exposure scales (same rule as Panel c).
+panel_f_keys <- panel_f_meta |>
+  dplyr::distinct(.data$person, .data$group) |>
+  dplyr::arrange(.data$group, .data$person)
+
+panel_f_counts <- sapply(seq_len(nrow(panel_f_keys)), function(i) {
+  idx <- which(
+    panel_f_meta$person == panel_f_keys$person[[i]] &
+      panel_f_meta$group == panel_f_keys$group[[i]]
+  )
+  rowSums(panel_c_counts[panel_f_feature_ids, panel_f_meta$col_id[idx], drop = FALSE])
+})
+colnames(panel_f_counts) <- paste(
+  panel_f_keys$person, panel_f_keys$group, sep = "__"
+)
+rownames(panel_f_counts) <- panel_c_gene_order
+
+panel_f_keys$offset <- sapply(seq_len(nrow(panel_f_keys)), function(i) {
+  idx <- which(
+    panel_f_meta$person == panel_f_keys$person[[i]] &
+      panel_f_meta$group == panel_f_keys$group[[i]]
+  )
+  off <- panel_f_meta$offset[idx]
+  max(off) + log(sum(exp(off - max(off))))
+})
+
+panel_f_hca_median <- panel_c_hca_draws |>
+  dplyr::group_by(.data$gene) |>
+  dplyr::summarise(hca_log_mu = stats::median(.data$hca_log_mu), .groups = "drop")
+
+tibble::tibble(
+  n_genes = nrow(panel_f_counts),
+  n_subject_state = ncol(panel_f_counts),
+  n_untreated = sum(panel_f_keys$group == "untreated"),
+  n_control = sum(panel_f_keys$group == "control")
+)
+```
+
+## F3. Leave-one-out log2 effects (HCA fixed)
+
+```{r}
+#| label: panel-f-leave-one-out
+
+panel_f_group_logmu <- function(keep_people, group_name) {
+  hit <- panel_f_keys$person %in% keep_people & panel_f_keys$group == group_name
+  y <- panel_f_counts[, hit, drop = FALSE]
+  off <- panel_f_keys$offset[hit]
+  vapply(panel_c_gene_order, function(g) {
+    as.numeric(edgeR::mglmOneGroup(
+      matrix(y[g, ], nrow = 1L),
+      offset = off,
+      dispersion = 0.05
+    ))
+  }, numeric(1))
+}
+
+panel_f_effects_one <- function(deleted, label) {
+  keep <- setdiff(panel_f_people, deleted)
+  log_u <- panel_f_group_logmu(keep, "untreated")
+  log_c <- panel_f_group_logmu(keep, "control")
+  hca <- panel_f_hca_median$hca_log_mu[
+    match(panel_c_gene_order, panel_f_hca_median$gene)
+  ]
+
+  dplyr::bind_rows(
+    tibble::tibble(
+      gene = panel_c_gene_order,
+      contrast = "untreated - HCA",
+      estimate = (log_u - hca) / log(2),
+      deletion = label
+    ),
+    tibble::tibble(
+      gene = panel_c_gene_order,
+      contrast = "untreated - study control",
+      estimate = (log_u - log_c) / log(2),
+      deletion = label
+    )
+  )
+}
+
+# Full-data point estimates use the same mglm rule (for deletion comparisons).
+panel_f_full_points <- panel_f_effects_one(character(0), "full")
+
+# Single-person deletions for the main panel.
+panel_f_loo <- lapply(panel_f_people, function(p) {
+  panel_f_effects_one(p, p)
+}) |>
+  dplyr::bind_rows()
+
+# Family deletions for the audit table only.
+panel_f_family <- dplyr::bind_rows(
+  panel_f_effects_one(c("C8", "C9"), "C8+C9"),
+  panel_f_effects_one(c("P1", "P2", "C8", "C9"), "P1/P2/C8/C9")
+)
+
+panel_f_loo |>
+  dplyr::group_by(.data$contrast) |>
+  dplyr::summarise(
+    n_rows = dplyr::n(),
+    n_deletions = dplyr::n_distinct(.data$deletion),
+    .groups = "drop"
+  )
+```
+
+## F4. Influence scores and gene selection
+
+```{r}
+#| label: panel-f-select-genes
+
+panel_f_direction <- function(estimate, .lower = NA_real_, .upper = NA_real_) {
+  dplyr::case_when(
+    is.finite(.lower) & is.finite(.upper) & .lower > 0 ~ "positive",
+    is.finite(.lower) & is.finite(.upper) & .upper < 0 ~ "negative",
+    is.finite(estimate) & estimate > 0 ~ "positive",
+    is.finite(estimate) & estimate < 0 ~ "negative",
+    TRUE ~ "unresolved"
+  )
+}
+
+# Full-data intervals from Panel c (same two estimands).
+panel_f_full <- panel_c_effects |>
+  dplyr::filter(
+    !.data$is_aggregate,
+    .data$contrast %in% c("untreated - HCA", "untreated - study control")
+  ) |>
+  dplyr::transmute(
+    gene = as.character(.data$gene),
+    contrast = as.character(.data$contrast),
+    full_estimate = .data$estimate,
+    .lower = .data$.lower,
+    .upper = .data$.upper,
+    full_direction = panel_f_direction(.data$estimate, .data$.lower, .data$.upper)
+  )
+
+panel_f_agg_full <- panel_c_effects |>
+  dplyr::filter(
+    .data$is_aggregate,
+    .data$contrast %in% c("untreated - HCA", "untreated - study control")
+  ) |>
+  dplyr::transmute(
+    gene = "16-gene covered subset",
+    contrast = as.character(.data$contrast),
+    full_estimate = .data$estimate,
+    .lower = .data$.lower,
+    .upper = .data$.upper,
+    full_direction = panel_f_direction(.data$estimate, .data$.lower, .data$.upper)
+  )
+
+panel_f_loo_summary <- panel_f_loo |>
+  dplyr::left_join(panel_f_full, by = c("gene", "contrast")) |>
+  dplyr::mutate(
+    deleted_direction = panel_f_direction(.data$estimate),
+    direction_changed = .data$deleted_direction != .data$full_direction
+  )
+
+panel_f_gene_scores <- panel_f_loo_summary |>
+  dplyr::group_by(.data$gene, .data$contrast) |>
+  dplyr::summarise(
+    R = max(.data$estimate) - min(.data$estimate),
+    any_flip = any(.data$direction_changed),
+    .groups = "drop"
+  ) |>
+  tidyr::pivot_wider(
+    names_from = .data$contrast,
+    values_from = c(.data$R, .data$any_flip)
+  ) |>
+  dplyr::mutate(
+    R_g = pmax(
+      .data$`R_untreated - HCA`,
+      .data$`R_untreated - study control`,
+      na.rm = TRUE
+    ),
+    any_flip = .data$`any_flip_untreated - HCA` |
+      .data$`any_flip_untreated - study control`
+  ) |>
+  dplyr::arrange(dplyr::desc(.data$any_flip), dplyr::desc(.data$R_g), .data$gene)
+
+panel_f_selected_genes <- panel_f_gene_scores |>
+  dplyr::slice_head(n = 5L) |>
+  dplyr::pull(.data$gene)
+
+# Influential deletion label: person whose deleted estimate is farthest from full.
+panel_f_influencer <- dplyr::bind_rows(
+  panel_f_loo_summary,
+  panel_f_loo |>
+    dplyr::group_by(.data$contrast, .data$deletion) |>
+    dplyr::summarise(
+      gene = "16-gene covered subset",
+      estimate = mean(.data$estimate),
+      .groups = "drop"
+    ) |>
+    dplyr::left_join(panel_f_agg_full, by = c("gene", "contrast"))
+) |>
+  dplyr::group_by(.data$gene, .data$contrast) |>
+  dplyr::mutate(abs_shift = abs(.data$estimate - .data$full_estimate)) |>
+  dplyr::slice_max(.data$abs_shift, n = 1L, with_ties = FALSE) |>
+  dplyr::ungroup() |>
+  dplyr::transmute(
+    .data$gene, .data$contrast,
+    influential_deletion = .data$deletion
+  )
+
+panel_f_gene_scores |>
+  dplyr::select(.data$gene, .data$R_g, .data$any_flip) |>
+  dplyr::slice_head(n = 8L)
+```
+
+## F5. Plot table (aggregate + selected genes)
+
+```{r}
+#| label: panel-f-plot-data
+
+panel_f_plot_genes <- c("16-gene covered subset", panel_f_selected_genes)
+
+# Aggregate leave-one-out: equal-weight mean of the 16 gene effects.
+panel_f_loo_agg <- panel_f_loo |>
+  dplyr::group_by(.data$contrast, .data$deletion) |>
+  dplyr::summarise(
+    gene = "16-gene covered subset",
+    estimate = mean(.data$estimate),
+    .groups = "drop"
+  ) |>
+  dplyr::left_join(panel_f_agg_full, by = c("gene", "contrast")) |>
+  dplyr::mutate(
+    deleted_direction = panel_f_direction(.data$estimate),
+    direction_changed = .data$deleted_direction != .data$full_direction
+  )
+
+panel_f_loo_sel <- panel_f_loo_summary |>
+  dplyr::filter(.data$gene %in% panel_f_selected_genes)
+
+panel_f_range <- dplyr::bind_rows(panel_f_loo_agg, panel_f_loo_sel) |>
+  dplyr::group_by(.data$gene, .data$contrast) |>
+  dplyr::summarise(
+    loo_min = min(.data$estimate),
+    loo_max = max(.data$estimate),
+    n_flip = sum(.data$direction_changed),
+    .groups = "drop"
+  )
+
+panel_f_full_plot <- dplyr::bind_rows(panel_f_agg_full, panel_f_full) |>
+  dplyr::filter(.data$gene %in% panel_f_plot_genes) |>
+  dplyr::left_join(panel_f_range, by = c("gene", "contrast")) |>
+  dplyr::left_join(panel_f_influencer, by = c("gene", "contrast")) |>
+  dplyr::mutate(
+    gene = factor(.data$gene, levels = rev(panel_f_plot_genes)),
+    contrast_lab = factor(
+      dplyr::case_when(
+        .data$contrast == "untreated - HCA" ~ "Untreated - HCA",
+        .data$contrast == "untreated - study control" ~ "Untreated - CTRL"
+      ),
+      levels = c("Untreated - HCA", "Untreated - CTRL")
+    ),
+    row_flip = .data$n_flip > 0
+  )
+
+panel_f_points <- dplyr::bind_rows(panel_f_loo_agg, panel_f_loo_sel) |>
+  dplyr::filter(.data$gene %in% panel_f_plot_genes) |>
+  dplyr::mutate(
+    gene = factor(.data$gene, levels = rev(panel_f_plot_genes)),
+    contrast_lab = factor(
+      dplyr::case_when(
+        .data$contrast == "untreated - HCA" ~ "Untreated - HCA",
+        .data$contrast == "untreated - study control" ~ "Untreated - CTRL"
+      ),
+      levels = c("Untreated - HCA", "Untreated - CTRL")
+    )
+  )
+
+saveRDS(
+  list(
+    gene_scores = panel_f_gene_scores,
+    selected_genes = panel_f_selected_genes,
+    full_plot = panel_f_full_plot,
+    loo_points = panel_f_points,
+    family = panel_f_family
+  ),
+  panel_f_effects_rds,
+  compress = "xz"
+)
+
+panel_f_full_plot |>
+  dplyr::select(
+    .data$gene, .data$contrast_lab, .data$full_estimate,
+    .data$loo_min, .data$loo_max, .data$n_flip, .data$influential_deletion
+  )
+```
+
+## F6. Plot
+
+```{r}
+#| label: panel-f-helpers
+
+plot_panel_f_influence <- function(full_df, points_df) {
+  ggplot2::ggplot(full_df, ggplot2::aes(y = .data$gene)) +
+    ggplot2::geom_vline(
+      xintercept = 0,
+      colour = col_mid,
+      linetype = "22",
+      linewidth = 0.35
+    ) +
+    ggplot2::geom_linerange(
+      ggplot2::aes(xmin = .data$loo_min, xmax = .data$loo_max),
+      colour = col_light,
+      linewidth = 1.1
+    ) +
+    ggplot2::geom_linerange(
+      ggplot2::aes(xmin = .data$.lower, xmax = .data$.upper),
+      colour = col_dark,
+      linewidth = 0.45
+    ) +
+    ggplot2::geom_point(
+      data = points_df,
+      ggplot2::aes(x = .data$estimate),
+      shape = 1,
+      size = 1.4,
+      colour = col_mid,
+      stroke = 0.35
+    ) +
+    ggplot2::geom_point(
+      ggplot2::aes(
+        x = .data$full_estimate,
+        fill = .data$row_flip
+      ),
+      shape = 23,
+      size = 2.2,
+      colour = col_dark,
+      stroke = 0.4
+    ) +
+    ggplot2::geom_text(
+      ggplot2::aes(
+        x = .data$loo_max,
+        label = .data$influential_deletion
+      ),
+      hjust = -0.15,
+      size = 1.8,
+      colour = col_mid
+    ) +
+    ggplot2::scale_fill_manual(
+      values = c(`FALSE` = col_dark, `TRUE` = col_treated),
+      guide = "none"
+    ) +
+    ggplot2::facet_grid(cols = ggplot2::vars(.data$contrast_lab)) +
+    ggplot2::coord_cartesian(clip = "off") +
+    ggplot2::labs(
+      x = expression(log[2] ~ "fold change"),
+      y = NULL
+    ) +
+    theme_multipanel +
+    ggplot2::theme(
+      strip.text.x = ggplot2::element_text(size = 6),
+      axis.text.y = ggplot2::element_text(size = 5.5),
+      plot.margin = margin(4, 18, 4, 2)
+    )
+}
+```
+
+```{r}
+#| label: panel-f-draw
+#| fig-width: 7.2
+#| fig-height: 3.6
+#| fig-cap: "Figure 2f. Subject influence on the 16-gene signature. Diamonds and dark lines: full-data Panel-c estimates and intervals. Grey bars: range of leave-one-subject medians. Open points: each single-subject deletion. Purple fill marks at least one direction-category change. Right labels name the most shifting deletion."
+
+panel_f <- plot_panel_f_influence(panel_f_full_plot, panel_f_points)
+panel_f
+
+
+```
+
+## F7. Family-deletion audit
+
+```{r}
+#| label: panel-f-audit
+
+panel_f_family_agg <- panel_f_family |>
+  dplyr::group_by(.data$contrast, .data$deletion) |>
+  dplyr::summarise(
+    estimate = mean(.data$estimate),
+    .groups = "drop"
+  ) |>
+  dplyr::left_join(
+    panel_f_agg_full |>
+      dplyr::select(.data$contrast, full_estimate = .data$full_estimate, .data$full_direction),
+    by = "contrast"
+  ) |>
+  dplyr::mutate(
+    deleted_direction = panel_f_direction(.data$estimate),
+    direction_changed = .data$deleted_direction != .data$full_direction
+  )
+
+list(
+  selected_genes = panel_f_selected_genes,
+  gene_scores = panel_f_gene_scores |>
+    dplyr::select(.data$gene, .data$R_g, .data$any_flip),
+  family_aggregate = panel_f_family_agg,
+  artifact = panel_f_effects_rds
+)
+```
+
+------------------------------------------------------------------------
+
+# Full-figure canvas (scaffold)
+
+Panels d–e are blank frames at production size. They will be replaced in place
+as analyses land; the canvas size stays **≤ 183 × 220 mm**.
+
+```{r}
+#| label: fig2-scaffold-helpers
+
+blank_panel <- function(title, note) {
+  ggplot2::ggplot() +
+    ggplot2::annotate(
+      "rect",
+      xmin = 0, xmax = 1, ymin = 0, ymax = 1,
+      fill = "#F7F7F7",
+      colour = col_light,
+      linewidth = 0.4,
+      linetype = "22"
+    ) +
+    ggplot2::annotate(
+      "text",
+      x = 0.5, y = 0.58,
+      label = title,
+      size = 2.4,
+      fontface = "bold",
+      colour = col_dark
+    ) +
+    ggplot2::annotate(
+      "text",
+      x = 0.5, y = 0.40,
+      label = note,
+      size = 2.0,
+      colour = col_mid
+    ) +
+    ggplot2::coord_cartesian(xlim = c(0, 1), ylim = c(0, 1), expand = FALSE) +
+    ggplot2::theme_void() +
+    ggplot2::theme(plot.margin = margin(4, 4, 4, 4))
+}
+```
+
+```{r}
+#| label: fig2-canvas
+#| fig-width: 7.2
+#| fig-height: 8.7
+#| fig-cap: "Figure 2 canvas (183 × 220 mm). Panels a–c and f populated; d–e awaiting gated analyses."
+
+panel_d <- blank_panel(
+  "d  density archetypes",
+  "VECTOR DENSITIES AFTER c + f"
+)
+panel_e <- blank_panel(
+  "e  healthy-prediction percentiles",
+  "AGE + CELL-ALIGNMENT RERUN NEEDED"
+)
+
+fig2 <- (
+  patchwork::wrap_elements(full = panel_a)
+) / (
+  patchwork::wrap_elements(full = panel_b) | panel_c
+) / (
+  panel_d
+) / (
+  panel_e | patchwork::wrap_elements(full = panel_f)
+) +
+  patchwork::plot_layout(heights = c(1.05, 1.55, 1.05, 1.45)) &
+  ggplot2::theme(plot.margin = margin(1, 1, 1, 1))
+
+fig2
+
+fig2_pdf <- save_panel_pdf(
+  fig2,
+  "Fig2_SAVI_manuscript_canvas.pdf",
+  width_mm = params$fig_width_mm,
+  height_mm = params$fig_height_mm
+)
+```
+
+```{r}
+#| label: output-paths
+tibble::tibble(
+  artifact = c("fig2_canvas", "fig2f_panel"),
+  path = c(fig2_pdf, panel_f_pdf)
+)
+```
+
+------------------------------------------------------------------------
+
+# Next panels (not drawn yet)
+
+| Panel | Gate |
+|---|---|
+| d | Gene selection after c + f; native-vector comprehensive / predictive dens |
+| e | Corrected ages; metadata-conditioned percentiles for all 17 libraries |
+
+------------------------------------------------------------------------
+
+# Reviewer-facing self-review
+
+| Dimension | Review question | Status and evidence |
+|---|---|---|
+| Contribution | Does Panel b add information beyond the original study control? | **Pass with boundary.** It evaluates two external HCA targets, but calibration correctly prevents an unqualified disease claim. |
+| Writing clarity | Can the analyses be reproduced from the report? | **Pass.** Panel b records the 23- and 26-label maps, 15-part likelihood, target weights, draw pairing, ROPE and FDR family. Panel c records its cohort estimand, repeat-library rule, subject resampling, HCA standardisation and multiplicity families. |
+| Experimental strength | Is the external baseline validated against an internal healthy benchmark? | **Pass.** Study-control calibration is reported before disease contrasts; 4/7 comprehensive and 5/7 personalised calibration discoveries are retained as a failure mode. |
+| Evaluation completeness | Are important design choices stress-tested? | **Needs evidence.** The 15-part harmonisation is biologically explicit, but the previous coarse residual model should remain a supplementary resolution-sensitivity analysis. Panel c still has only four paired subjects and no joint HCA gene model. |
+| Method soundness | Are compositional mass, biological units and cross-model uncertainty handled correctly? | **Pass within scope.** Panel b closes counts over 15 parts and uses 12 independent subjects. Panel c collapses repeat libraries, couples all genes to the same subject resample, and independently samples separate HCA gene posteriors without pretending they form a joint posterior. |
+
+## Panel-b claim–evidence map
+
+| Claim | Evidence | Status |
+|---|---|---|
+| SAVI and HCA are compared on a shared biological estimand. | Explicit coverage checks map all 23 SAVI labels and all 26 HCA L3 labels to the same 15-part composition. | Supported |
+| The comprehensive baseline equal-averages observed age/sex profiles rather than donor-weighting the HCA population. | Each observed age-decade × sex profile receives weight `1 / n_profiles` before response-scale averaging within draws. | Supported |
+| Demographic personalisation does not remove reference-domain shift in this case. | Calibration yields 4/7 discoveries for comprehensive HCA and 5/7 for personalised HCA. | Supported |
+| HCA contrasts alone establish SAVI disease effects. | Calibration fails; HCA contrasts are therefore labelled sensitivity analyses and the study-control contrast remains primary. | Not supported; claim explicitly rejected |
+
+## Panel-c claim–evidence map
+
+| Claim | Evidence | Status |
+|---|---|---|
+| The SAVI uncertainty unit is the biological subject. | Repeat libraries are collapsed within subject×state, and every Bayesian-bootstrap replicate uses the same subject weights for all 16 genes. | Supported |
+| The signature interval represents uncertainty across subjects, not variability across a fixed gene list. | The 16-gene mean is recalculated inside each subject-coupled Bayesian-bootstrap replicate; genes are not treated as exchangeable bootstrap units. | Supported |
+| Panel c uses the same comprehensive demographic target as Panel b. | HCA log-μ draws use Panel b's observed healthy-HCA age×sex profiles and exact target weights, with ethnicity equal-standardised and dataset random effects excluded. | Supported |
+| The untreated − HCA interval is a fully Bayesian joint-model interval. | The SAVI side is a Bayesian bootstrap and the 16 HCA genes come from separate fits; the code independently pairs these sources and labels the interval modular hybrid. | Not supported; claim explicitly rejected |
+| A treatment-associated attenuation is present in the paired observations. | The four-patient paired aggregate interval excludes zero, while the report explicitly limits the claim to these four subjects. | Supported with a severe sample-size boundary |

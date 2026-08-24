@@ -1,0 +1,563 @@
+---
+title: "TIMES HCC posteriorHCA proxy - planning report"
+subtitle: "Healthy liver NK distance as an outcome-free recurrence score"
+date: today
+date-format: "DD MMM YYYY"
+title-block-banner: true
+author:
+  - name: Chen Zhan
+    orcid: 0000-0002-4794-8339
+    email: chen.zhan@adelaide.edu.au
+    affiliation:
+      - id: sgc
+        name: SAiGENCI, The University of Adelaide
+format:
+  html:
+    theme: minty
+    df-print: paged
+    code-line-numbers: true
+    embed-resources: true
+    code-fold: true
+    code-fold-default: true
+    toc: true
+    toc-location: left
+    toc-title: "Contents"
+knitr:
+  opts_chunk:
+    message: false
+    warning: false
+editor: source
+abstract: |
+  Planning document for a posteriorHCA case study of the TIMES hepatocellular
+  carcinoma spatial multi-omics paper (Jia *et al.*, *Nature* 2025). The case
+  study tests whether a universal healthy liver NK reference can act as an
+  outcome-free proxy for recurrence: non-REC HCC should remain closer to healthy
+  NK expression, whereas REC HCC should be more atlas-discordant in invasive
+  front (IF) and tumour centre (TC). Direct REC/non-REC edgeR contrasts are a
+  positive control, and supplied TIMES validation scores are a descriptive
+  benchmark. External validation is required before claiming equal power.
+params:
+  case_dir: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC"
+  target_cell_type: "nk"
+  model_store_root: "/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/HPC_posterior/NEW_CELL_TYPE"
+  pseudobulk_h5ad: "/home/a1237163/lab/Mangiola_ImmuneAtlas/zenodo/pseudobulk_se.h5ad"
+  paper_doi: "10.1038/s41586-025-08668-x"
+---
+
+# Introduction
+
+Jia *et al.* (2025) developed the **Tumour Immune Microenvironment Spatial (TIMES)**
+score to predict HCC recurrence after resection. The score integrates spatial
+expression of five biomarkers — **SPON2, ZFP36L2, ZFP36, VIM, HLA-DRB1** — in
+multiplex immunohistochemistry (mIHC) tiles at the **invasive front (IF)** and
+**tumour centre (TC)**. The paper emphasises that predictive power arises from
+**spatial integration**, not bulk expression alone (TCGA bulk TC showed no significant
+REC vs non-REC separation for these genes).
+
+**Primary publication:** Jia, G., *et al.* (2025). Spatial immune scoring system
+predicts hepatocellular carcinoma recurrence. *Nature* **640**, 1029–1040.
+<https://doi.org/10.1038/s41586-025-08668-x>
+
+**Companion SAVI case study:** `dev/SAVI/SAVI_case_study_universal_baseline.qmd`
+and `dev/SAVI/mu_test_report.qmd` provide the normalization and healthy-baseline
+machinery. The inferential target differs: SAVI has a disease-versus-healthy
+claim, while this study asks whether healthy-reference distance can proxy a
+recurrence claim within HCC.
+
+**Scope of this document:**
+
+| In scope | Out of scope |
+|---|---|
+| Define RQs, hierarchy and analysis plan | TIMES XGBoost score reproduction |
+| Catalogue TIMES biomarkers + Ensembl mapping | mIHC tile-level spatial modelling |
+| Download registry + `prepare_data.R` pseudobulk pipeline | Full survival/classification performance reproduction |
+| Code Ocean processed GeoMx extraction + validation | Controlled-access raw-data analysis until access is granted |
+| IF/TC patient-pseudobulk recurrence contrasts | Treating pseudobulk as equivalent to the spatial TIMES score |
+| Primary healthy-distance recurrence proxy | Formal equivalence claims from the current small cohort |
+| Data access documentation | sccomp composition (unless NK abundance needed later) |
+
+------------------------------------------------------------------------
+
+# Research questions
+
+Patient pseudobulks are split into **IF-REC**, **IF-non-REC**, **TC-REC** and
+**TC-non-REC**.
+
+## RQ1 — Primary posteriorHCA proxy
+
+> Is REC HCC farther from the comprehensive healthy liver NK reference than
+> non-REC HCC in IF and TC?
+
+**Score:** For each atlas-covered gene,
+`D = abs(cohort log(mu) - healthy mean log(mu)) / healthy grand-mean SD`.
+Average `D` across genes for compartment and patient scores. Recurrence labels
+are not used to construct the score.
+
+**Success pattern:** REC has larger `D` than non-REC across genes and
+compartments; the combined posterior probability
+`P(D_REC > D_non-REC)` exceeds 0.95; patient ordering survives
+leave-one-gene-out analysis.
+
+## RQ2 — Positive control against paper direction
+
+> Does the available GeoMx subset retain the paper's `non-REC > REC` expression
+> direction within IF and TC?
+
+**Test:** Patient-level edgeR QL contrasts, `non-REC - REC`, using TMMwsp
+offsets. This HCC-only fit retains all five TIMES genes, including `HLA-DRB1`.
+
+**Ground truth:** Paper CodeOcean DE results specify `non-REC > REC` in both IF
+and TC for all five biomarkers.
+
+## RQ3 — Discrimination and benchmark
+
+> Does the outcome-free posteriorHCA proxy rank REC above non-REC patients, and
+> how does its descriptive AUC compare with supplied TIMES validation scores?
+
+**Evaluation:** IF, TC and combined patient AUC; exact rank p-value;
+leave-one-gene-out robustness; descriptive comparison to the CodeOcean
+TIMES-score validation subset. Different sample sizes and modalities preclude a
+formal equivalence or non-inferiority claim.
+
+## RQ4 — Spatial-omics platform robustness
+
+> Do **Visium TC spot pseudobulk** (all cell types in TC) and **GeoMx NK-enriched
+> TC ROIs** yield **concordant** comparisons to the healthy NK baseline for the
+> same patients where both platforms exist?
+
+**Note:** Atlas reference is **healthy liver NK cells**; Visium TC pseudobulk is
+**mixed-cell**. Interpretation treats Visium as "TC tissue programme" and GeoMx as
+"NK-enriched ROI". This differs from SAVI, where the study material was PBMC and
+the appropriate reference tissue was blood.
+
+------------------------------------------------------------------------
+
+# Study design overview
+
+```{mermaid}
+flowchart TB
+  subgraph paper [Jia et al. 2025 TIMES]
+    V[10x Visium 17 pts] --> TC[TC compartment spots]
+    G[GeoMx DSP 8 tissues] --> NK[NK-enriched ROIs in TC]
+    TC --> PB1[PatientBOARD TC pseudobulk]
+    NK --> PB2[patient x TC pseudobulk]
+  end
+  subgraph atlas [posteriorHCA Immune Atlas]
+    NKref[V1_nk brms models] --> BL[Universal healthy baseline]
+  end
+  PB1 --> PROXY[Primary: healthy-distance proxy]
+  PB2 --> PROXY
+  BL --> PROXY
+  PROXY --> EVAL[Evaluate REC farther than non-REC]
+  PB1 --> REC[Positive control: direct REC contrast]
+  PB2 --> REC
+  REC --> GT[Compare with paper direction]
+```
+
+------------------------------------------------------------------------
+
+# TIMES biomarkers
+
+## Selection path (from paper)
+
+1. **GeoMx DSP** whole-transcriptome atlas on **CD3⁻CD57⁺ NK-enriched** ROIs across
+   **AS, IF, TC** in 8 discovery HCC tissues → **241 DEGs** (REC vs non-REC).
+2. Filter to **23 genes** also NK-enriched in independent scRNA-seq (Sun *et al.*,
+   *Cell* 2021, ref. 28).
+3. GLM on **IF + TC** counts (AS excluded as normal tissue) → **5 top predictors**:
+   SPON2, ZFP36L2, ZFP36, VIM, HLA-DRB1 (Supplementary Table 12).
+4. **XGBoost** on mIHC protein quantification in **61 patients** (IF + TC tiles) →
+   TIMES score (AUC > 0.87 per biomarker on validation split).
+
+## Biomarker table
+
+```{r}
+#| label: setup-lib
+.libPaths(c(
+  "/scratchdata1/users/a1237163/local/RLibs",
+  "/home/a1237163/miniconda3/envs/R_env/lib/R/library"
+))
+```
+
+```{r}
+#| label: biomarkers
+library(tibble)
+library(dplyr)
+library(readr)
+library(AnnotationDbi)
+library(org.Hs.eg.db)
+
+data_dir <- file.path(params$case_dir, "data")
+biomarkers <- read_csv(file.path(data_dir, "times_biomarkers.csv"), show_col_types = FALSE) |>
+  mutate(
+    .feature = AnnotationDbi::mapIds(
+      org.Hs.eg.db::org.Hs.eg.db,
+      keys = gene,
+      column = "ENSEMBL",
+      keytype = "SYMBOL",
+      multiVals = "first"
+    ),
+    hla_note = if_else(gene == "HLA-DRB1", "MHC II; may map to multiple Ensembl paralogs — verify in count matrix", NA_character_)
+  )
+
+biomarkers
+```
+
+```{r}
+#| label: biomarker-summary
+tibble(
+  n_times_biomarkers = nrow(biomarkers),
+  mapped_to_ensembl = sum(!is.na(biomarkers$.feature)),
+  primary_gene = "SPON2",
+  atlas_cell_type = params$target_cell_type
+)
+```
+
+### Gene-level notes
+
+| Gene | Symbol | Role in TIMES / NK biology |
+|------|--------|----------------------------|
+| SPON2 | Spondin-2 | Top predictor; NK migration to IF; IFN-γ; validated in *Spon2* NK-KO mice |
+| ZFP36L2 | ZFP36L2 | RNA-binding; stress-response programme in NK DEG set |
+| ZFP36 | TTP | mRNA destabilisation; inflammatory response |
+| VIM | Vimentin | Mesenchymal/activation marker in spatial mIHC |
+| HLA-DRB1 | HLA-DRB1 | Antigen presentation; NK-enriched spatial ROIs |
+
+------------------------------------------------------------------------
+
+# Tissue compartments and pseudobulk unit
+
+Paper defines three compartments on FFPE sections:
+
+| Code | Name | Cancer association | Use in this case study |
+|------|------|--------------------|------------------------|
+| TC | Tumour centre | Core tumour | Co-primary recurrence compartment |
+| IF | Invasive front | Tumour–stroma interface; central to TIMES biology | Co-primary recurrence compartment |
+| AS | Adjacent stroma | Peri-tumour tissue | Not used in the primary recurrence tests |
+
+**Primary pseudobulk unit:** one column per **`patient_id × compartment`** for
+IF and TC, summing raw counts or rounded processed ROI values:
+
+- **Visium:** all spots annotated as IF or TC within each patient section.
+- **GeoMx:** all NK-enriched ROIs within IF or TC.
+
+For the author Code Ocean processed GeoMx data, we keep the **whole ROI matrix**
+with `compartment = AS / IF / TC` and `cell_context` metadata. IF and TC are
+analysed separately for recurrence. Healthy liver NK comparisons are secondary
+context for the same four recurrence-by-compartment cohorts.
+
+Metadata retained: `patient_id`, `recurrence` (REC / non-REC), `compartment`,
+`platform`, `cell_context`, `cohort = discovery`.
+
+------------------------------------------------------------------------
+
+# Data sources and download status
+
+```{r}
+#| label: data-registry
+registry <- readRDS(file.path(data_dir, "data_registry.rds"))
+manifest <- readRDS(file.path(data_dir, "download_manifest.rds"))
+
+registry
+```
+
+```{r}
+#| label: download-manifest
+manifest
+```
+
+### Access notes (verified Jun 2025)
+
+| Deposit | Content | Access |
+|---------|---------|--------|
+| **OMIX005738** | GeoMx WTA/CTA xlsx + ROI labels | Controlled; files **Unavailable** pending Chinese human genetic resource registration |
+| **HRA006579** | 10x Visium raw/fastq | Controlled-access GSA-Human; request via DAC |
+| **CNP0000650** | In-house scRNA-seq | CNGBdb project; controlled |
+| **OMIX005736** | LC-MS/MS proteomics | Controlled (proteomics validation; optional) |
+| **Code Ocean** | Author capsule `3972922/tree/v1`; processed analysis inputs | Exported locally under `dev/Jie_HCC/codeocean/` |
+| **Nature supplementary** | Tables 1–38, spot/compartment annotations | Manual (Springer static host blocked from HPC DNS at planning time) |
+
+**Action required for raw data:** Request CNCB DAC access (submitter: Cheng Sun,
+`charless@ustc.edu.cn`; BioProject **PRJCA023**). Place approved files under
+`data/raw/` subfolders listed in `prepare_data.R`, then re-run the script.
+
+**Code Ocean status:** The refreshed author capsule now includes processed RData
+inputs under `codeocean/data/Input_1_Spatial_transcriptomics_analysis/`. These are
+not raw Visium FASTQs or raw Space Ranger matrices, but they do contain the
+processed GeoMx DSP ROI expression matrix used by the paper's spatial
+transcriptomics analyses, including AS, IF and TC compartments.
+
+**Visium status:** I do not see extractable Visium count matrices, Space Ranger
+outputs, spot coordinates, or spot-level annotations in the Code Ocean capsule.
+The Visium branch therefore remains dependent on `HRA006579` / author-provided
+spot annotation files.
+
+------------------------------------------------------------------------
+
+# Data preparation pipeline
+
+Run the raw-data preparation scaffold from project root with conda **`R_env`**:
+
+```bash
+conda activate R_env
+cd /home/a1237163/lab/chen/posteriorHCA
+Rscript dev/Jie_HCC/data/prepare_data.R
+```
+
+```{r}
+#| label: run-prepare-data
+#| eval: false
+system2("Rscript", file.path(params$case_dir, "data", "prepare_data.R"))
+```
+
+Run the Code Ocean processed-data extractor:
+
+```bash
+conda activate R_env
+cd /home/a1237163/lab/chen/posteriorHCA
+Rscript dev/Jie_HCC/data/extract_codeocean_processed_data.R
+```
+
+```{r}
+#| label: run-codeocean-extract
+#| eval: false
+system2("Rscript", file.path(params$case_dir, "data", "extract_codeocean_processed_data.R"))
+```
+
+### Expected directory layout after download
+
+```
+dev/Jie_HCC/data/
+├── raw/
+│   ├── omix005738/
+│   │   ├── OMIX005738-01_DSP_WTA.xlsx
+│   │   └── OMIX005738-03_DSP_labels.xlsx
+│   └── hra006579/
+│       ├── visium_spaceranger/<sample>/filtered_feature_bc_matrix/
+│       └── spot_compartment_annotations.csv   # from supplementary / authors
+├── processed/
+│   ├── codeocean_GeoMx_all_gene_expression_matrix.csv
+│   ├── codeocean_GeoMx_all_roi_metadata.csv
+│   ├── codeocean_GeoMx_all_segments_long_all_genes.csv
+│   ├── codeocean_GeoMx_all_patient_compartment_summary_all_genes.csv
+│   ├── codeocean_TIMES_GeoMx_TC_segments.csv
+│   ├── codeocean_TIMES_GeoMx_TC_patient_summary.csv
+│   ├── codeocean_TIMES_GeoMx_TC_validation.csv
+│   ├── codeocean_GeoMx_TC_gene_expression_matrix.csv
+│   ├── codeocean_GeoMx_TC_roi_metadata.csv
+│   ├── codeocean_GeoMx_TC_segments_long_all_genes.csv
+│   ├── codeocean_GeoMx_TC_patient_summary_all_genes.csv
+│   ├── TIMES_CodeOcean_GeoMx_TC_processed.rds
+│   └── TIMES_GeoMx_TC_pseudobulk.rds          # after raw files present
+├── times_biomarkers.rds
+├── data_registry.rds
+├── download_manifest.rds
+└── processing_plan.rds
+```
+
+### Code Ocean processed GeoMx extraction
+
+The author Code Ocean file
+`codeocean/data/Input_1_Spatial_transcriptomics_analysis/transcriptome_differential_analysis_input_1.RData`
+contains:
+
+- `data_gene_df_ed`: processed GeoMx gene-by-ROI matrix (`18,677 × 93`).
+- `data_meta_df_ed`: ROI metadata with sample id, label, age, sex, relapse and
+  death fields.
+- `NKatStroma_indx`, `NKatBorder_indx`, `NKatTumor_indx`: author indices for
+  CD57-rich NK-enriched ROIs in AS, IF and TC.
+
+`data/extract_codeocean_processed_data.R` extracts the **complete GeoMx ROI gene
+expression matrix** (`18,677 genes × 93 ROIs`), classifies ROIs into **AS / IF /
+TC** from the author labels, joins recurrence metadata, and writes both
+matrix-shaped and tidy summaries under `data/processed/`. The previous TC
+NK-enriched subset and the five TIMES biomarkers are retained as validation and
+analysis convenience subsets, not as the only extracted data.
+
+Main full-matrix outputs:
+
+- `codeocean_GeoMx_all_gene_expression_matrix.csv`: genes × all GeoMx ROIs.
+- `codeocean_GeoMx_all_roi_metadata.csv`: all ROI metadata with `compartment =
+  AS / IF / TC`.
+- `codeocean_GeoMx_all_segments_long_all_genes.csv`: tidy gene × ROI values for
+  all compartments.
+- `codeocean_GeoMx_all_patient_compartment_summary_all_genes.csv`: per-patient,
+  per-compartment summaries for all genes.
+- `TIMES_CodeOcean_GeoMx_TC_processed.rds`: compact R object containing all of
+  the above plus TC and TIMES subsets.
+
+TC convenience outputs:
+
+- `codeocean_GeoMx_TC_gene_expression_matrix.csv`: genes × author NK-enriched TC ROIs.
+- `codeocean_GeoMx_TC_roi_metadata.csv`
+- `codeocean_GeoMx_TC_segments_long_all_genes.csv`
+- `codeocean_GeoMx_TC_patient_summary_all_genes.csv`
+
+TIMES-specific outputs:
+
+- `codeocean_TIMES_GeoMx_TC_segments.csv`
+- `codeocean_TIMES_GeoMx_TC_patient_summary.csv`
+- `codeocean_TIMES_GeoMx_TC_validation.csv`
+
+```{r}
+#| label: codeocean-full-matrix-summary
+matrix_path <- file.path(data_dir, "processed", "codeocean_GeoMx_all_gene_expression_matrix.csv")
+roi_meta_path <- file.path(data_dir, "processed", "codeocean_GeoMx_all_roi_metadata.csv")
+if (file.exists(matrix_path) && file.exists(roi_meta_path)) {
+  full_matrix <- read_csv(matrix_path, show_col_types = FALSE)
+  roi_meta <- read_csv(roi_meta_path, show_col_types = FALSE)
+  expression_values <- as.matrix(full_matrix[, -1, drop = FALSE])
+  roi_columns_with_values <- colnames(expression_values)[colSums(!is.na(expression_values)) > 0]
+  tibble(
+    n_genes = nrow(full_matrix),
+    n_rois = ncol(full_matrix) - 1,
+    n_patients = n_distinct(roi_meta$patient_id),
+    n_patients_with_any_gene_value = n_distinct(
+      roi_meta$patient_id[roi_meta$author_column %in% roi_columns_with_values]
+    ),
+    compartment_counts = paste(names(table(roi_meta$compartment)), table(roi_meta$compartment), sep = "=", collapse = "; ")
+  )
+} else {
+  tibble(note = "Run data/extract_codeocean_processed_data.R after exporting Code Ocean data.")
+}
+```
+
+```{r}
+#| label: codeocean-validation
+validation_path <- file.path(data_dir, "processed", "codeocean_TIMES_GeoMx_TC_validation.csv")
+if (file.exists(validation_path)) {
+  read_csv(validation_path, show_col_types = FALSE)
+} else {
+  tibble(note = "Run data/extract_codeocean_processed_data.R after exporting Code Ocean data.")
+}
+```
+
+```{r}
+#| label: codeocean-patient-summary
+patient_summary_path <- file.path(data_dir, "processed", "codeocean_TIMES_GeoMx_TC_patient_summary.csv")
+if (file.exists(patient_summary_path)) {
+  read_csv(patient_summary_path, show_col_types = FALSE) |>
+    dplyr::filter(n_non_missing > 0) |>
+    dplyr::select(gene, .feature, patient_id, recurrence, n_non_missing, value_sum, value_mean)
+} else {
+  tibble(note = "No Code Ocean patient summary extracted yet.")
+}
+```
+
+**Validation note:** the complete Code Ocean GeoMx matrix has **18,677 genes ×
+93 ROIs** with **26 AS**, **26 IF** and **41 TC** ROIs. The author NK-enriched TC
+subset has **18,677 genes × 19 TC ROIs**, and all **6** patients have some
+gene-level TC values. However, the five TIMES biomarkers are sparse in this
+processed matrix: only **7 of 19** NK-enriched TC ROIs contain non-missing values
+for those genes, corresponding to **2 of 6** patients (`A24`, non-REC; `A29`,
+REC). Therefore, the full matrix is suitable for extracting additional genes and
+checking broader GeoMx AS/IF/TC signal, while TIMES-only recurrence testing
+remains underpowered. The values are treated as author-processed GeoMx
+transcript-read measurements, not raw Visium counts.
+
+### Processing plan snapshot
+
+```{r}
+#| label: processing-plan
+plan_path <- file.path(data_dir, "processing_plan.rds")
+if (file.exists(plan_path)) {
+  readRDS(plan_path)
+} else {
+  tibble(note = "Run prepare_data.R to create processing_plan.rds")
+}
+```
+
+------------------------------------------------------------------------
+
+# posteriorHCA integration workflow
+
+Following `SAVI_case_study_universal_baseline.qmd`:
+
+1. **Build IF/TC patient pseudobulk** from the complete CodeOcean GeoMx matrix,
+   restricting to author-defined NK-enriched ROIs and rounding values as in the
+   paper's DESeq2 capsule.
+2. **Map gene symbols → Ensembl**; intersect with `V1_nk` `targets` store.
+3. **Merge** with healthy reference pseudobulk (`offset == 0`) from Zenodo h5ad-backed
+   `pseudobulk_sample`, then run `tidybulk::scale_abundance(method = "TMMwsp",
+   reference_sample = reference)` and set `offset = log(1 / multiplier)` exactly
+   as in SAVI.
+4. **Four-cohort estimates:** extract cohort **NB μ** at offset 0 and QL Wald SE
+   for IF-REC, IF-non-REC, TC-REC and TC-non-REC.
+5. **Healthy baseline:** load compressed `brms` fits (`estimates_chunk`) or precomputed
+   `gene_baseline_draws_universal.rds`; **`posterior_linpred(transform = FALSE)`** with
+   universal marginalisation grid.
+6. **Primary proxy:** standardize absolute distance from the healthy grand mean,
+   average across genes, propagate posterior and QL uncertainty, and test
+   `REC distance > non-REC distance`.
+7. **Patient evaluation:** compute IF, TC and combined outcome-free scores, AUC,
+   exact rank tests and leave-one-gene-out sensitivity.
+8. **Positive control:** test one-sided `non-REC > REC` QL contrasts separately
+   in IF and TC for all five genes.
+9. **Benchmark:** compare descriptively with supplied TIMES validation-score
+   AUC, without claiming formal equivalence.
+
+```{r}
+#| label: model-store-preview
+library(targets)
+library(stringr)
+
+model_path <- file.path(params$model_store_root, paste0("V1_", params$target_cell_type))
+
+if (dir.exists(file.path(model_path, "_targets"))) {
+  model_meta <- tar_meta(
+    starts_with("estimates_chunk_"),
+    store = file.path(model_path, "_targets")
+  ) |>
+    filter(type == "branch") |>
+    mutate(
+      .feature = str_extract(warnings, "(?<=Gene:___)ENSG\\d+(?=___)")
+    )
+
+  tibble(
+    atlas_cell_type = params$target_cell_type,
+    n_genes_in_store = n_distinct(model_meta$.feature),
+    n_biomarkers_in_store = sum(biomarkers$.feature %in% model_meta$.feature, na.rm = TRUE),
+    n_biomarkers_mapped = sum(!is.na(biomarkers$.feature))
+  )
+} else {
+  tibble(note = glue("Model store not found at {model_path}"))
+}
+```
+
+------------------------------------------------------------------------
+
+# Expected outcomes and falsifiable predictions
+
+| Prediction | If true | If false |
+|------------|---------|----------|
+| REC is farther from healthy than non-REC | Positive proxy margins across IF/TC and combined posterior probability >0.95 | Proxy does not recover recurrence ordering |
+| Non-REC is baseline-compatible | Mean distance below one healthy SD | non-REC is equally atlas-discordant |
+| Proxy is not driven by one biomarker | Leave-one-gene-out patient ordering remains intact | Ordering collapses when one gene is removed |
+| Available GeoMx retains paper biology | Positive non-REC vs REC effects in IF and TC | Positive control directions disagree |
+| Proxy has competitive descriptive discrimination | Patient AUC approaches supplied TIMES benchmark | Healthy reference adds little recurrence information |
+
+------------------------------------------------------------------------
+
+# Timeline and deliverables
+
+| Step | Deliverable | Status |
+|------|-------------|--------|
+| 1 | Planning qmd (this document) | Done |
+| 2 | `prepare_data.R` + biomarker/registry RDS | Done |
+| 3 | Code Ocean processed GeoMx input export | Done |
+| 4 | Code Ocean IF/TC biomarker extraction + validation | Done — sparse, 5 patient-compartment samples |
+| 5 | CNCB raw Visium / GeoMx download | **Blocked** — controlled access |
+| 6 | Raw-count IF/TC pseudobulk RDS | Pending raw data |
+| 7 | `Jie_HCC_case_study_universal_baseline.qmd` (analysis) | Done |
+| 8 | Healthy-proximity proxy, positive control and benchmark | Done |
+
+------------------------------------------------------------------------
+
+# References
+
+- Jia, G., *et al.* (2025). Spatial immune scoring system predicts hepatocellular
+  carcinoma recurrence. *Nature* **640**, 1029–1040. doi: [`10.1038/s41586-025-08668-x`](https://doi.org/10.1038/s41586-025-08668-x)
+- Sun, Y., *et al.* (2021). Single-cell landscape of the ecosystem in early-relapse
+  hepatocellular carcinoma. *Cell* **184**, 404–421.e16. (scRNA NK validation, ref. 28)
+- de Cevins, C., *et al.* (2023). SAVI monocyte signature — template case study in
+  `dev/SAVI/`

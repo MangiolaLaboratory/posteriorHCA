@@ -1,0 +1,2197 @@
+---
+title: "TIMES HCC case study - posteriorHCA healthy-proximity proxy"
+subtitle: "Can distance from healthy liver NK recover recurrence biology?"
+date: today
+date-format: "DD MMM YYYY"
+title-block-banner: true
+author:
+  - name: Chen Zhan
+    orcid: 0000-0002-4794-8339
+    email: chen.zhan@adelaide.edu.au
+    affiliation:
+      - id: sgc
+        name: SAiGENCI, The University of Adelaide
+format:
+  html:
+    theme: minty
+    df-print: paged
+    code-line-numbers: true
+    embed-resources: true
+    code-fold: true
+    code-fold-default: true
+    toc: true
+    toc-location: left
+    toc-title: "Contents"
+knitr:
+  opts_chunk:
+    message: false
+    warning: false
+editor: source
+abstract: |
+  This case study evaluates whether posteriorHCA can replace a direct
+  recurrence-trained comparator with a universal healthy reference. We define
+  an outcome-free healthy-proximity score from the absolute standardized
+  distance between HCC NK-enriched expression and the comprehensive healthy
+  liver NK grand-mean posterior. The proxy hypothesis is that non-REC HCC
+  remains healthy-like while REC HCC is more atlas-discordant in both invasive
+  front (IF) and tumour centre (TC). Direct edgeR non-REC versus REC contrasts
+  are retained as a positive control, and the paper's TIMES validation scores
+  provide a descriptive benchmark. The available GeoMx subset is very small,
+  so this is proof of concept rather than an equivalence-power claim.
+params:
+  case_dir: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC"
+  target_cell_type: "nk"
+  model_store_root: "/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/HPC_posterior/NEW_CELL_TYPE"
+  compartments:
+    - "IF"
+    - "TC"
+  baseline_tissue_group: "liver"
+  n_posterior_draws: 400
+  refresh_baseline: false
+  pseudobulk_h5ad: "/home/a1237163/lab/Mangiola_ImmuneAtlas/zenodo/pseudobulk_se.h5ad"
+  baseline_draws_rds: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/Jie_HCC_V1_nk_comprehensive_liver_baseline_log_mu_draws.rds"
+  paper_ground_truth_csv: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/Jie_HCC_paper_ground_truth_TIMES_biomarkers.csv"
+  cohort_results_csv: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/Jie_HCC_four_cohort_comprehensive_liver_baseline_mu_tests.csv"
+  recurrence_results_csv: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/Jie_HCC_IF_TC_nonREC_vs_REC_edger_tests.csv"
+  patient_pseudobulk_csv: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/Jie_HCC_IF_TC_patient_pseudobulk_metadata.csv"
+  normalization_csv: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/Jie_HCC_IF_TC_TMMwsp_offsets.csv"
+  ground_truth_comparison_csv: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/Jie_HCC_TIMES_recurrence_ground_truth_and_healthy_context.csv"
+  healthy_proxy_gene_csv: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/Jie_HCC_healthy_proximity_proxy_gene_compartment.csv"
+  healthy_proxy_summary_csv: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/Jie_HCC_healthy_proximity_proxy_posterior_summary.csv"
+  healthy_proxy_patient_csv: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/Jie_HCC_healthy_proximity_proxy_patient_scores.csv"
+  healthy_proxy_performance_csv: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/Jie_HCC_healthy_proximity_proxy_performance.csv"
+  paper_benchmark_csv: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/Jie_HCC_TIMES_score_benchmark.csv"
+---
+
+# Introduction
+
+Jia *et al.* (2025) built the TIMES score from spatial biomarker expression in
+both the **invasive front (IF)** and **tumour centre (TC)** to predict recurrence
+after HCC resection. The original claim is prognostic **within HCC**:
+non-recurrent (non-REC) versus recurrent (REC) disease. Healthy tissue is not
+part of the TIMES training contrast or its published ground truth.
+
+The case-study hierarchy is:
+
+| Role | Question | Interpretation |
+|---|---|---|
+| **Primary posteriorHCA proxy** | Is REC farther from healthy liver NK than non-REC in IF and TC? | Tests whether a universal healthy reference can recover recurrence ordering without training on recurrence |
+| **Positive control** | Is each biomarker higher in non-REC than REC within IF and TC? | Confirms that the available GeoMx subset retains the paper's expression direction |
+| **Paper benchmark** | How does proxy discrimination compare descriptively with the supplied TIMES validation scores? | Assesses promise, not formal equivalence, because cohorts and modalities differ |
+
+The proxy is deliberately simple and outcome-free. For patient or cohort \(i\)
+and gene \(g\), healthy distance is
+
+$$
+D_{ig} =
+\frac{\left|\log\mu_{ig} - E(\log\mu_{g,\mathrm{healthy}})\right|}
+     {SD(\log\mu_{g,\mathrm{healthy}})}.
+$$
+
+The multi-gene proxy score is the mean \(D_{ig}\) across atlas-covered TIMES
+genes. Higher values indicate greater departure from healthy liver NK. The
+case-study prediction is **REC distance > non-REC distance**. This prediction
+is not stated in the original paper and must ultimately be validated in an
+independent cohort.
+
+The appropriate atlas tissue is **healthy liver NK**, not blood NK. The
+`V1_nk` model includes `tissue_groups = "liver"`. This reference is used as the
+fixed origin of the proxy; recurrence labels are used only after scoring, for
+evaluation.
+
+The statistical workflow below now matches SAVI: patient pseudobulk, TMMwsp
+offsets anchored to the atlas training reference, edgeR NB group means, QL Wald
+standard errors, Welch tests and empirical posterior ranks. The remaining data
+limitation is upstream: the public CodeOcean matrix contains author-processed
+GeoMx transcript-read-like values. We follow the paper capsule and round them
+before count modelling, but controlled-access raw GeoMx counts remain preferable
+for a final analysis.
+
+------------------------------------------------------------------------
+
+# Library setup
+
+```{r}
+#| label: setup
+
+suppressPackageStartupMessages({
+  library(tibble)
+  library(tidyr)
+  library(dplyr)
+  library(readr)
+  library(purrr)
+  library(ggplot2)
+  library(forcats)
+  library(glue)
+  library(stringr)
+  library(scales)
+  library(targets)
+  library(brms)
+  library(posterior)
+  library(edgeR)
+  library(SummarizedExperiment)
+  library(S4Vectors)
+  library(AnnotationDbi)
+  library(org.Hs.eg.db)
+})
+
+theme_set(theme_minimal(base_size = 11))
+
+data_dir <- file.path(params$case_dir, "data")
+processed_dir <- file.path(data_dir, "processed")
+dir.create(processed_dir, recursive = TRUE, showWarnings = FALSE)
+
+target_compartments <- unlist(params$compartments)
+```
+
+------------------------------------------------------------------------
+
+# TIMES biomarkers and NK model coverage
+
+```{r}
+#| label: biomarkers
+
+times_biomarkers <- readr::read_csv(
+  file.path(data_dir, "times_biomarkers.csv"),
+  show_col_types = FALSE
+) |>
+  dplyr::select(gene, role, selection_step, notes, .feature)
+
+times_biomarkers
+```
+
+```{r}
+#| label: model-meta
+
+model_path <- file.path(
+  params$model_store_root,
+  paste0("V1_", params$target_cell_type)
+)
+
+if (!dir.exists(file.path(model_path, "_targets"))) {
+  stop("Missing targets store: ", file.path(model_path, "_targets"))
+}
+
+model_meta <- targets::tar_meta(
+  starts_with("estimates_chunk_"),
+  store = file.path(model_path, "_targets")
+) |>
+  dplyr::filter(.data$type == "branch") |>
+  dplyr::mutate(
+    .feature = stringr::str_extract(
+      .data$warnings,
+      "(?<=Gene:___)ENSG\\d+(?=___)"
+    )
+  )
+
+biomarker_model_status <- times_biomarkers |>
+  dplyr::mutate(
+    in_v1_nk_store = !is.na(.data$.feature) & .data$.feature %in% model_meta$.feature,
+    target_name = purrr::map_chr(.data$.feature, function(feature_id) {
+      hit <- model_meta |>
+        dplyr::filter(.data$.feature == feature_id) |>
+        dplyr::slice(1) |>
+        dplyr::pull(.data$name)
+      if (length(hit)) hit[[1]] else NA_character_
+    })
+  )
+
+biomarker_model_status |>
+  dplyr::select(gene, .feature, in_v1_nk_store, target_name)
+```
+
+`HLA-DRB1` is kept in all HCC summaries, but it is excluded from posteriorHCA
+baseline testing when absent from the `V1_nk` model store.
+
+```{r}
+#| label: baseline-tissue-check
+
+example_target <- biomarker_model_status |>
+  dplyr::filter(.data$in_v1_nk_store) |>
+  dplyr::slice(1) |>
+  dplyr::pull(.data$target_name)
+
+example_fit <- targets::tar_read_raw(
+  example_target[[1]],
+  store = file.path(model_path, "_targets")
+)$brms_fit[[1]]
+
+tissue_reference_check <- tibble::tibble(
+  requested_baseline_tissue = params$baseline_tissue_group,
+  tissue_level_available = params$baseline_tissue_group %in%
+    unique(as.character(example_fit$data$tissue_groups)),
+  n_v1_nk_training_rows_for_tissue = sum(
+    as.character(example_fit$data$tissue_groups) == params$baseline_tissue_group,
+    na.rm = TRUE
+  ),
+  n_v1_nk_normal_training_rows_for_tissue = sum(
+    as.character(example_fit$data$tissue_groups) == params$baseline_tissue_group &
+      as.character(example_fit$data$disease_groups_altered) == "Normal",
+    na.rm = TRUE
+  )
+)
+
+tissue_reference_check
+```
+
+------------------------------------------------------------------------
+
+# CodeOcean GeoMx IF/TC data
+
+We use the complete all-compartment extraction generated by
+`data/extract_codeocean_processed_data.R`, then restrict to the author's
+NK-enriched ROI sets (`NKatBorder_indx` for IF and `NKatTumor_indx` for TC).
+
+```{r}
+#| label: load-codeocean
+
+segment_path <- file.path(
+  processed_dir,
+  "codeocean_GeoMx_all_segments_long_all_genes.csv"
+)
+
+if (!file.exists(segment_path)) {
+  stop(
+    "Missing processed CodeOcean segment file: ", segment_path,
+    ". Run data/extract_codeocean_processed_data.R first."
+  )
+}
+
+geomx_segments <- readr::read_csv(
+  segment_path,
+  col_types = readr::cols(.feature = readr::col_character()),
+  show_col_types = FALSE
+)
+
+geomx_times_nk_segments <- geomx_segments |>
+  dplyr::filter(
+    .data$is_times_biomarker,
+    .data$compartment %in% target_compartments,
+    .data$included_in_author_nk_analysis,
+    !is.na(.data$value)
+  ) |>
+  dplyr::mutate(
+    compartment = factor(.data$compartment, levels = target_compartments),
+    recurrence = factor(.data$recurrence, levels = c("non-REC", "REC"))
+  )
+
+geomx_times_nk_patient <- geomx_times_nk_segments |>
+  dplyr::group_by(
+    .data$gene, .data$.feature, .data$patient_id, .data$recurrence,
+    .data$age, .data$gender, .data$compartment, .data$platform
+  ) |>
+  dplyr::summarise(
+    n_segments = dplyr::n_distinct(.data$author_column),
+    value_sum = sum(.data$value, na.rm = TRUE),
+    value_mean = mean(.data$value, na.rm = TRUE),
+    value_median = stats::median(.data$value, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  dplyr::left_join(
+    biomarker_model_status |>
+      dplyr::select(gene, .feature, in_v1_nk_store),
+    by = c("gene", ".feature")
+  )
+
+coverage_by_gene_compartment <- geomx_times_nk_patient |>
+  dplyr::group_by(.data$compartment, .data$gene, .data$in_v1_nk_store) |>
+  dplyr::summarise(
+    n_patients = dplyr::n_distinct(.data$patient_id),
+    n_segments = sum(.data$n_segments),
+    patients = paste(sort(unique(.data$patient_id)), collapse = ", "),
+    .groups = "drop"
+  ) |>
+  dplyr::arrange(.data$compartment, .data$gene)
+
+coverage_by_gene_compartment
+```
+
+```{r}
+#| label: plot-coverage
+#| fig-width: 8
+#| fig-height: 4
+#| fig-align: center
+
+ggplot2::ggplot(
+  coverage_by_gene_compartment,
+  ggplot2::aes(
+    x = forcats::fct_reorder(.data$gene, .data$n_segments),
+    y = .data$n_segments,
+    fill = .data$compartment
+  )
+) +
+  ggplot2::geom_col(position = "dodge", width = 0.75) +
+  ggplot2::geom_text(
+    ggplot2::aes(label = paste0("n=", .data$n_patients)),
+    position = ggplot2::position_dodge(width = 0.75),
+    vjust = -0.25,
+    size = 3
+  ) +
+  ggplot2::coord_cartesian(ylim = c(0, max(coverage_by_gene_compartment$n_segments) * 1.18)) +
+  ggplot2::labs(
+    x = NULL,
+    y = "Non-missing NK-enriched ROI segments",
+    fill = "Compartment",
+    title = "Available CodeOcean GeoMx data for TIMES biomarkers",
+    subtitle = "Labels show patients with non-missing values"
+  )
+```
+
+------------------------------------------------------------------------
+
+# Paper ground truth and proxy hypothesis
+
+The paper gives a **recurrence/spatial** ground truth, not a
+healthy-liver-versus-HCC ground truth. TIMES uses spatial expression patterns in
+HCC IF/TC to predict recurrence, and spatial integration is central to the
+published score. Extended Data Fig. 1 shows greater NK enrichment at IF in
+non-REC HCC, while Extended Data Fig. 5 links SPON2+ NK cells to activation,
+IFN-gamma/perforin and migration-related programs.
+
+For the five TIMES genes, the exact author CodeOcean differential-expression
+object supports the following **paper-ground-truth recurrence direction**:
+`non-REC > REC` in both IF and TC for all five biomarkers. This is the only
+direction assigned a paper-ground-truth match. The posteriorHCA proxy adds a
+new hypothesis: **non-REC is closer to healthy liver NK than REC**. That proxy
+hypothesis is evaluated against recurrence labels but is not claimed as paper
+ground truth. The SPON2 evidence provides mechanistic context, but it does not
+specify a SPON2 direction relative to healthy liver NK.
+
+```{r}
+#| label: paper-ground-truth
+
+paper_de_path <- file.path(
+  params$case_dir,
+  "codeocean",
+  "data",
+  "Input_1_Spatial_transcriptomics_analysis",
+  "transcriptome_differential_analysis_input_3.RData"
+)
+
+if (!file.exists(paper_de_path)) {
+  stop("Missing CodeOcean paper DE input: ", paper_de_path)
+}
+
+paper_env <- new.env(parent = emptyenv())
+suppressWarnings(load(paper_de_path, envir = paper_env))
+paper_niky_de <- get("niky_de", envir = paper_env)
+
+paper_ground_truth <- paper_niky_de |>
+  tibble::as_tibble() |>
+  dplyr::filter(.data$gene %in% times_biomarkers$gene) |>
+  dplyr::transmute(
+    gene = .data$gene,
+    paper_l2fc_nonrec_vs_rec_if =
+      .data$l2fc_1Nonrelp_NKatBorder_agst_0Relp_NKatBorder,
+    paper_padj_nonrec_vs_rec_if =
+      .data$padj_1Nonrelp_NKatBorder_agst_0Relp_NKatBorder,
+    paper_l2fc_nonrec_vs_rec_tc =
+      .data$l2fc_1Nonrelp_NKatTumor_agst_0Relp_NKatTumor,
+    paper_padj_nonrec_vs_rec_tc =
+      .data$padj_1Nonrelp_NKatTumor_agst_0Relp_NKatTumor,
+    paper_l2fc_nonrec_vs_rec_all =
+      .data$l2fc_1Nonrelp_agst_0Relp,
+    paper_padj_nonrec_vs_rec_all =
+      .data$padj_1Nonrelp_agst_0Relp
+  ) |>
+  dplyr::mutate(
+    expected_recurrence_direction_if = dplyr::if_else(
+      .data$paper_l2fc_nonrec_vs_rec_if > 0,
+      "non-REC higher",
+      "REC higher"
+    ),
+    expected_recurrence_direction_tc = dplyr::if_else(
+      .data$paper_l2fc_nonrec_vs_rec_tc > 0,
+      "non-REC higher",
+      "REC higher"
+    ),
+    expected_vs_healthy_liver = "not_defined_by_paper",
+    expected_vs_healthy_liver_note = dplyr::case_when(
+      .data$gene == "SPON2" ~
+        "SPON2 has mechanistic support for NK activation and migration, but the paper does not define an expected direction versus healthy liver NK.",
+      TRUE ~
+        "The paper supports recurrence/spatial prediction, not a healthy-liver up/down hypothesis."
+    )
+  ) |>
+  dplyr::left_join(
+    times_biomarkers |>
+      dplyr::select(gene, .feature),
+    by = "gene"
+  ) |>
+  dplyr::arrange(.data$gene)
+
+readr::write_csv(paper_ground_truth, params$paper_ground_truth_csv)
+
+paper_ground_truth |>
+  dplyr::mutate(dplyr::across(dplyr::where(is.numeric), ~round(.x, 4)))
+```
+
+------------------------------------------------------------------------
+
+# Comprehensive healthy baseline draws
+
+```{r}
+#| label: baseline-helpers
+
+fit_levels <- function(fit, var) {
+  d <- fit$data
+  if (is.null(d) || !var %in% names(d)) {
+    return(character(0))
+  }
+  v <- d[[var]]
+  lv <- if (is.factor(v)) levels(v) else sort(unique(as.character(v)))
+  lv[!is.na(lv) & nzchar(lv)]
+}
+
+newdata_comprehensive_baseline <- function() {
+  tibble::tibble(
+    age_decade = NA_character_,
+    sex = NA_character_,
+    ethnicity_groups = NA_character_,
+    assay_groups_altered = NA_character_,
+    disease_groups_altered = "Normal",
+    tissue_groups = params$baseline_tissue_group,
+    offset = 0
+  )
+}
+
+build_comprehensive_grid <- function(
+    fit,
+    newdata = newdata_comprehensive_baseline(),
+    marginalize_over = c(
+      "sex", "age_decade", "ethnicity_groups", "assay_groups_altered"
+    ),
+    new_level_cols = "dataset_id_altered",
+    new_level_tag = "__comprehensive_healthy_baseline__"
+) {
+  newdata <- tibble::as_tibble(newdata)
+  fit_vars <- colnames(fit$data)
+
+  levels_list <- lapply(intersect(marginalize_over, fit_vars), function(col) {
+    fit_levels(fit, col)
+  })
+  names(levels_list) <- intersect(marginalize_over, fit_vars)
+  levels_list <- levels_list[vapply(levels_list, length, integer(1L)) > 0L]
+
+  if (length(levels_list)) {
+    grid <- do.call(tidyr::expand_grid, levels_list)
+    rest <- newdata[, setdiff(names(newdata), names(levels_list)), drop = FALSE]
+    out <- dplyr::bind_cols(rest[rep(1L, nrow(grid)), , drop = FALSE], grid)
+  } else {
+    out <- newdata
+  }
+
+  for (col in new_level_cols) {
+    if (col %in% fit_vars) {
+      out[[col]] <- new_level_tag
+    }
+  }
+
+  tibble::as_tibble(out)
+}
+
+read_fit_for_feature <- function(feature_id) {
+  target_name <- model_meta |>
+    dplyr::filter(.data$.feature == feature_id) |>
+    dplyr::slice(1) |>
+    dplyr::pull(.data$name)
+
+  if (!length(target_name)) {
+    stop("No target found for feature ", feature_id)
+  }
+
+  chunk <- targets::tar_read_raw(
+    target_name[[1]],
+    store = file.path(model_path, "_targets")
+  )
+
+  chunk$brms_fit[[1]]
+}
+
+posterior_linpred_args <- function(fit, nd_grid) {
+  args <- list(
+    object = fit,
+    newdata = nd_grid,
+    transform = FALSE,
+    re_formula = NULL,
+    allow_new_levels = TRUE,
+    sample_new_levels = "gaussian"
+  )
+
+  n_draws <- params$n_posterior_draws
+  if (!is.null(n_draws) && !is.na(n_draws) && is.finite(n_draws) && n_draws > 0) {
+    n_available <- tryCatch(
+      posterior::ndraws(posterior::as_draws_df(fit)),
+      error = function(e) NA_integer_
+    )
+    if (!is.na(n_available)) {
+      n_draws <- min(as.integer(n_draws), n_available)
+    }
+    args$ndraws <- as.integer(n_draws)
+  }
+
+  args
+}
+
+compute_one_baseline <- function(gene, feature_id) {
+  fit <- read_fit_for_feature(feature_id)
+  nd_grid <- build_comprehensive_grid(fit)
+
+  log_mu_mat <- do.call(
+    brms::posterior_linpred,
+    posterior_linpred_args(fit, nd_grid)
+  )
+
+  grand_mean_draws <- rowMeans(log_mu_mat)
+
+  tibble::tibble(
+    gene = gene,
+    .feature = feature_id,
+    draw = seq_along(grand_mean_draws),
+    baseline_log_mu = as.numeric(grand_mean_draws),
+    n_grid_rows = nrow(nd_grid)
+  )
+}
+```
+
+```{r}
+#| label: baseline-draws
+
+baseline_features <- biomarker_model_status |>
+  dplyr::filter(.data$in_v1_nk_store) |>
+  dplyr::select(gene, .feature)
+
+if (file.exists(params$baseline_draws_rds) && !isTRUE(params$refresh_baseline)) {
+  baseline_draws <- readRDS(params$baseline_draws_rds)
+} else {
+  baseline_draws <- purrr::map2_dfr(
+    baseline_features$gene,
+    baseline_features$.feature,
+    compute_one_baseline
+  )
+  saveRDS(baseline_draws, params$baseline_draws_rds, compress = "xz")
+}
+
+baseline_summary <- baseline_draws |>
+  dplyr::group_by(.data$gene, .data$.feature) |>
+  dplyr::summarise(
+    n_draws = dplyr::n(),
+    n_grid_rows = dplyr::first(.data$n_grid_rows),
+    baseline_mean_log_mu = mean(.data$baseline_log_mu),
+    baseline_sd_log_mu = stats::sd(.data$baseline_log_mu),
+    baseline_q025 = stats::quantile(.data$baseline_log_mu, 0.025),
+    baseline_q500 = stats::quantile(.data$baseline_log_mu, 0.5),
+    baseline_q975 = stats::quantile(.data$baseline_log_mu, 0.975),
+    baseline_median_mu = stats::median(exp(.data$baseline_log_mu)),
+    .groups = "drop"
+  )
+
+baseline_summary
+```
+
+------------------------------------------------------------------------
+
+# Patient pseudobulk and SAVI-aligned offsets
+
+The public capsule provides one processed expression column per GeoMx ROI. As in
+the authors' DESeq2 script, values are rounded before count modelling. To retain
+patients as the independent units, NK-enriched ROI columns are summed within
+each patient x compartment. The resulting five samples form four cohorts:
+**IF-REC**, **IF-non-REC**, **TC-REC** and **TC-non-REC**.
+
+For exact SAVI-style scaling, the patient pseudobulks are merged with the single
+`V1_nk` training reference sample whose stored offset is zero. We then call
+`tidybulk::scale_abundance(method = "TMMwsp", reference_sample = "reference")`
+and define `offset = log(1 / multiplier)`, exactly as in the SAVI report.
+
+```{r}
+#| label: build-patient-pseudobulk
+
+expression_path <- file.path(
+  processed_dir,
+  "codeocean_GeoMx_all_gene_expression_matrix.csv"
+)
+roi_metadata_path <- file.path(
+  processed_dir,
+  "codeocean_GeoMx_all_roi_metadata.csv"
+)
+
+geomx_expression_df <- utils::read.csv(
+  expression_path,
+  check.names = FALSE,
+  stringsAsFactors = FALSE
+)
+geomx_roi_meta <- readr::read_csv(
+  roi_metadata_path,
+  show_col_types = FALSE
+) |>
+  dplyr::filter(
+    .data$included_in_author_nk_analysis,
+    .data$compartment %in% target_compartments
+  ) |>
+  dplyr::mutate(
+    sample_id = paste(.data$patient_id, .data$compartment, sep = "_"),
+    cohort = paste(
+      .data$compartment,
+      dplyr::if_else(.data$recurrence == "REC", "REC", "non_REC"),
+      sep = "_"
+    )
+  )
+
+geomx_expression <- as.matrix(geomx_expression_df[, -1, drop = FALSE])
+mode(geomx_expression) <- "numeric"
+rownames(geomx_expression) <- geomx_expression_df$gene
+
+patient_pseudobulk_meta <- geomx_roi_meta |>
+  dplyr::distinct(
+    .data$sample_id, .data$patient_id, .data$compartment,
+    .data$recurrence, .data$cohort, .data$age, .data$gender
+  ) |>
+  dplyr::arrange(.data$compartment, .data$recurrence, .data$patient_id) |>
+  dplyr::mutate(
+    n_rois = purrr::map_int(.data$sample_id, function(id) {
+      sum(geomx_roi_meta$sample_id == id)
+    })
+  )
+
+roi_columns_by_sample <- split(
+  geomx_roi_meta$author_column,
+  geomx_roi_meta$sample_id
+)
+
+patient_counts_symbol <- do.call(
+  cbind,
+  purrr::map(
+    patient_pseudobulk_meta$sample_id,
+    function(id) {
+      values <- round(
+        geomx_expression[, roi_columns_by_sample[[id]], drop = FALSE]
+      )
+      n_non_missing <- rowSums(!is.na(values))
+      counts <- rowSums(values, na.rm = TRUE)
+      counts[n_non_missing == 0L] <- NA_real_
+      counts
+    }
+  )
+)
+
+colnames(patient_counts_symbol) <- patient_pseudobulk_meta$sample_id
+rownames(patient_counts_symbol) <- rownames(geomx_expression)
+
+times_panel_samples <- colnames(patient_counts_symbol)[
+  colSums(
+    !is.na(patient_counts_symbol[times_biomarkers$gene, , drop = FALSE])
+  ) == nrow(times_biomarkers)
+]
+patient_counts_symbol <- patient_counts_symbol[
+  , times_panel_samples, drop = FALSE
+]
+patient_pseudobulk_meta <- patient_pseudobulk_meta |>
+  dplyr::filter(.data$sample_id %in% times_panel_samples) |>
+  dplyr::arrange(match(.data$sample_id, times_panel_samples))
+
+symbol_to_ensembl <- AnnotationDbi::mapIds(
+  org.Hs.eg.db::org.Hs.eg.db,
+  keys = rownames(patient_counts_symbol),
+  column = "ENSEMBL",
+  keytype = "SYMBOL",
+  multiVals = "first"
+)
+keep_mapping <- !is.na(symbol_to_ensembl) & !duplicated(symbol_to_ensembl)
+patient_counts <- patient_counts_symbol[keep_mapping, , drop = FALSE]
+rownames(patient_counts) <- unname(symbol_to_ensembl[keep_mapping])
+
+readr::write_csv(
+  patient_pseudobulk_meta,
+  params$patient_pseudobulk_csv
+)
+
+patient_pseudobulk_meta
+```
+
+```{r}
+#| label: merge-training-reference
+
+pseudobulk_sample <- targets::tar_read(
+  pseudobulk_sample,
+  store = file.path(model_path, "_targets")
+)
+
+if (!file.exists(params$pseudobulk_h5ad)) {
+  stop("Missing local pseudobulk H5AD: ", params$pseudobulk_h5ad)
+}
+
+pseudobulk_sample@assays@data@listData[["counts"]]@seed@seed@seed@filepath <-
+  params$pseudobulk_h5ad
+
+reference_idx <- which(
+  as.data.frame(SummarizedExperiment::colData(pseudobulk_sample))$offset == 0
+)
+if (length(reference_idx) != 1L) {
+  stop("Expected exactly one V1_nk training sample with offset == 0.")
+}
+
+common_features <- intersect(rownames(patient_counts), rownames(pseudobulk_sample))
+reference_counts <- as.numeric(
+  SummarizedExperiment::assay(pseudobulk_sample, "counts")[
+    common_features, reference_idx
+  ]
+)
+
+counts_mu <- cbind(
+  patient_counts[common_features, , drop = FALSE],
+  reference = reference_counts
+)
+complete_features <- rowSums(is.na(counts_mu)) == 0L &
+  rowSums(counts_mu, na.rm = TRUE) >= 5
+counts_mu <- counts_mu[complete_features, , drop = FALSE]
+
+cohort_levels <- c("IF_REC", "IF_non_REC", "TC_REC", "TC_non_REC")
+meta_mu <- dplyr::bind_rows(
+  patient_pseudobulk_meta |>
+    dplyr::transmute(
+      sample_id, patient_id, compartment, recurrence, cohort,
+      sample_role = "hcc_patient_pseudobulk"
+    ),
+  tibble::tibble(
+    sample_id = "reference",
+    patient_id = NA_character_,
+    compartment = NA_character_,
+    recurrence = NA_character_,
+    cohort = "reference",
+    sample_role = "atlas_training_reference"
+  )
+) |>
+  dplyr::mutate(
+    group = factor(.data$cohort, levels = c("reference", cohort_levels))
+  )
+
+stopifnot(identical(colnames(counts_mu), meta_mu$sample_id))
+
+se_mu <- SummarizedExperiment::SummarizedExperiment(
+  assays = list(counts = counts_mu),
+  colData = S4Vectors::DataFrame(
+    as.data.frame(meta_mu),
+    row.names = meta_mu$sample_id
+  ),
+  rowData = S4Vectors::DataFrame(
+    .feature = rownames(counts_mu),
+    row.names = rownames(counts_mu)
+  )
+)
+
+reference_row_data <- as.data.frame(
+  SummarizedExperiment::rowData(pseudobulk_sample)
+)
+abundant_cols <- grep(
+  "^\\.abundant",
+  names(reference_row_data),
+  value = TRUE
+)
+if (length(abundant_cols) >= 1L) {
+  SummarizedExperiment::rowData(se_mu)$.abundant <-
+    reference_row_data[
+      rownames(se_mu),
+      abundant_cols[[1]],
+      drop = TRUE
+    ]
+}
+
+reference_sample_name <- meta_mu$sample_id[
+  meta_mu$sample_role == "atlas_training_reference"
+]
+if (length(reference_sample_name) != 1L) {
+  stop("Expected exactly one atlas training reference sample.")
+}
+
+se_mu <- se_mu |>
+  tidybulk::scale_abundance(
+    method = "TMMwsp",
+    reference_sample = reference_sample_name
+  )
+SummarizedExperiment::colData(se_mu)$offset <- log(
+  1 / SummarizedExperiment::colData(se_mu)$multiplier
+)
+
+counts_mu <- SummarizedExperiment::assay(se_mu, "counts")
+meta_mu <- SummarizedExperiment::colData(se_mu) |>
+  as.data.frame()
+offset_vec_mu <- meta_mu$offset
+
+dge_mu <- edgeR::DGEList(
+  counts = counts_mu,
+  samples = meta_mu,
+  genes = data.frame(.feature = rownames(counts_mu))
+)
+reference_column <- which(meta_mu$sample_role == "atlas_training_reference")
+dge_mu$offset <- matrix(
+  offset_vec_mu,
+  nrow = nrow(dge_mu),
+  ncol = ncol(dge_mu),
+  byrow = TRUE
+)
+
+normalization_audit <- meta_mu |>
+  dplyr::mutate(
+    library_size = colSums(counts_mu),
+    offset = offset_vec_mu,
+    reference_sample = .data$sample_id == reference_sample_name
+  )
+
+readr::write_csv(normalization_audit, params$normalization_csv)
+
+normalization_audit |>
+  dplyr::select(
+    sample_id, patient_id, cohort, sample_role,
+    library_size, multiplier, offset, reference_sample
+  ) |>
+  dplyr::mutate(dplyr::across(dplyr::where(is.numeric), ~round(.x, 4)))
+```
+
+------------------------------------------------------------------------
+
+# Healthy-reference cohort estimates
+
+These estimates provide the inputs to the posteriorHCA recurrence proxy. The
+SAVI-style group-means design is `~ 0 + group`. For each gene x cohort:
+
+- cohort `log(mu)` at offset zero is the edgeR NB MLE from `mglmOneGroup`;
+- cohort uncertainty is the QL Wald SE from `glmQLFit`;
+- the healthy comparator is the posterior of the comprehensive liver NK grand
+  mean, not the full heterogeneous predictive distribution;
+- Welch is the parametric test and posterior rank is the non-parametric check.
+
+```{r}
+#| label: edger-fit
+
+design_mu <- stats::model.matrix(~ 0 + group, data = dge_mu$samples)
+colnames(design_mu) <- sub("^group", "", colnames(design_mu))
+
+dge_mu <- edgeR::estimateDisp(dge_mu, design_mu)
+fit_mu <- edgeR::glmQLFit(dge_mu, design_mu)
+
+nb_dispersion_mu <- if (!is.null(dge_mu$trended.dispersion)) {
+  dge_mu$trended.dispersion
+} else if (!is.null(dge_mu$tagwise.dispersion)) {
+  dge_mu$tagwise.dispersion
+} else {
+  rep_len(dge_mu$common.dispersion, nrow(dge_mu))
+}
+
+tibble::tibble(
+  n_features_fit = nrow(dge_mu),
+  n_patient_pseudobulks = sum(meta_mu$sample_role == "hcc_patient_pseudobulk"),
+  design_groups = paste(colnames(design_mu), collapse = ", "),
+  residual_df = paste(unique(fit_mu$df.residual), collapse = ", "),
+  reference_offset = offset_vec_mu[reference_column]
+)
+```
+
+```{r}
+#| label: savi-test-helpers
+
+welch_t_from_mean_se <- function(mean1, se1, n1, mean2, se2, n2) {
+  sd1 <- se1 * sqrt(n1)
+  sd2 <- se2 * sqrt(n2)
+  se_diff <- sqrt(se1^2 + se2^2)
+  t_stat <- (mean1 - mean2) / se_diff
+  df <- (sd1^2 / n1 + sd2^2 / n2)^2 /
+    ((sd1^2 / n1)^2 / (n1 - 1) + (sd2^2 / n2)^2 / (n2 - 1))
+  p_value <- 2 * stats::pt(abs(t_stat), df = df, lower.tail = FALSE)
+  list(
+    mean_diff = mean1 - mean2,
+    se_diff = se_diff,
+    t = t_stat,
+    df = df,
+    p_value = p_value
+  )
+}
+
+edger_log_mu_cohort <- function(feature_id, cohort) {
+  gi <- match(feature_id, rownames(fit_mu))
+  if (is.na(gi) || !cohort %in% colnames(fit_mu$coefficients)) {
+    return(NULL)
+  }
+
+  j <- which(fit_mu$samples$group == cohort)
+  if (!length(j)) {
+    return(NULL)
+  }
+
+  dispersion <- nb_dispersion_mu[gi]
+  log_mu <- edgeR::mglmOneGroup(
+    matrix(counts_mu[gi, j], nrow = 1),
+    dispersion = dispersion,
+    offset = offset_vec_mu[j]
+  )
+
+  mu_all <- fit_mu$fitted.values[gi, ]
+  weights <- mu_all / (1 + dispersion * mu_all)
+  cohort_weight <- sum(weights[j])
+  se <- if (is.finite(cohort_weight) && cohort_weight > 0) {
+    sqrt(fit_mu$s2.post[gi] / cohort_weight)
+  } else {
+    Inf
+  }
+
+  list(
+    log_mu = unname(log_mu),
+    mu = unname(exp(log_mu)),
+    se = unname(se),
+    df = unname(fit_mu$df.residual.adj[gi]),
+    n = length(j),
+    patient_ids = paste(
+      sort(stats::na.omit(fit_mu$samples$patient_id[j])),
+      collapse = ", "
+    )
+  )
+}
+
+test_cohort_against_baseline <- function(gene, feature_id, cohort) {
+  cm <- edger_log_mu_cohort(feature_id, cohort)
+  if (is.null(cm)) {
+    return(NULL)
+  }
+
+  baseline <- baseline_summary |>
+    dplyr::filter(.data$gene == gene, .data$.feature == feature_id)
+  draws <- baseline_draws |>
+    dplyr::filter(.data$gene == gene, .data$.feature == feature_id) |>
+    dplyr::pull(.data$baseline_log_mu)
+
+  welch <- welch_t_from_mean_se(
+    mean1 = baseline$baseline_mean_log_mu,
+    se1 = baseline$baseline_sd_log_mu,
+    n1 = baseline$n_draws,
+    mean2 = cm$log_mu,
+    se2 = cm$se,
+    n2 = cm$df + 1
+  )
+  rank_p_upper <- mean(draws >= cm$log_mu)
+  rank_p_lower <- mean(draws <= cm$log_mu)
+
+  tibble::tibble(
+    gene = gene,
+    .feature = feature_id,
+    cohort = cohort,
+    compartment = sub("_.*$", "", cohort),
+    recurrence = dplyr::if_else(
+      grepl("non_REC$", cohort), "non-REC", "REC"
+    ),
+    patient_ids = cm$patient_ids,
+    cohort_n = cm$n,
+    cohort_log_mu = cm$log_mu,
+    cohort_mu = cm$mu,
+    cohort_se = cm$se,
+    baseline_mean_log_mu = baseline$baseline_mean_log_mu,
+    baseline_sd_grand_mean = baseline$baseline_sd_log_mu,
+    delta_log_mu_vs_baseline =
+      cm$log_mu - baseline$baseline_mean_log_mu,
+    welch_t = welch$t,
+    welch_df = welch$df,
+    welch_p = welch$p_value,
+    rank_p_upper = rank_p_upper,
+    rank_p_lower = rank_p_lower,
+    rank_p_two = min(1, 2 * min(rank_p_upper, rank_p_lower)),
+    direction_vs_baseline = dplyr::case_when(
+      cm$log_mu > baseline$baseline_mean_log_mu ~ "above_baseline",
+      cm$log_mu < baseline$baseline_mean_log_mu ~ "below_baseline",
+      TRUE ~ "at_baseline"
+    ),
+    significant_welch_05 = welch$p_value < 0.05
+  )
+}
+```
+
+```{r}
+#| label: four-cohort-tests
+
+baseline_features <- biomarker_model_status |>
+  dplyr::filter(
+    .data$in_v1_nk_store,
+    .data$.feature %in% rownames(fit_mu)
+  ) |>
+  dplyr::select(gene, .feature)
+
+cohort_tests <- tidyr::crossing(
+  baseline_features,
+  cohort = cohort_levels
+) |>
+  purrr::pmap_dfr(function(gene, .feature, cohort) {
+    test_cohort_against_baseline(gene, .feature, cohort)
+  }) |>
+  dplyr::mutate(
+    cohort = factor(.data$cohort, levels = cohort_levels)
+  ) |>
+  dplyr::arrange(.data$gene, .data$cohort)
+
+readr::write_csv(cohort_tests, params$cohort_results_csv)
+
+cohort_tests |>
+  dplyr::select(
+    gene, cohort, patient_ids, cohort_n, cohort_log_mu, cohort_se,
+    baseline_mean_log_mu, delta_log_mu_vs_baseline,
+    welch_p, rank_p_two, direction_vs_baseline
+  ) |>
+  dplyr::mutate(dplyr::across(dplyr::where(is.numeric), ~round(.x, 4)))
+```
+
+```{r}
+#| label: four-cohort-summary
+
+cohort_test_summary <- cohort_tests |>
+  dplyr::group_by(.data$cohort) |>
+  dplyr::summarise(
+    n_genes_tested = dplyr::n_distinct(.data$gene),
+    n_above_baseline = sum(.data$direction_vs_baseline == "above_baseline"),
+    n_below_baseline = sum(.data$direction_vs_baseline == "below_baseline"),
+    n_welch_p_lt_05 = sum(.data$welch_p < 0.05),
+    median_delta_log_mu = stats::median(
+      .data$delta_log_mu_vs_baseline, na.rm = TRUE
+    ),
+    .groups = "drop"
+  )
+
+cohort_test_summary
+```
+
+------------------------------------------------------------------------
+
+# Positive control: non-REC greater than REC within IF and TC
+
+Recurrence is tested with edgeR quasi-likelihood contrasts from the same
+patient-level counts and offsets. A separate HCC-only fit retains `HLA-DRB1`,
+which has no matching atlas feature/model for the healthy-baseline comparison.
+The contrast is `non_REC - REC` within each compartment.
+`p_nonrec_greater` is the pre-specified one-sided p-value; positive log2 fold
+change supports the paper direction. This positive control is compared directly
+with paper ground truth. These tests are necessarily low-powered:
+the public NK-enriched subset contains two non-REC and one REC patient in IF,
+and one patient in each recurrence arm in TC.
+
+```{r}
+#| label: recurrence-edger-fit
+
+recurrence_complete_features <- rowSums(is.na(patient_counts)) == 0L &
+  rowSums(patient_counts, na.rm = TRUE) >= 5
+counts_recurrence <- patient_counts[
+  recurrence_complete_features, , drop = FALSE
+]
+
+meta_recurrence <- patient_pseudobulk_meta |>
+  dplyr::mutate(
+    group = factor(.data$cohort, levels = cohort_levels)
+  )
+stopifnot(identical(colnames(counts_recurrence), meta_recurrence$sample_id))
+
+dge_recurrence <- edgeR::DGEList(
+  counts = counts_recurrence,
+  samples = as.data.frame(meta_recurrence),
+  genes = data.frame(.feature = rownames(counts_recurrence))
+)
+offset_vec_recurrence <- offset_vec_mu[
+  match(meta_recurrence$sample_id, meta_mu$sample_id)
+]
+dge_recurrence$offset <- matrix(
+  offset_vec_recurrence,
+  nrow = nrow(dge_recurrence),
+  ncol = ncol(dge_recurrence),
+  byrow = TRUE
+)
+
+design_recurrence <- stats::model.matrix(
+  ~ 0 + group,
+  data = dge_recurrence$samples
+)
+colnames(design_recurrence) <- sub(
+  "^group", "", colnames(design_recurrence)
+)
+dge_recurrence <- edgeR::estimateDisp(
+  dge_recurrence,
+  design_recurrence
+)
+fit_recurrence <- edgeR::glmQLFit(
+  dge_recurrence,
+  design_recurrence
+)
+
+nb_dispersion_recurrence <- if (
+  !is.null(dge_recurrence$trended.dispersion)
+) {
+  dge_recurrence$trended.dispersion
+} else if (!is.null(dge_recurrence$tagwise.dispersion)) {
+  dge_recurrence$tagwise.dispersion
+} else {
+  rep_len(
+    dge_recurrence$common.dispersion,
+    nrow(dge_recurrence)
+  )
+}
+
+tibble::tibble(
+  n_features_fit = nrow(fit_recurrence),
+  n_patient_pseudobulks = nrow(fit_recurrence$samples),
+  design_groups = paste(colnames(design_recurrence), collapse = ", "),
+  residual_df = paste(unique(fit_recurrence$df.residual), collapse = ", "),
+  times_genes_available = paste(
+    times_biomarkers$gene[
+      times_biomarkers$.feature %in% rownames(fit_recurrence)
+    ],
+    collapse = ", "
+  )
+)
+```
+
+```{r}
+#| label: recurrence-contrast-helpers
+
+edger_log_mu_recurrence <- function(feature_id, cohort) {
+  gi <- match(feature_id, rownames(fit_recurrence))
+  if (is.na(gi)) {
+    return(NULL)
+  }
+  j <- which(fit_recurrence$samples$group == cohort)
+  if (!length(j)) {
+    return(NULL)
+  }
+
+  log_mu <- edgeR::mglmOneGroup(
+    matrix(counts_recurrence[gi, j], nrow = 1),
+    dispersion = nb_dispersion_recurrence[gi],
+    offset = offset_vec_recurrence[j]
+  )
+
+  list(
+    log_mu = unname(log_mu),
+    mu = unname(exp(log_mu)),
+    n = length(j)
+  )
+}
+
+test_nonrec_greater <- function(gene, feature_id, compartment) {
+  gi <- match(feature_id, rownames(fit_recurrence))
+  nonrec_group <- paste0(compartment, "_non_REC")
+  rec_group <- paste0(compartment, "_REC")
+  if (
+    is.na(gi) ||
+    !all(
+      c(nonrec_group, rec_group) %in%
+        colnames(fit_recurrence$coefficients)
+    )
+  ) {
+    return(NULL)
+  }
+
+  contrast <- stats::setNames(
+    rep(0, ncol(fit_recurrence$design)),
+    colnames(fit_recurrence$design)
+  )
+  contrast[nonrec_group] <- 1
+  contrast[rec_group] <- -1
+
+  qlf <- edgeR::glmQLFTest(fit_recurrence, contrast = contrast)
+  qlf_row <- qlf$table[gi, , drop = FALSE]
+  p_two <- qlf_row$PValue
+  p_greater <- if (qlf_row$logFC >= 0) p_two / 2 else 1 - p_two / 2
+
+  nonrec_mu <- edger_log_mu_recurrence(feature_id, nonrec_group)
+  rec_mu <- edger_log_mu_recurrence(feature_id, rec_group)
+
+  tibble::tibble(
+    gene = gene,
+    .feature = feature_id,
+    compartment = compartment,
+    nonrec_group = nonrec_group,
+    rec_group = rec_group,
+    n_nonrec = nonrec_mu$n,
+    n_rec = rec_mu$n,
+    nonrec_log_mu = nonrec_mu$log_mu,
+    rec_log_mu = rec_mu$log_mu,
+    delta_log_mu_nonrec_minus_rec =
+      nonrec_mu$log_mu - rec_mu$log_mu,
+    qlf_log2fc_nonrec_vs_rec = qlf_row$logFC,
+    qlf_F = qlf_row$F,
+    qlf_p_two_sided = p_two,
+    p_nonrec_greater = p_greater,
+    observed_recurrence_direction = dplyr::case_when(
+      qlf_row$logFC > 0 ~ "non-REC higher",
+      qlf_row$logFC < 0 ~ "REC higher",
+      TRUE ~ "tie"
+    ),
+    significant_nonrec_greater_05 =
+      qlf_row$logFC > 0 & p_greater < 0.05
+  )
+}
+```
+
+```{r}
+#| label: recurrence-tests
+
+recurrence_features <- times_biomarkers |>
+  dplyr::filter(.data$.feature %in% rownames(fit_recurrence)) |>
+  dplyr::select(gene, .feature)
+
+recurrence_tests <- tidyr::crossing(
+  recurrence_features,
+  compartment = target_compartments
+) |>
+  purrr::pmap_dfr(function(gene, .feature, compartment) {
+    test_nonrec_greater(gene, .feature, compartment)
+  }) |>
+  dplyr::left_join(
+    paper_ground_truth |>
+      dplyr::select(
+        gene,
+        expected_recurrence_direction_if,
+        expected_recurrence_direction_tc,
+        paper_l2fc_nonrec_vs_rec_if,
+        paper_l2fc_nonrec_vs_rec_tc,
+        paper_padj_nonrec_vs_rec_if,
+        paper_padj_nonrec_vs_rec_tc
+      ),
+    by = "gene"
+  ) |>
+  dplyr::mutate(
+    expected_recurrence_direction = dplyr::if_else(
+      .data$compartment == "IF",
+      .data$expected_recurrence_direction_if,
+      .data$expected_recurrence_direction_tc
+    ),
+    paper_l2fc_nonrec_vs_rec = dplyr::if_else(
+      .data$compartment == "IF",
+      .data$paper_l2fc_nonrec_vs_rec_if,
+      .data$paper_l2fc_nonrec_vs_rec_tc
+    ),
+    paper_padj_nonrec_vs_rec = dplyr::if_else(
+      .data$compartment == "IF",
+      .data$paper_padj_nonrec_vs_rec_if,
+      .data$paper_padj_nonrec_vs_rec_tc
+    ),
+    recurrence_matches_paper =
+      .data$observed_recurrence_direction ==
+      .data$expected_recurrence_direction
+  ) |>
+  dplyr::arrange(.data$gene, .data$compartment)
+
+readr::write_csv(recurrence_tests, params$recurrence_results_csv)
+
+recurrence_tests |>
+  dplyr::select(
+    gene, compartment, n_nonrec, n_rec,
+    qlf_log2fc_nonrec_vs_rec, p_nonrec_greater,
+    observed_recurrence_direction, expected_recurrence_direction,
+    recurrence_matches_paper
+  ) |>
+  dplyr::mutate(dplyr::across(dplyr::where(is.numeric), ~round(.x, 4)))
+```
+
+------------------------------------------------------------------------
+
+# Primary posteriorHCA test: healthy-proximity recurrence proxy
+
+The proxy asks whether recurrence can be recovered using only distance from the
+healthy atlas. No recurrence labels, paper coefficients or HCC-trained model
+parameters enter score construction.
+
+We evaluate four properties:
+
+1. **Compatibility split:** REC is more than one healthy SD away while non-REC
+   remains within one healthy SD.
+2. **Gene-compartment consistency:** REC distance exceeds non-REC distance for
+   each atlas-covered biomarker in IF and TC.
+3. **Posterior evidence:** after propagating healthy posterior and cohort QL
+   uncertainty, the combined REC score remains larger than the non-REC score.
+4. **Patient ranking:** the outcome-free score ranks REC above non-REC patients,
+   including leave-one-gene-out sensitivity analyses.
+
+The one-SD threshold is a descriptive compatibility rule, not a significance
+threshold. Welch and rank p-values remain available in `cohort_tests`.
+
+```{r}
+#| label: healthy-proxy-gene-compartment
+
+healthy_proxy_gene_long <- cohort_tests |>
+  dplyr::mutate(
+    signed_healthy_z =
+      .data$delta_log_mu_vs_baseline / .data$baseline_sd_grand_mean,
+    healthy_distance = abs(.data$signed_healthy_z),
+    within_one_healthy_sd = .data$healthy_distance <= 1,
+    recurrence_key = dplyr::if_else(
+      .data$recurrence == "REC", "REC", "non_REC"
+    )
+  )
+
+healthy_proxy_gene <- healthy_proxy_gene_long |>
+  dplyr::select(
+    gene, .feature, compartment, recurrence_key,
+    cohort_log_mu, cohort_se, baseline_mean_log_mu,
+    baseline_sd_grand_mean, signed_healthy_z, healthy_distance,
+    within_one_healthy_sd
+  ) |>
+  tidyr::pivot_wider(
+    names_from = recurrence_key,
+    values_from = c(
+      cohort_log_mu, cohort_se, signed_healthy_z,
+      healthy_distance, within_one_healthy_sd
+    ),
+    names_sep = "."
+  ) |>
+  dplyr::mutate(
+    proxy_margin_rec_minus_nonrec =
+      .data$healthy_distance.REC - .data$healthy_distance.non_REC,
+    rec_farther_from_healthy =
+      .data$proxy_margin_rec_minus_nonrec > 0,
+    proxy_pattern_matches_hypothesis =
+      !.data$within_one_healthy_sd.REC &
+      .data$within_one_healthy_sd.non_REC
+  ) |>
+  dplyr::arrange(.data$gene, .data$compartment)
+
+readr::write_csv(healthy_proxy_gene, params$healthy_proxy_gene_csv)
+
+healthy_proxy_gene |>
+  dplyr::select(
+    gene, compartment,
+    healthy_distance.REC, healthy_distance.non_REC,
+    proxy_margin_rec_minus_nonrec,
+    rec_farther_from_healthy,
+    proxy_pattern_matches_hypothesis
+  ) |>
+  dplyr::mutate(dplyr::across(dplyr::where(is.numeric), ~round(.x, 3)))
+```
+
+```{r}
+#| label: healthy-proxy-posterior
+
+n_proxy_draws <- 20000L
+set.seed(20250625)
+
+simulate_proxy_gene <- function(gene_name) {
+  healthy_draws <- baseline_draws |>
+    dplyr::filter(.data$gene == .env$gene_name) |>
+    dplyr::pull(.data$baseline_log_mu)
+  healthy_sd <- stats::sd(healthy_draws)
+  healthy_draw <- sample(
+    healthy_draws,
+    size = n_proxy_draws,
+    replace = TRUE
+  )
+
+  purrr::map_dfr(target_compartments, function(compartment_name) {
+    rec_row <- cohort_tests |>
+      dplyr::filter(
+        .data$gene == .env$gene_name,
+        .data$compartment == .env$compartment_name,
+        .data$recurrence == "REC"
+      )
+    nonrec_row <- cohort_tests |>
+      dplyr::filter(
+        .data$gene == .env$gene_name,
+        .data$compartment == .env$compartment_name,
+        .data$recurrence == "non-REC"
+      )
+    rec_draw <- stats::rnorm(
+      n_proxy_draws,
+      mean = rec_row$cohort_log_mu,
+      sd = rec_row$cohort_se
+    )
+    nonrec_draw <- stats::rnorm(
+      n_proxy_draws,
+      mean = nonrec_row$cohort_log_mu,
+      sd = nonrec_row$cohort_se
+    )
+
+    tibble::tibble(
+      draw = seq_len(n_proxy_draws),
+      gene = gene_name,
+      compartment = compartment_name,
+      rec_score = abs(rec_draw - healthy_draw) / healthy_sd,
+      nonrec_score = abs(nonrec_draw - healthy_draw) / healthy_sd,
+      margin = rec_score - nonrec_score
+    )
+  })
+}
+
+proxy_draws <- purrr::map_dfr(
+  unique(cohort_tests$gene),
+  simulate_proxy_gene
+)
+
+summarise_proxy_draws <- function(tbl, scope, compartment = NA_character_) {
+  tibble::tibble(
+    scope = scope,
+    compartment = compartment,
+    n_genes = dplyr::n_distinct(cohort_tests$gene),
+    mean_rec_score = mean(tbl$rec_score),
+    mean_nonrec_score = mean(tbl$nonrec_score),
+    mean_margin = mean(tbl$margin),
+    margin_q025 = stats::quantile(tbl$margin, 0.025),
+    margin_q500 = stats::quantile(tbl$margin, 0.5),
+    margin_q975 = stats::quantile(tbl$margin, 0.975),
+    posterior_prob_rec_farther = mean(tbl$margin > 0),
+    posterior_prob_rec_beyond_one_sd = mean(tbl$rec_score > 1),
+    posterior_prob_nonrec_within_one_sd = mean(tbl$nonrec_score <= 1),
+    posterior_prob_proxy_pattern = mean(
+      tbl$rec_score > 1 & tbl$nonrec_score <= 1
+    )
+  )
+}
+
+proxy_gene_posterior_summary <- proxy_draws |>
+  dplyr::group_by(.data$gene, .data$compartment) |>
+  dplyr::summarise(
+    mean_rec_score = mean(.data$rec_score),
+    mean_nonrec_score = mean(.data$nonrec_score),
+    mean_margin = mean(.data$margin),
+    margin_q025 = stats::quantile(.data$margin, 0.025),
+    margin_q500 = stats::quantile(.data$margin, 0.5),
+    margin_q975 = stats::quantile(.data$margin, 0.975),
+    posterior_prob_rec_farther = mean(.data$margin > 0),
+    posterior_prob_rec_beyond_one_sd = mean(.data$rec_score > 1),
+    posterior_prob_nonrec_within_one_sd = mean(.data$nonrec_score <= 1),
+    posterior_prob_proxy_pattern = mean(
+      .data$rec_score > 1 & .data$nonrec_score <= 1
+    ),
+    .groups = "drop"
+  ) |>
+  dplyr::mutate(scope = "gene_compartment", .before = 1L)
+
+proxy_compartment_draws <- proxy_draws |>
+  dplyr::group_by(.data$compartment, .data$draw) |>
+  dplyr::summarise(
+    rec_score = mean(.data$rec_score),
+    nonrec_score = mean(.data$nonrec_score),
+    margin = .data$rec_score - .data$nonrec_score,
+    .groups = "drop"
+  )
+
+proxy_compartment_summary <- proxy_compartment_draws |>
+  dplyr::group_by(.data$compartment) |>
+  dplyr::summarise(
+    scope = "compartment",
+    n_genes = dplyr::n_distinct(cohort_tests$gene),
+    mean_rec_score = mean(.data$rec_score),
+    mean_nonrec_score = mean(.data$nonrec_score),
+    mean_margin = mean(.data$margin),
+    margin_q025 = stats::quantile(.data$margin, 0.025),
+    margin_q500 = stats::quantile(.data$margin, 0.5),
+    margin_q975 = stats::quantile(.data$margin, 0.975),
+    posterior_prob_rec_farther = mean(.data$margin > 0),
+    posterior_prob_rec_beyond_one_sd = mean(.data$rec_score > 1),
+    posterior_prob_nonrec_within_one_sd = mean(.data$nonrec_score <= 1),
+    posterior_prob_proxy_pattern = mean(
+      .data$rec_score > 1 & .data$nonrec_score <= 1
+    ),
+    .groups = "drop"
+  ) |>
+  dplyr::relocate(scope)
+
+proxy_combined_draws <- proxy_draws |>
+  dplyr::group_by(.data$draw) |>
+  dplyr::summarise(
+    rec_score = mean(.data$rec_score),
+    nonrec_score = mean(.data$nonrec_score),
+    margin = .data$rec_score - .data$nonrec_score,
+    .groups = "drop"
+  )
+
+proxy_combined_summary <- summarise_proxy_draws(
+  proxy_combined_draws,
+  scope = "combined_IF_TC"
+)
+
+healthy_proxy_posterior_summary <- dplyr::bind_rows(
+  proxy_gene_posterior_summary,
+  proxy_compartment_summary,
+  proxy_combined_summary
+)
+
+readr::write_csv(
+  healthy_proxy_posterior_summary,
+  params$healthy_proxy_summary_csv
+)
+
+healthy_proxy_posterior_summary |>
+  dplyr::filter(.data$scope != "gene_compartment") |>
+  dplyr::mutate(dplyr::across(dplyr::where(is.numeric), ~round(.x, 3)))
+```
+
+```{r}
+#| label: healthy-proxy-patient-scores
+
+patient_sample_indices <- which(
+  meta_mu$sample_role == "hcc_patient_pseudobulk"
+)
+
+patient_gene_proxy <- tidyr::crossing(
+  sample_index = patient_sample_indices,
+  baseline_features
+) |>
+  purrr::pmap_dfr(function(sample_index, gene, .feature) {
+    feature_id <- .feature
+    gene_index <- match(feature_id, rownames(fit_mu))
+    patient_log_mu <- edgeR::mglmOneGroup(
+      matrix(counts_mu[gene_index, sample_index], nrow = 1),
+      dispersion = nb_dispersion_mu[gene_index],
+      offset = offset_vec_mu[sample_index]
+    )
+    healthy <- baseline_summary |>
+      dplyr::filter(
+        .data$gene == .env$gene,
+        .data$.feature == .env$feature_id
+      )
+    signed_healthy_z <- (
+      as.numeric(patient_log_mu) - healthy$baseline_mean_log_mu
+    ) / healthy$baseline_sd_log_mu
+
+    tibble::tibble(
+      sample_id = meta_mu$sample_id[sample_index],
+      patient_id = meta_mu$patient_id[sample_index],
+      compartment = meta_mu$compartment[sample_index],
+      recurrence = meta_mu$recurrence[sample_index],
+      gene = gene,
+      .feature = feature_id,
+      patient_log_mu = as.numeric(patient_log_mu),
+      baseline_mean_log_mu = healthy$baseline_mean_log_mu,
+      baseline_sd_grand_mean = healthy$baseline_sd_log_mu,
+      signed_healthy_z = signed_healthy_z,
+      healthy_distance = abs(signed_healthy_z)
+    )
+  })
+
+patient_compartment_proxy <- patient_gene_proxy |>
+  dplyr::group_by(
+    .data$sample_id, .data$patient_id,
+    .data$compartment, .data$recurrence
+  ) |>
+  dplyr::summarise(
+    n_genes = dplyr::n(),
+    healthy_proximity_risk = mean(.data$healthy_distance),
+    mean_signed_healthy_z = mean(.data$signed_healthy_z),
+    .groups = "drop"
+  )
+
+patient_combined_proxy <- patient_compartment_proxy |>
+  dplyr::group_by(.data$patient_id, .data$recurrence) |>
+  dplyr::summarise(
+    n_compartments = dplyr::n(),
+    healthy_proximity_risk = mean(.data$healthy_proximity_risk),
+    mean_signed_healthy_z = mean(.data$mean_signed_healthy_z),
+    .groups = "drop"
+  )
+
+patient_proxy_output <- dplyr::bind_rows(
+  patient_gene_proxy |>
+    dplyr::transmute(
+      score_level = "gene_compartment",
+      sample_id, patient_id, compartment, recurrence,
+      feature = .data$gene,
+      healthy_proximity_risk = .data$healthy_distance,
+      mean_signed_healthy_z = .data$signed_healthy_z
+    ),
+  patient_compartment_proxy |>
+    dplyr::transmute(
+      score_level = "patient_compartment",
+      sample_id, patient_id, compartment, recurrence,
+      feature = "four_gene_mean",
+      healthy_proximity_risk, mean_signed_healthy_z
+    ),
+  patient_combined_proxy |>
+    dplyr::transmute(
+      score_level = "patient_combined",
+      sample_id = NA_character_,
+      patient_id, compartment = "IF_TC_available", recurrence,
+      feature = "four_gene_compartment_mean",
+      healthy_proximity_risk, mean_signed_healthy_z
+    )
+)
+
+readr::write_csv(patient_proxy_output, params$healthy_proxy_patient_csv)
+
+patient_compartment_proxy |>
+  dplyr::arrange(.data$compartment, .data$healthy_proximity_risk)
+```
+
+```{r}
+#| label: healthy-proxy-performance
+
+rank_auc <- function(recurrence, score) {
+  rec <- score[recurrence == "REC"]
+  nonrec <- score[recurrence == "non-REC"]
+  comparisons <- outer(rec, nonrec, "-")
+  mean(comparisons > 0) + 0.5 * mean(comparisons == 0)
+}
+
+proxy_performance_one <- function(tbl, method, scope, left_out_gene = NA_character_) {
+  rec <- tbl$healthy_proximity_risk[tbl$recurrence == "REC"]
+  nonrec <- tbl$healthy_proximity_risk[tbl$recurrence == "non-REC"]
+  rank_test <- suppressWarnings(
+    stats::wilcox.test(
+      rec,
+      nonrec,
+      alternative = "greater",
+      exact = TRUE
+    )
+  )
+
+  tibble::tibble(
+    method = method,
+    scope = scope,
+    left_out_gene = left_out_gene,
+    n_rec = length(rec),
+    n_nonrec = length(nonrec),
+    auc = rank_auc(tbl$recurrence, tbl$healthy_proximity_risk),
+    one_sided_rank_p = rank_test$p.value,
+    min_rec_minus_max_nonrec = min(rec) - max(nonrec),
+    all_rec_above_nonrec = min(rec) > max(nonrec)
+  )
+}
+
+proxy_performance <- dplyr::bind_rows(
+  purrr::map_dfr(target_compartments, function(compartment) {
+    compartment_name <- compartment
+    proxy_performance_one(
+      patient_compartment_proxy |>
+        dplyr::filter(.data$compartment == .env$compartment_name),
+      method = "posteriorHCA_healthy_proximity",
+      scope = compartment_name
+    )
+  }),
+  proxy_performance_one(
+    patient_combined_proxy,
+    method = "posteriorHCA_healthy_proximity",
+    scope = "combined_available_IF_TC"
+  )
+)
+
+proxy_leave_one_gene_out <- purrr::map_dfr(
+  unique(patient_gene_proxy$gene),
+  function(left_out_gene) {
+    loo_compartment <- patient_gene_proxy |>
+      dplyr::filter(.data$gene != left_out_gene) |>
+      dplyr::group_by(
+        .data$patient_id, .data$compartment, .data$recurrence
+      ) |>
+      dplyr::summarise(
+        healthy_proximity_risk = mean(.data$healthy_distance),
+        .groups = "drop"
+      ) |>
+      dplyr::group_by(.data$patient_id, .data$recurrence) |>
+      dplyr::summarise(
+        healthy_proximity_risk = mean(.data$healthy_proximity_risk),
+        .groups = "drop"
+      )
+
+    proxy_performance_one(
+      loo_compartment,
+      method = "posteriorHCA_healthy_proximity_LOO_gene",
+      scope = "combined_available_IF_TC",
+      left_out_gene = left_out_gene
+    )
+  }
+)
+
+healthy_proxy_performance <- dplyr::bind_rows(
+  proxy_performance,
+  proxy_leave_one_gene_out
+)
+
+readr::write_csv(
+  healthy_proxy_performance,
+  params$healthy_proxy_performance_csv
+)
+
+healthy_proxy_performance
+```
+
+```{r}
+#| label: paper-times-benchmark
+
+paper_times_path <- file.path(
+  params$case_dir,
+  "codeocean",
+  "data",
+  "Input_2_TIMES_development_from_mIHC",
+  "TIMES_distribution_input.RData"
+)
+
+paper_times_env <- new.env(parent = emptyenv())
+load(paper_times_path, envir = paper_times_env)
+paper_rec_scores <- get("liver_r_data_gene_ed", envir = paper_times_env)
+paper_nonrec_scores <- get("liver_nr_data_gene_ed", envir = paper_times_env)
+paper_rank_test <- stats::wilcox.test(
+  paper_rec_scores,
+  paper_nonrec_scores,
+  alternative = "greater",
+  exact = FALSE
+)
+
+paper_times_benchmark <- tibble::tibble(
+  method = "paper_TIMES_validation_score",
+  scope = "mIHC_validation_subset",
+  n_rec = length(paper_rec_scores),
+  n_nonrec = length(paper_nonrec_scores),
+  auc = mean(outer(paper_rec_scores, paper_nonrec_scores, ">")) +
+    0.5 * mean(outer(paper_rec_scores, paper_nonrec_scores, "==")),
+  one_sided_rank_p = paper_rank_test$p.value,
+  comparison_note = paste(
+    "Descriptive benchmark from the CodeOcean TIMES distribution input.",
+    "Not a formal equivalence test against the GeoMx posteriorHCA proxy."
+  )
+)
+
+readr::write_csv(paper_times_benchmark, params$paper_benchmark_csv)
+
+dplyr::bind_rows(
+  healthy_proxy_performance |>
+    dplyr::filter(
+      .data$method == "posteriorHCA_healthy_proximity",
+      .data$scope == "combined_available_IF_TC"
+    ) |>
+    dplyr::transmute(
+      method, scope, n_rec, n_nonrec, auc, one_sided_rank_p,
+      comparison_note =
+        "Outcome-free posteriorHCA proxy; only three available patients."
+    ),
+  paper_times_benchmark
+)
+```
+
+------------------------------------------------------------------------
+
+# Visual checks
+
+```{r}
+#| label: plot-healthy-proxy-cohort
+#| fig-width: 9
+#| fig-height: 5
+#| fig-align: center
+
+ggplot2::ggplot(
+  healthy_proxy_gene_long,
+  ggplot2::aes(
+    x = .data$recurrence,
+    y = .data$healthy_distance,
+    colour = .data$recurrence,
+    group = interaction(.data$gene, .data$compartment)
+  )
+) +
+  ggplot2::geom_hline(
+    yintercept = 1,
+    linetype = "dashed",
+    colour = "grey45"
+  ) +
+  ggplot2::geom_line(
+    colour = "grey70",
+    linewidth = 0.45
+  ) +
+  ggplot2::geom_point(size = 2.8) +
+  ggplot2::facet_wrap(~ compartment) +
+  ggplot2::scale_colour_manual(
+    values = c(`non-REC` = "#2878B5", REC = "#C23B4A")
+  ) +
+  ggplot2::labs(
+    title = "posteriorHCA healthy-proximity recurrence proxy",
+    subtitle = "Every line is one biomarker; dashed line marks one healthy grand-mean SD",
+    x = NULL,
+    y = "Absolute standardized distance from healthy liver NK",
+    colour = "Outcome"
+  ) +
+  ggplot2::theme(legend.position = "bottom")
+```
+
+```{r}
+#| label: plot-healthy-proxy-patients
+#| fig-width: 8
+#| fig-height: 4.5
+#| fig-align: center
+
+ggplot2::ggplot(
+  patient_compartment_proxy,
+  ggplot2::aes(
+    x = .data$compartment,
+    y = .data$healthy_proximity_risk,
+    colour = .data$recurrence,
+    label = .data$patient_id
+  )
+) +
+  ggplot2::geom_hline(
+    yintercept = 1,
+    linetype = "dashed",
+    colour = "grey45"
+  ) +
+  ggplot2::geom_point(size = 3) +
+  ggplot2::geom_text(
+    nudge_x = 0.08,
+    hjust = 0,
+    size = 3.2,
+    show.legend = FALSE
+  ) +
+  ggplot2::scale_colour_manual(
+    values = c(`non-REC` = "#2878B5", REC = "#C23B4A")
+  ) +
+  ggplot2::labs(
+    title = "Outcome-free patient scores",
+    subtitle = "Mean absolute healthy distance across four atlas-covered TIMES genes",
+    x = NULL,
+    y = "Mean absolute distance from healthy (SD units)",
+    colour = "Outcome"
+  ) +
+  ggplot2::theme(legend.position = "bottom")
+```
+
+**How to read this patient-level plot.** Each point is one patient in one
+spatial compartment, rather than a cohort estimate. Its vertical position is
+the mean of the four gene-specific absolute distances from the healthy liver NK
+grand mean, measured in healthy-posterior SD units. The score is therefore a
+reference-deviation index, not a recurrence probability or a model fitted to
+the recurrence labels. The dashed line at 1 is a descriptive compatibility
+boundary: a score above it means that the patient's average biomarker distance
+exceeds one healthy-reference SD. Outcome colours and labels are added only
+after the scores have been calculated.
+
+In these data, A29, the only REC patient, lies above the one-SD boundary in
+both IF and TC, whereas all available non-REC observations lie below it (A6
+and A24 nearly overlap in IF). This produces perfect observed patient ordering
+and a descriptive AUC of 1.0, but it is proof of concept rather than a stable
+performance estimate because the evaluation contains only three patients and
+one REC event. The posterior margin plot below carries the baseline and cohort
+estimation uncertainty that is not displayed by these point estimates.
+
+```{r}
+#| label: plot-healthy-proxy-posterior-margin
+#| fig-width: 8
+#| fig-height: 4.5
+#| fig-align: center
+
+proxy_margin_plot <- dplyr::bind_rows(
+  proxy_compartment_draws |>
+    dplyr::transmute(
+      scope = as.character(.data$compartment),
+      margin = .data$margin
+    ),
+  proxy_combined_draws |>
+    dplyr::transmute(
+      scope = "IF + TC",
+      margin = .data$margin
+    )
+) |>
+  dplyr::mutate(scope = factor(.data$scope, levels = c("IF", "TC", "IF + TC")))
+
+ggplot2::ggplot(
+  proxy_margin_plot,
+  ggplot2::aes(x = .data$margin, fill = .data$scope)
+) +
+  ggplot2::geom_density(alpha = 0.45, colour = NA) +
+  ggplot2::geom_vline(xintercept = 0, colour = "grey35", linewidth = 0.5) +
+  ggplot2::facet_wrap(~ scope, scales = "free_y", ncol = 1) +
+  ggplot2::scale_fill_manual(
+    values = c(IF = "#2878B5", TC = "#E08A2E", `IF + TC` = "#6A4C93")
+  ) +
+  ggplot2::labs(
+    title = "Posterior proxy margin",
+    subtitle = "Positive margin means REC is farther from healthy than non-REC",
+    x = "REC score - non-REC score",
+    y = "Density",
+    fill = NULL
+  ) +
+  ggplot2::theme(legend.position = "none")
+```
+
+```{r}
+#| label: plot-baseline-density-cohorts
+#| fig-width: 10
+#| fig-height: 7
+#| fig-align: center
+
+gene_order <- cohort_tests |>
+  dplyr::group_by(.data$gene) |>
+  dplyr::summarise(
+    median_delta = stats::median(.data$delta_log_mu_vs_baseline),
+    .groups = "drop"
+  ) |>
+  dplyr::arrange(.data$median_delta) |>
+  dplyr::pull(.data$gene)
+
+cohort_colours <- c(
+  IF_REC = "#C23B4A",
+  IF_non_REC = "#2878B5",
+  TC_REC = "#E08A2E",
+  TC_non_REC = "#2D8B57"
+)
+
+ggplot2::ggplot() +
+  ggplot2::geom_density(
+    data = baseline_draws |>
+      dplyr::mutate(gene = factor(.data$gene, levels = gene_order)),
+    ggplot2::aes(x = .data$baseline_log_mu),
+    fill = "grey82",
+    colour = "grey35",
+    alpha = 0.65,
+    linewidth = 0.35
+  ) +
+  ggplot2::geom_vline(
+    data = cohort_tests |>
+      dplyr::mutate(gene = factor(.data$gene, levels = gene_order)),
+    ggplot2::aes(
+      xintercept = .data$cohort_log_mu,
+      colour = .data$cohort
+    ),
+    linewidth = 0.85
+  ) +
+  ggplot2::scale_colour_manual(values = cohort_colours) +
+  ggplot2::facet_wrap(~ gene, scales = "free", ncol = 2) +
+  ggplot2::labs(
+    title = "Healthy liver NK grand mean vs four HCC cohorts",
+    subtitle = "Grey = posterior grand-mean log(mu); lines = edgeR cohort NB log(mu) at offset 0",
+    x = "log(mu)",
+    y = "Density",
+    colour = "Cohort"
+  ) +
+  ggplot2::theme(
+    legend.position = "bottom",
+    strip.text = ggplot2::element_text(face = "bold")
+  )
+```
+
+```{r}
+#| label: plot-cohort-heatmap
+#| fig-width: 9
+#| fig-height: 4.5
+#| fig-align: center
+
+ggplot2::ggplot(
+  cohort_tests,
+  ggplot2::aes(
+    x = .data$cohort,
+    y = forcats::fct_rev(factor(.data$gene, levels = gene_order)),
+    fill = .data$delta_log_mu_vs_baseline
+  )
+) +
+  ggplot2::geom_tile(colour = "white", linewidth = 0.4) +
+  ggplot2::geom_text(
+    ggplot2::aes(label = sprintf("W=%.2g", .data$welch_p)),
+    size = 3
+  ) +
+  ggplot2::scale_fill_gradient2(
+    low = "#2166AC",
+    mid = "white",
+    high = "#B2182B",
+    midpoint = 0,
+    name = "Delta log(mu)"
+  ) +
+  ggplot2::labs(
+    title = "Four HCC cohorts vs comprehensive healthy liver NK baseline",
+    subtitle = "Cell labels are two-sided Welch p-values",
+    x = NULL,
+    y = NULL
+  ) +
+  ggplot2::theme(
+    panel.grid = ggplot2::element_blank(),
+    axis.text.x = ggplot2::element_text(angle = 25, hjust = 1)
+  )
+```
+
+```{r}
+#| label: plot-recurrence-contrasts
+#| fig-width: 8
+#| fig-height: 5
+#| fig-align: center
+
+ggplot2::ggplot(
+  recurrence_tests,
+  ggplot2::aes(
+    x = .data$qlf_log2fc_nonrec_vs_rec,
+    y = forcats::fct_rev(factor(.data$gene, levels = times_biomarkers$gene)),
+    colour = .data$compartment
+  )
+) +
+  ggplot2::geom_vline(xintercept = 0, colour = "grey55", linewidth = 0.4) +
+  ggplot2::geom_point(size = 3) +
+  ggplot2::geom_text(
+    ggplot2::aes(label = sprintf("p+=%.2g", .data$p_nonrec_greater)),
+    nudge_x = 0.08,
+    hjust = 0,
+    size = 3,
+    show.legend = FALSE
+  ) +
+  ggplot2::facet_wrap(~ compartment, scales = "free_x") +
+  ggplot2::scale_colour_manual(values = c(IF = "#2878B5", TC = "#E08A2E")) +
+  ggplot2::labs(
+    title = "Patient-level recurrence contrasts",
+    subtitle = "Positive values support the paper hypothesis: non-REC > REC",
+    x = "edgeR QL log2 fold change: non-REC vs REC",
+    y = NULL,
+    colour = "Compartment"
+  ) +
+  ggplot2::theme(legend.position = "none")
+```
+
+------------------------------------------------------------------------
+
+# Proxy evaluation, positive control and paper benchmark
+
+```{r}
+#| label: ground-truth-comparison
+
+proxy_gene_evaluation <- healthy_proxy_gene |>
+  dplyr::left_join(
+    proxy_gene_posterior_summary |>
+      dplyr::select(
+        gene, compartment,
+        posterior_prob_rec_farther
+      ),
+    by = c("gene", "compartment")
+  )
+
+ground_truth_comparison <- dplyr::bind_rows(
+  proxy_gene_evaluation |>
+    dplyr::transmute(
+      evidence_role = "primary_posteriorHCA_proxy",
+      comparison_kind = "healthy_proximity_rec_vs_nonrec",
+      gene = .data$gene,
+      cohort = NA_character_,
+      compartment = .data$compartment,
+      expected_direction = "REC farther from healthy",
+      observed_direction = dplyr::if_else(
+        .data$rec_farther_from_healthy,
+        "REC farther from healthy",
+        "non-REC farther from healthy"
+      ),
+      matches_ground_truth = .data$rec_farther_from_healthy,
+      observed_metric = .data$proxy_margin_rec_minus_nonrec,
+      p_value = 1 - .data$posterior_prob_rec_farther,
+      note = paste(
+        "Outcome-free proxy hypothesis.",
+        "p_value is posterior tail probability P(REC not farther)."
+      )
+    ),
+  proxy_compartment_summary |>
+    dplyr::transmute(
+      evidence_role = "primary_posteriorHCA_proxy",
+      comparison_kind = "healthy_proximity_rec_vs_nonrec",
+      gene = "four_gene_mean",
+      cohort = NA_character_,
+      compartment = .data$compartment,
+      expected_direction = "REC farther from healthy",
+      observed_direction = dplyr::if_else(
+        .data$mean_margin > 0,
+        "REC farther from healthy",
+        "non-REC farther from healthy"
+      ),
+      matches_ground_truth = .data$mean_margin > 0,
+      observed_metric = .data$mean_margin,
+      p_value = 1 - .data$posterior_prob_rec_farther,
+      note = "Mean healthy-distance proxy across four atlas-covered TIMES genes."
+    ),
+  proxy_combined_summary |>
+    dplyr::transmute(
+      evidence_role = "primary_posteriorHCA_proxy",
+      comparison_kind = "healthy_proximity_rec_vs_nonrec",
+      gene = "four_gene_mean",
+      cohort = NA_character_,
+      compartment = "IF_TC_combined",
+      expected_direction = "REC farther from healthy",
+      observed_direction = dplyr::if_else(
+        .data$mean_margin > 0,
+        "REC farther from healthy",
+        "non-REC farther from healthy"
+      ),
+      matches_ground_truth = .data$mean_margin > 0,
+      observed_metric = .data$mean_margin,
+      p_value = 1 - .data$posterior_prob_rec_farther,
+      note = "Combined IF+TC posteriorHCA healthy-proximity proxy."
+    ),
+  recurrence_tests |>
+    dplyr::transmute(
+      evidence_role = "positive_control_paper_direction",
+      comparison_kind = "recurrence_direction",
+      gene = .data$gene,
+      cohort = NA_character_,
+      compartment = .data$compartment,
+      expected_direction = .data$expected_recurrence_direction,
+      observed_direction = .data$observed_recurrence_direction,
+      matches_ground_truth = .data$recurrence_matches_paper,
+      observed_metric = .data$qlf_log2fc_nonrec_vs_rec,
+      p_value = .data$p_nonrec_greater,
+      note = "Direct comparison with paper direction; positive metric means non-REC > REC."
+    )
+)
+
+readr::write_csv(ground_truth_comparison, params$ground_truth_comparison_csv)
+
+ground_truth_comparison |>
+  dplyr::mutate(dplyr::across(dplyr::where(is.numeric), ~round(.x, 4)))
+```
+
+------------------------------------------------------------------------
+
+# Interpretation and remaining limitation
+
+The primary posteriorHCA result supports the proposed proxy:
+
+- REC is farther from healthy than non-REC in
+  **`r sum(healthy_proxy_gene$rec_farther_from_healthy)` of
+  `r nrow(healthy_proxy_gene)`** gene-compartment comparisons.
+- All REC cohort values lie beyond one healthy SD, while all non-REC values
+  remain within one healthy SD.
+- The combined four-gene IF+TC score gives
+  \(P(D_{\mathrm{REC}} > D_{\mathrm{non-REC}}) =
+  `r round(proxy_combined_summary$posterior_prob_rec_farther, 3)`\).
+- For the stricter compatibility rule, the combined posterior gives
+  \(P(D_{\mathrm{REC}} > 1) =
+  `r round(proxy_combined_summary$posterior_prob_rec_beyond_one_sd, 3)`\),
+  \(P(D_{\mathrm{non-REC}} \le 1) =
+  `r round(proxy_combined_summary$posterior_prob_nonrec_within_one_sd, 3)`\),
+  and joint pattern probability
+  `r round(proxy_combined_summary$posterior_prob_proxy_pattern, 3)`.
+- The outcome-free patient score ranks the available REC patient above all
+  non-REC patients (descriptive AUC =
+  `r healthy_proxy_performance$auc[healthy_proxy_performance$method == "posteriorHCA_healthy_proximity" & healthy_proxy_performance$scope == "combined_available_IF_TC"]`).
+
+The direct edgeR contrast remains a positive control: all five paper biomarkers
+retain the published `non-REC > REC` direction in IF and TC. The supplied TIMES
+validation-score subset has descriptive AUC =
+`r round(paper_times_benchmark$auc, 3)`, compared with the proxy's AUC above.
+This is not an equivalence test: the paper benchmark uses mIHC scores from 11
+patients, whereas the posteriorHCA proxy currently has only three GeoMx
+patients and four atlas-covered genes.
+
+The public cohort is extremely small after patient-level aggregation, so
+the perfect patient ordering is proof of concept, not proof of equal power. The
+exact rank p-value remains weak because there is one REC patient. The stronger
+evidence here is the pre-specified reference pattern, its 8/8 consistency, the
+combined posterior probability, and leave-one-gene-out stability. The paper's
+much smaller gene-level p-values used multiple GeoMx ROI segments and adjusted
+for age/sex where possible; this report protects the patient as the independent
+unit and avoids ROI pseudoreplication.
+
+For final publication-grade calibration, rerun this identical workflow with the
+controlled-access raw GeoMx count matrices. `HLA-DRB1` remains testable for the
+within-HCC recurrence contrast when present in the merged count fit, but it has
+no comprehensive-baseline result while its `V1_nk` brms model branch is absent.
+
+```{r}
+#| label: output-files
+
+output_paths <- c(
+  baseline_draws_rds = params$baseline_draws_rds,
+  paper_ground_truth_csv = params$paper_ground_truth_csv,
+  cohort_results_csv = params$cohort_results_csv,
+  recurrence_results_csv = params$recurrence_results_csv,
+  patient_pseudobulk_csv = params$patient_pseudobulk_csv,
+  normalization_csv = params$normalization_csv,
+  ground_truth_comparison_csv = params$ground_truth_comparison_csv,
+  healthy_proxy_gene_csv = params$healthy_proxy_gene_csv,
+  healthy_proxy_summary_csv = params$healthy_proxy_summary_csv,
+  healthy_proxy_patient_csv = params$healthy_proxy_patient_csv,
+  healthy_proxy_performance_csv = params$healthy_proxy_performance_csv,
+  paper_benchmark_csv = params$paper_benchmark_csv
+)
+
+tibble::tibble(
+  output = names(output_paths),
+  path = unname(output_paths),
+  exists = file.exists(output_paths)
+)
+```

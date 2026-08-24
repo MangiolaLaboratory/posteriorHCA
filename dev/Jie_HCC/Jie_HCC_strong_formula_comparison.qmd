@@ -1,0 +1,1044 @@
+---
+title: "HCC formula comparison — HMC + Pathfinder"
+subtitle: "Production, strong HMC, and Pathfinder RE variants on four TIMES biomarkers"
+date: today
+date-format: "DD MMM YYYY"
+title-block-banner: true
+author:
+  - name: Chen Zhan
+    orcid: 0000-0002-4794-8339
+    email: chen.zhan@adelaide.edu.au
+    affiliation:
+      - id: sgc
+        name: SAiGENCI, The University of Adelaide
+format:
+  html:
+    theme: minty
+    df-print: paged
+    code-line-numbers: true
+    embed-resources: true
+    code-fold: true
+    code-fold-default: true
+    toc: true
+    toc-location: left
+    toc-title: "Contents"
+knitr:
+  opts_chunk:
+    message: false
+    warning: false
+editor: source
+abstract: |
+  Gene-wise comparison of six V1_nk tissue-formula / inference variants for the
+  TIMES HCC biomarkers (SPON2, ZFP36L2, ZFP36, VIM): production HMC (RE rich),
+  three strong-HMC simple-shape refits (correlated RE, interaction, uncorrelated
+  RE), and two CPU Pathfinder dense fits (original RE and split-ethnicity RE).
+  For each gene × variant we report convergence-style diagnostics and the
+  comprehensive healthy liver baseline mean and SD of log(μ). Pathfinder cells
+  use a draw-count target matched to strong HMC (6000). For non-production strong
+  HMC fits we also trace how max R̂, baseline μ, and baseline SD change as
+  post-warmup draws accumulate, and report a minimum-draw stability threshold.
+  Rendering reads cached fits only; set `refresh_diagnostics: true` after new
+  fits land (also refreshes the HMC draw-stability cache).
+params:
+  case_dir: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC"
+  model_store_root: "/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/HPC_posterior/NEW_CELL_TYPE"
+  target_cell_type: "nk"
+  strong_out_dir: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/re_vs_interaction_strong"
+  diagnostics_csv: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/re_vs_interaction_strong/formula_comparison_diagnostics.csv"
+  draws_rds: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/re_vs_interaction_strong/formula_comparison_baseline_draws.rds"
+  hmc_stability_rds: "/home/a1237163/lab/chen/posteriorHCA/dev/Jie_HCC/data/processed/re_vs_interaction_strong/hmc_draw_stability.rds"
+  refresh_diagnostics: false
+  # NULL = all post-warmup draws for baseline mean/SD and density overlays
+  # (must match the draw-stability endpoint).
+  n_baseline_draws: null
+---
+
+# Motivation
+
+We compare **six** formula / inference settings on the same four TIMES genes
+and the same comprehensive healthy liver baseline estimand:
+
+1. **Convergence / reliability** — HMC R̂, divergences, treedepth, ESS; for
+   Pathfinder, draw count and finite baseline summaries (no multi-chain HMC gates)  
+2. **Baseline mean** — posterior mean of comprehensive liver `log(μ)`  
+3. **Baseline SD** — posterior uncertainty of that estimand  
+
+| Label | Counts formula | Shape | Inference |
+|-------|----------------|-------|-----------|
+| Production | correlated RE `(\| tissue)` | rich | HMC (atlas) |
+| RE HMC | correlated RE `(\| tissue)` | simple | HMC 4×1500/3000 |
+| Interaction HMC | fixed tissue × covariate | simple | HMC 4×1500/3000 |
+| RE uncorrelated HMC | uncorrelated RE `(\|\| tissue)` | simple | HMC 4×1500/3000 |
+| Pathfinder RE | correlated RE (same as RE HMC) | simple | Pathfinder CPU dense |
+| Pathfinder RE-split | `(1+age×sex\|tissue) + (0+ethnicity\|tissue)` | simple | Pathfinder CPU dense |
+
+Pathfinder settings follow the successful pilot (CPU, dense, not OpenCL):
+`num_paths = 50`, `single_path_draws = 120` → **6000** draws targeted to match
+strong HMC post-warmup draws (`4 × 1500`).
+
+------------------------------------------------------------------------
+
+# Library setup
+
+```{r}
+#| label: setup
+
+suppressPackageStartupMessages({
+  library(tibble)
+  library(tidyr)
+  library(dplyr)
+  library(readr)
+  library(ggplot2)
+  library(forcats)
+  library(scales)
+  library(glue)
+  library(stringr)
+  library(posterior)
+  library(brms)
+  library(targets)
+})
+
+source(file.path(params$case_dir, "R", "re_vs_interaction_helpers.R"))
+source(file.path(params$case_dir, "R", "fit_convergence_helpers.R"))
+
+theme_set(theme_minimal(base_size = 11))
+
+formula_levels <- c(
+  "production", "re", "interaction", "re_uncorrelated",
+  "pathfinder_re", "pathfinder_re_split"
+)
+formula_labels <- c(
+  production = "Production (RE rich)",
+  re = "RE HMC (simple)",
+  interaction = "Interaction HMC (simple)",
+  re_uncorrelated = "RE uncorrelated HMC (simple)",
+  pathfinder_re = "Pathfinder RE (simple)",
+  pathfinder_re_split = "Pathfinder RE-split (simple)"
+)
+formula_colours <- c(
+  production = "#7A7A7A",
+  re = "#4DBBD5",
+  interaction = "#E64B35",
+  re_uncorrelated = "#3C5488",
+  pathfinder_re = "#00A087",
+  pathfinder_re_split = "#91D1C2"
+)
+gate_colours <- c(PASS = "#2D8B57", WARN = "#E08A2E", FAIL = "#C23B4A")
+fill_vals <- setNames(unname(formula_colours), unname(formula_labels))
+```
+
+------------------------------------------------------------------------
+
+# Fit inventory
+
+Expected grid: **4 genes × 6 formulas = 24 cells**.
+
+```{r}
+#| label: inventory
+
+meta <- strong_formula_inventory(
+  strong_out_dir = params$strong_out_dir,
+  case_dir = params$case_dir,
+  model_store_root = params$model_store_root,
+  target_cell_type = params$target_cell_type
+)
+
+meta$inventory |>
+  mutate(
+    formula = factor(recode(model, !!!formula_labels), levels = unname(formula_labels)),
+    status = if_else(available, source, "MISSING")
+  ) |>
+  select(gene, formula, role, shape_variant, status, file_name) |>
+  arrange(gene, formula)
+```
+
+```{r}
+#| label: inventory-check
+#| results: asis
+
+n_ok <- sum(meta$inventory$available)
+n_tot <- nrow(meta$inventory)
+n_pf <- meta$inventory |>
+  filter(str_detect(model, "^pathfinder"), available) |>
+  nrow()
+if (n_ok < n_tot) {
+  miss <- meta$inventory |> filter(!available)
+  cat(glue(
+    "**{n_ok}/{n_tot}** fits available ({n_pf} Pathfinder). Missing: ",
+    "{paste(miss$gene, miss$model, sep = '/', collapse = ', ')}."
+  ))
+} else {
+  cat(glue("All **{n_tot}** fits are available, including **{n_pf}** Pathfinder cells."))
+}
+```
+
+------------------------------------------------------------------------
+
+# Diagnostics
+
+**HMC gates** (production + strong HMC cells):
+
+| Gate | PASS rule |
+|------|-----------|
+| R̂ | `max_rhat ≤ 1.05` |
+| Divergences | `< 1%` of post-warmup transitions |
+| Treedepth | `< 10%` hit `max_treedepth` |
+| Baseline chains | range of chain-mean liver `log(μ)` `< 1` |
+
+**Pathfinder gates** (approximate; not multi-chain HMC): finite baseline mean/SD and
+`n_draws ≥ 100`. R̂ / divergence / treedepth columns are shown when available but
+are **not** used to FAIL Pathfinder cells.
+
+`FAIL` (HMC only) = `max_rhat > 1.5` or `≥ 50%` divergences; else soft → `WARN`.
+
+**Draw consistency.** Baseline mean/SD use **all** post-warmup draws with a
+fixed linpred seed (`20260722`; `sample_new_levels = "gaussian"` is otherwise
+RNG). Max R̂ is over **all** parameters via the same quantity as
+`posterior::rhat(fit)`. Draw-stability endpoints for the 12 strong-HMC cells
+are checked against this table below.
+
+```{r}
+#| label: diagnostics
+#| cache: false
+
+diag_path <- params$diagnostics_csv
+draws_path <- params$draws_rds
+
+# Refresh if forced, missing, or inventory has models absent from the cache
+# (e.g. Pathfinder fits landed after the last diagnostics run).
+need_refresh <- isTRUE(params$refresh_diagnostics) || !file.exists(diag_path)
+if (!need_refresh && file.exists(diag_path)) {
+  old <- read_csv(diag_path, show_col_types = FALSE)
+  avail_models <- meta$inventory |>
+    filter(available) |>
+    distinct(gene, model)
+  cached <- old |> distinct(gene, model)
+  need_refresh <- nrow(
+    avail_models |> anti_join(cached, by = c("gene", "model"))
+  ) > 0
+}
+
+if (need_refresh) {
+  message("Refreshing diagnostics (includes Pathfinder if present) ...")
+  diag_bundle <- diagnose_strong_formula_fits(
+    strong_out_dir = params$strong_out_dir,
+    case_dir = params$case_dir,
+    model_store_root = params$model_store_root,
+    target_cell_type = params$target_cell_type,
+    compute_baseline = TRUE,
+    n_baseline_draws = params$n_baseline_draws,
+    cache_csv = diag_path
+  )
+  diag <- diag_bundle$diagnostics
+  # Force draws refresh whenever diagnostics refresh
+  if (file.exists(draws_path)) file.remove(draws_path)
+} else {
+  diag <- read_csv(diag_path, show_col_types = FALSE)
+}
+
+diag_view <- diag |>
+  mutate(
+    formula = factor(
+      recode(model, !!!formula_labels),
+      levels = unname(formula_labels)
+    ),
+    is_pathfinder = coalesce(is_pathfinder, str_detect(model, "^pathfinder")),
+    engine = if_else(is_pathfinder, "Pathfinder", "HMC"),
+    gate = case_when(
+      gate_pass ~ "PASS",
+      is_pathfinder ~ "WARN",
+      max_rhat > 1.5 | pct_divergent >= 50 ~ "FAIL",
+      TRUE ~ "WARN"
+    ),
+    gate = factor(gate, levels = c("PASS", "WARN", "FAIL")),
+    settings = if_else(
+      is_pathfinder,
+      glue("pathfinder; n_draws={coalesce(n_draws, post_warmup_per_chain)}"),
+      glue("{chains}×{warmup}/{iter}; δ={adapt_delta}; td={max_treedepth}")
+    )
+  )
+```
+
+## Full table (convergence + baseline)
+
+```{r}
+#| label: diagnostics-table
+
+diag_view |>
+  transmute(
+    gene,
+    formula,
+    engine,
+    source,
+    settings,
+    max_rhat = round(max_rhat, 3),
+    n_rhat_gt_1_1,
+    pct_divergent = round(pct_divergent, 2),
+    pct_max_treedepth = round(pct_max_treedepth, 1),
+    min_ess_bulk = round(min_ess_bulk, 0),
+    n_draws,
+    baseline_n_draws,
+    baseline_mean = round(baseline_mean, 3),
+    baseline_sd = round(baseline_sd, 3),
+    chain_mean_range = round(baseline_chain_mean_range, 3),
+    gate
+  ) |>
+  arrange(gene, formula)
+```
+
+## Gate summary by formula
+
+```{r}
+#| label: gate-summary
+
+diag_view |>
+  count(formula, engine, gate) |>
+  pivot_wider(names_from = gate, values_from = n, values_fill = 0) |>
+  arrange(formula)
+```
+
+------------------------------------------------------------------------
+
+# 1. Convergence
+
+```{r}
+#| label: plot-max-rhat
+#| fig-width: 10
+#| fig-height: 5
+#| fig-align: center
+
+diag_hmc <- diag_view |> filter(!is_pathfinder)
+
+ggplot(diag_hmc, aes(x = gene, y = max_rhat, fill = formula)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.75) +
+  geom_hline(yintercept = 1.05, linetype = 2, colour = "grey40") +
+  geom_hline(yintercept = 1.1, linetype = 3, colour = "grey60") +
+  scale_fill_manual(values = fill_vals, drop = FALSE) +
+  labs(
+    title = "Maximum R̂ (HMC cells only)",
+    subtitle = "Pathfinder omitted — single-path draws are not multi-chain HMC",
+    x = NULL, y = "max R̂", fill = NULL
+  ) +
+  theme(legend.position = "bottom")
+```
+
+```{r}
+#| label: plot-divergences
+#| fig-width: 10
+#| fig-height: 5
+#| fig-align: center
+
+ggplot(diag_hmc, aes(x = gene, y = pct_divergent, fill = formula)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.75) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "grey40") +
+  scale_fill_manual(values = fill_vals, drop = FALSE) +
+  labs(
+    title = "Divergent transitions (% of post-warmup, HMC only)",
+    subtitle = "Dashed = 1% PASS gate",
+    x = NULL, y = "% divergent", fill = NULL
+  ) +
+  theme(legend.position = "bottom")
+```
+
+```{r}
+#| label: plot-ess-draws
+#| fig-width: 10
+#| fig-height: 5
+#| fig-align: center
+
+# HMC: min bulk ESS; Pathfinder: reported n_draws (approximation quality proxy)
+ess_plot <- diag_view |>
+  mutate(
+    metric = if_else(is_pathfinder, as.numeric(n_draws), as.numeric(min_ess_bulk)),
+    metric_label = if_else(is_pathfinder, "n_draws (Pathfinder)", "min ESS bulk (HMC)")
+  )
+
+ggplot(ess_plot, aes(x = gene, y = metric, fill = formula)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.75) +
+  facet_wrap(~ metric_label, scales = "free_y") +
+  scale_fill_manual(values = fill_vals, drop = FALSE) +
+  labs(
+    title = "Effective sample size (HMC) vs Pathfinder draw count",
+    subtitle = "Pathfinder target was 6000 draws (50 paths × 120); actual n_draws may differ",
+    x = NULL, y = NULL, fill = NULL
+  ) +
+  theme(legend.position = "bottom")
+```
+
+```{r}
+#| label: convergence-text
+#| results: asis
+
+gate_by_formula <- diag_view |>
+  group_by(formula, engine) |>
+  summarise(
+    n = n(),
+    n_pass = sum(gate == "PASS"),
+    n_warn = sum(gate == "WARN"),
+    n_fail = sum(gate == "FAIL"),
+    median_rhat = median(max_rhat, na.rm = TRUE),
+    median_n_draws = median(n_draws, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+worst_hmc <- diag_view |>
+  filter(!is_pathfinder) |>
+  arrange(desc(max_rhat)) |>
+  slice(1)
+
+cat(glue(
+  "Among HMC cells, worst max R̂ is **{round(worst_hmc$max_rhat, 3)}** for ",
+  "**{worst_hmc$gene} / {worst_hmc$formula}** (gate = {worst_hmc$gate}).\n\n"
+))
+knitr::kable(gate_by_formula |> mutate(across(where(is.numeric), ~ round(.x, 3))))
+```
+
+------------------------------------------------------------------------
+
+# 2. Baseline mean (comprehensive liver log μ)
+
+```{r}
+#| label: plot-baseline-mean
+#| fig-width: 10
+#| fig-height: 5
+#| fig-align: center
+
+ggplot(diag_view, aes(x = gene, y = baseline_mean, fill = formula)) +
+  geom_col(position = position_dodge(width = 0.85), width = 0.8) +
+  scale_fill_manual(values = fill_vals, drop = FALSE) +
+  labs(
+    title = "Comprehensive healthy liver baseline mean",
+    subtitle = "Posterior mean of log(μ); includes Pathfinder RE / RE-split",
+    x = NULL, y = "mean baseline log(μ)", fill = NULL
+  ) +
+  theme(legend.position = "bottom")
+```
+
+```{r}
+#| label: baseline-mean-vs-production
+
+mean_vs_prod <- diag_view |>
+  select(gene, model, baseline_mean) |>
+  pivot_wider(names_from = model, values_from = baseline_mean) |>
+  mutate(
+    across(
+      any_of(c(
+        "re", "interaction", "re_uncorrelated",
+        "pathfinder_re", "pathfinder_re_split"
+      )),
+      ~ .x - production,
+      .names = "delta_{.col}"
+    )
+  )
+
+mean_vs_prod |>
+  mutate(across(where(is.numeric), ~ round(.x, 3))) |>
+  arrange(gene)
+```
+
+### Pathfinder vs matched HMC RE (same counts formula)
+
+```{r}
+#| label: pathfinder-vs-hmc-re-mean
+
+pf_vs_re <- diag_view |>
+  filter(model %in% c("re", "pathfinder_re", "pathfinder_re_split")) |>
+  select(gene, model, baseline_mean, baseline_sd, gate) |>
+  pivot_wider(
+    names_from = model,
+    values_from = c(baseline_mean, baseline_sd, gate)
+  ) |>
+  mutate(
+    delta_pf_re = baseline_mean_pathfinder_re - baseline_mean_re,
+    delta_pf_split = baseline_mean_pathfinder_re_split - baseline_mean_re
+  )
+
+pf_vs_re |>
+  mutate(across(where(is.numeric), ~ round(.x, 3))) |>
+  arrange(gene)
+```
+
+------------------------------------------------------------------------
+
+# 3. Baseline SD
+
+```{r}
+#| label: plot-baseline-sd
+#| fig-width: 10
+#| fig-height: 5
+#| fig-align: center
+
+ggplot(diag_view, aes(x = gene, y = baseline_sd, fill = formula)) +
+  geom_col(position = position_dodge(width = 0.85), width = 0.8) +
+  scale_fill_manual(values = fill_vals, drop = FALSE) +
+  labs(
+    title = "Comprehensive healthy liver baseline SD",
+    subtitle = "Lower = tighter healthy envelope for HCC proximity scores",
+    x = NULL, y = "SD of baseline log(μ)", fill = NULL
+  ) +
+  theme(legend.position = "bottom")
+```
+
+```{r}
+#| label: baseline-sd-vs-production
+
+sd_vs_prod <- diag_view |>
+  select(gene, model, baseline_sd) |>
+  pivot_wider(names_from = model, values_from = baseline_sd) |>
+  mutate(
+    across(
+      any_of(c(
+        "re", "interaction", "re_uncorrelated",
+        "pathfinder_re", "pathfinder_re_split"
+      )),
+      ~ .x / production,
+      .names = "ratio_{.col}"
+    )
+  )
+
+sd_vs_prod |>
+  mutate(across(where(is.numeric), ~ round(.x, 3))) |>
+  arrange(gene)
+```
+
+```{r}
+#| label: sd-text
+#| results: asis
+
+narrowest <- diag_view |>
+  group_by(gene) |>
+  slice_min(baseline_sd, n = 1, with_ties = FALSE) |>
+  ungroup()
+
+cat("Narrowest baseline SD per gene:\n\n")
+knitr::kable(
+  narrowest |>
+    transmute(gene, formula, engine, baseline_sd = round(baseline_sd, 3), gate)
+)
+```
+
+------------------------------------------------------------------------
+
+# 4. HMC draw stability (non-production)
+
+Production atlas fits are short (typically 2 × 200 post-warmup) and Pathfinder
+is not multi-chain HMC, so this section uses only the three **strong HMC**
+variants: RE, interaction, and RE-uncorrelated (4 genes × 3 = 12 fits).
+
+**Method.** For each fit, take the first $k$ post-warmup iterations from every
+chain ($k$ on a grid up to 1500 → $n_{\mathrm{draws}} = 4k$). At each $k$:
+
+1. **Convergence** — max R̂ over **all** parameters (same as the main diagnostics table)  
+2. **Baseline μ** — mean of comprehensive liver `log(μ)` over those draws  
+3. **Baseline SD** — SD of the same estimand  
+
+The $k = 1500$ endpoint therefore matches the main-table baseline and max R̂ for
+these 12 cells.  
+
+**Stability rule** (relative to the full 6000-draw endpoint):
+
+| Metric | Stable when… |
+|--------|----------------|
+| Baseline μ | within `max(0.05, 2% × |μ_full|)` of μ_full and stays there |
+| Baseline SD | within `max(0.05, 5% × SD_full)` of SD_full and stays there |
+| max R̂ | within 0.02 of R̂_full **and** ≤ 1.05, and stays there |
+
+The reported **minimum draws** for a fit is the first $n$ where **all three**
+criteria hold thereafter (`n_draws_all_stable`).
+
+```{r}
+#| label: hmc-draw-stability
+#| cache: false
+
+stab_path <- params$hmc_stability_rds
+need_stab <- isTRUE(params$refresh_diagnostics) || !file.exists(stab_path)
+
+if (need_stab) {
+  message("Computing HMC cumulative draw-stability curves ...")
+  stab <- collect_hmc_draw_stability(
+    strong_out_dir = params$strong_out_dir,
+    case_dir = params$case_dir,
+    model_store_root = params$model_store_root,
+    target_cell_type = params$target_cell_type,
+    cache_rds = stab_path,
+    force = TRUE
+  )
+} else {
+  stab <- readRDS(stab_path)
+}
+
+stab_curves <- stab$curves |>
+  mutate(
+    formula = factor(
+      recode(model, !!!formula_labels),
+      levels = unname(formula_labels)
+    )
+  ) |>
+  group_by(gene, model) |>
+  mutate(
+    mean_final = dplyr::last(baseline_mean),
+    sd_final = dplyr::last(baseline_sd),
+    rhat_final = dplyr::last(max_rhat),
+    mean_delta = baseline_mean - mean_final,
+    sd_ratio = baseline_sd / sd_final,
+    rhat_delta = max_rhat - rhat_final
+  ) |>
+  ungroup()
+
+stab_thresholds <- stab$thresholds |>
+  mutate(
+    formula = factor(
+      recode(model, !!!formula_labels),
+      levels = unname(formula_labels)
+    )
+  )
+```
+
+## Stability thresholds (minimum draws)
+
+```{r}
+#| label: hmc-stability-threshold-table
+
+stab_thresholds |>
+  transmute(
+    gene,
+    formula,
+    n_draws_full,
+    max_rhat_full = round(max_rhat_full, 3),
+    baseline_mean_full = round(baseline_mean_full, 3),
+    baseline_sd_full = round(baseline_sd_full, 3),
+    n_draws_rhat_stable,
+    n_draws_mean_stable,
+    n_draws_sd_stable,
+    n_draws_all_stable
+  ) |>
+  arrange(gene, formula)
+```
+
+```{r}
+#| label: hmc-stability-threshold-text
+#| results: asis
+
+ok <- stab_thresholds |> filter(!is.na(n_draws_all_stable))
+n_miss <- nrow(stab_thresholds) - nrow(ok)
+if (nrow(ok)) {
+  med_all <- median(ok$n_draws_all_stable)
+  max_row <- ok |> slice_max(n_draws_all_stable, n = 1, with_ties = FALSE)
+  cat(glue(
+    "**{nrow(ok)}/{nrow(stab_thresholds)}** strong-HMC fits reach the joint ",
+    "stability criterion (median **{med_all}** draws). ",
+    "Highest requirement: **{max_row$n_draws_all_stable}** for ",
+    "**{max_row$gene} / {max_row$formula}** ",
+    "(R̂@{max_row$n_draws_rhat_stable}, μ@{max_row$n_draws_mean_stable}, ",
+    "SD@{max_row$n_draws_sd_stable})."
+  ))
+  if (n_miss > 0) {
+    miss <- stab_thresholds |> filter(is.na(n_draws_all_stable))
+    cat(glue(
+      "\n\n**{n_miss}** fits never satisfy the joint rule — typically because ",
+      "full-sample max R̂ stays above 1.05: ",
+      "{paste(miss$gene, miss$model, sep = '/', collapse = ', ')}. ",
+      "A median like {med_all} must **not** become a universal budget; ",
+      "shortening runs is only safe gene-by-gene after R̂ / diagnostics are fixed."
+    ))
+  }
+} else {
+  cat("No joint stability thresholds found under the current tolerances.")
+}
+```
+
+### Diagnostics ↔ stability endpoint check
+
+```{r}
+#| label: hmc-stability-reconcile
+
+reconcile <- stab_thresholds |>
+  select(
+    gene, model,
+    stab_max_rhat = max_rhat_full,
+    stab_mean = baseline_mean_full,
+    stab_sd = baseline_sd_full,
+    stab_n = n_draws_full
+  ) |>
+  left_join(
+    diag_view |>
+      filter(model %in% c("re", "interaction", "re_uncorrelated")) |>
+      select(
+        gene, model,
+        diag_max_rhat = max_rhat,
+        diag_mean = baseline_mean,
+        diag_sd = baseline_sd,
+        diag_n = baseline_n_draws
+      ),
+    by = c("gene", "model")
+  ) |>
+  mutate(
+    delta_rhat = stab_max_rhat - diag_max_rhat,
+    delta_mean = stab_mean - diag_mean,
+    delta_sd = stab_sd - diag_sd,
+    ok = abs(delta_rhat) < 1e-6 &
+      abs(delta_mean) < 1e-6 &
+      abs(delta_sd) < 1e-6 &
+      stab_n == diag_n
+  )
+
+reconcile |>
+  mutate(across(where(is.numeric), ~ round(.x, 6))) |>
+  arrange(gene, model)
+```
+
+```{r}
+#| label: hmc-stability-reconcile-text
+#| results: asis
+
+n_ok <- sum(reconcile$ok, na.rm = TRUE)
+n_tot <- nrow(reconcile)
+if (n_ok == n_tot) {
+  cat(glue(
+    "All **{n_tot}** strong-HMC cells match between the main diagnostics table ",
+    "and the draw-stability full-draw endpoint (max R̂, baseline μ, SD, n draws)."
+  ))
+} else {
+  bad <- reconcile |> filter(!ok | is.na(ok))
+  cat(glue(
+    "**{n_ok}/{n_tot}** cells match. Mismatches remain for: ",
+    "{paste(bad$gene, bad$model, sep = '/', collapse = ', ')}. ",
+    "Re-run with `refresh_diagnostics: true` after helper changes."
+  ))
+}
+```
+
+## Trace: max R̂ vs draws
+
+```{r}
+#| label: plot-hmc-rhat-vs-draws
+#| fig-width: 10
+#| fig-height: 7
+#| fig-align: center
+
+ggplot(stab_curves, aes(x = n_draws, y = max_rhat, colour = formula)) +
+  geom_hline(yintercept = 1.05, linetype = 2, colour = "grey40") +
+  geom_hline(yintercept = 1.1, linetype = 3, colour = "grey60") +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 1.4) +
+  facet_wrap(~ gene, scales = "free_y") +
+  scale_colour_manual(values = fill_vals, drop = TRUE) +
+  scale_x_continuous(labels = label_comma()) +
+  labs(
+    title = "Cumulative max R̂ as post-warmup draws increase",
+    subtitle = "Strong HMC only (RE / interaction / RE-uncorrelated); dashed = 1.05 PASS gate",
+    x = "Cumulative draws (4 chains × first k iterations)",
+    y = "max R̂",
+    colour = NULL
+  ) +
+  theme(legend.position = "bottom")
+```
+
+## Trace: baseline μ vs draws
+
+```{r}
+#| label: plot-hmc-mean-vs-draws
+#| fig-width: 10
+#| fig-height: 7
+#| fig-align: center
+
+ggplot(stab_curves, aes(x = n_draws, y = baseline_mean, colour = formula)) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 1.4) +
+  facet_wrap(~ gene, scales = "free_y") +
+  scale_colour_manual(values = fill_vals, drop = TRUE) +
+  scale_x_continuous(labels = label_comma()) +
+  labs(
+    title = "Cumulative baseline mean as draws increase",
+    subtitle = "Comprehensive liver log(μ); curves should flatten toward the full-sample mean",
+    x = "Cumulative draws",
+    y = "mean baseline log(μ)",
+    colour = NULL
+  ) +
+  theme(legend.position = "bottom")
+```
+
+```{r}
+#| label: plot-hmc-mean-delta-vs-draws
+#| fig-width: 10
+#| fig-height: 7
+#| fig-align: center
+
+ggplot(stab_curves, aes(x = n_draws, y = mean_delta, colour = formula)) +
+  geom_hline(yintercept = 0, linetype = 2, colour = "grey50") +
+  geom_hline(yintercept = c(-0.05, 0.05), linetype = 3, colour = "grey70") +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 1.4) +
+  facet_wrap(~ gene, scales = "free_y") +
+  scale_colour_manual(values = fill_vals, drop = TRUE) +
+  scale_x_continuous(labels = label_comma()) +
+  labs(
+    title = "Baseline mean − full-sample mean",
+    subtitle = "Dotted bands ≈ ±0.05 absolute tolerance used in the stability rule",
+    x = "Cumulative draws",
+    y = "Δ mean log(μ)",
+    colour = NULL
+  ) +
+  theme(legend.position = "bottom")
+```
+
+## Trace: baseline SD vs draws
+
+```{r}
+#| label: plot-hmc-sd-vs-draws
+#| fig-width: 10
+#| fig-height: 7
+#| fig-align: center
+
+ggplot(stab_curves, aes(x = n_draws, y = baseline_sd, colour = formula)) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 1.4) +
+  facet_wrap(~ gene, scales = "free_y") +
+  scale_colour_manual(values = fill_vals, drop = TRUE) +
+  scale_x_continuous(labels = label_comma()) +
+  labs(
+    title = "Cumulative baseline SD as draws increase",
+    subtitle = "Early draws often understate SD; look for flattening",
+    x = "Cumulative draws",
+    y = "SD of baseline log(μ)",
+    colour = NULL
+  ) +
+  theme(legend.position = "bottom")
+```
+
+```{r}
+#| label: plot-hmc-sd-ratio-vs-draws
+#| fig-width: 10
+#| fig-height: 7
+#| fig-align: center
+
+ggplot(stab_curves, aes(x = n_draws, y = sd_ratio, colour = formula)) +
+  geom_hline(yintercept = 1, linetype = 2, colour = "grey50") +
+  geom_hline(yintercept = c(0.95, 1.05), linetype = 3, colour = "grey70") +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 1.4) +
+  facet_wrap(~ gene, scales = "free_y") +
+  scale_colour_manual(values = fill_vals, drop = TRUE) +
+  scale_x_continuous(labels = label_comma()) +
+  labs(
+    title = "Baseline SD / full-sample SD",
+    subtitle = "Dotted = ±5% relative band used in the stability rule",
+    x = "Cumulative draws",
+    y = "SD ratio",
+    colour = NULL
+  ) +
+  theme(legend.position = "bottom")
+```
+
+```{r}
+#| label: plot-hmc-stability-bars
+#| fig-width: 10
+#| fig-height: 5
+#| fig-align: center
+
+thr_long <- stab_thresholds |>
+  select(
+    gene, formula,
+    Rhat = n_draws_rhat_stable,
+    Mean = n_draws_mean_stable,
+    SD = n_draws_sd_stable,
+    All = n_draws_all_stable
+  ) |>
+  pivot_longer(c(Rhat, Mean, SD, All), names_to = "metric", values_to = "n_draws") |>
+  mutate(metric = factor(metric, levels = c("Rhat", "Mean", "SD", "All")))
+
+ggplot(thr_long, aes(x = gene, y = n_draws, fill = formula)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.75) +
+  facet_wrap(~ metric, nrow = 1) +
+  scale_fill_manual(values = fill_vals, drop = TRUE) +
+  scale_y_continuous(labels = label_comma()) +
+  labs(
+    title = "Minimum cumulative draws to stability",
+    subtitle = "All = max of R̂ / mean / SD thresholds (NA if criterion never holds)",
+    x = NULL, y = "n draws", fill = NULL
+  ) +
+  theme(legend.position = "bottom")
+```
+
+------------------------------------------------------------------------
+
+# Baseline posterior densities
+
+```{r}
+#| label: baseline-draws
+#| cache: false
+
+need_draws <- isTRUE(params$refresh_diagnostics) ||
+  need_refresh ||
+  !file.exists(draws_path)
+
+if (need_draws) {
+  message("Collecting baseline draws (includes Pathfinder) ...")
+  draws_df <- collect_strong_baseline_draws(
+    strong_out_dir = params$strong_out_dir,
+    case_dir = params$case_dir,
+    model_store_root = params$model_store_root,
+    target_cell_type = params$target_cell_type,
+    n_draws = params$n_baseline_draws,
+    cache_rds = draws_path
+  )
+} else {
+  draws_df <- readRDS(draws_path)
+}
+
+draws_labelled <- draws_df |>
+  mutate(
+    formula = factor(
+      recode(model, !!!formula_labels),
+      levels = unname(formula_labels)
+    ),
+    is_pathfinder = str_detect(model, "^pathfinder")
+  )
+```
+
+```{r}
+#| label: plot-baseline-density
+#| fig-width: 10
+#| fig-height: 7
+#| fig-align: center
+
+ggplot(draws_labelled, aes(x = baseline_log_mu, colour = formula)) +
+  geom_density(linewidth = 0.8) +
+  facet_wrap(~ gene, scales = "free") +
+  scale_colour_manual(values = fill_vals, drop = FALSE) +
+  labs(
+    title = "Comprehensive liver baseline posterior by formula",
+    subtitle = "All post-warmup draws (same estimand as diagnostics / stability endpoint)",
+    x = "baseline log(μ)", y = "Density", colour = NULL
+  ) +
+  theme(legend.position = "bottom")
+```
+
+```{r}
+#| label: plot-baseline-density-re-family
+#| fig-width: 10
+#| fig-height: 7
+#| fig-align: center
+
+re_family <- draws_labelled |>
+  filter(model %in% c("production", "re", "pathfinder_re", "pathfinder_re_split"))
+
+ggplot(re_family, aes(x = baseline_log_mu, colour = formula)) +
+  geom_density(linewidth = 0.85) +
+  facet_wrap(~ gene, scales = "free") +
+  scale_colour_manual(values = fill_vals, drop = TRUE) +
+  labs(
+    title = "RE-family only: production vs HMC RE vs Pathfinder",
+    subtitle = "Isolates Pathfinder approximation error relative to strong HMC RE",
+    x = "baseline log(μ)", y = "Density", colour = NULL
+  ) +
+  theme(legend.position = "bottom")
+```
+
+------------------------------------------------------------------------
+
+# Settings used
+
+```{r}
+#| label: settings-table
+
+diag_view |>
+  distinct(
+    formula, engine, gene, source, algorithm,
+    chains, warmup, iter, n_draws, adapt_delta, max_treedepth, seed
+  ) |>
+  arrange(formula, gene)
+```
+
+- **Production HMC:** atlas `V1_nk` defaults (typically 2 × 400/600).  
+- **Strong HMC:** 4 chains × 1500 warmup / 3000 iter, `adapt_delta = 0.95`,
+  `max_treedepth = 12`, 4 × 8 threads.  
+- **Pathfinder:** CPU dense, `opencl = NULL`, `sparse = FALSE`, `num_paths = 50`,
+  `single_path_draws = 120` (target 6000 draws), `threads = 8`,
+  `psis_resample = FALSE`.
+
+------------------------------------------------------------------------
+
+# Interpretation
+
+```{r}
+#| label: interpretation
+#| results: asis
+
+n_pass <- sum(diag_view$gate == "PASS")
+n_warn <- sum(diag_view$gate == "WARN")
+n_fail <- sum(diag_view$gate == "FAIL")
+n_pf <- sum(diag_view$is_pathfinder)
+
+mean_sd <- diag_view |>
+  group_by(formula) |>
+  summarise(mean_sd = mean(baseline_sd, na.rm = TRUE), .groups = "drop") |>
+  arrange(mean_sd)
+
+best_sd <- mean_sd$formula[1]
+worst_sd <- mean_sd$formula[nrow(mean_sd)]
+
+pf_shift <- diag_view |>
+  filter(model %in% c("re", "pathfinder_re")) |>
+  select(gene, model, baseline_mean) |>
+  pivot_wider(names_from = model, values_from = baseline_mean) |>
+  mutate(abs_shift = abs(pathfinder_re - re))
+
+stab_ok <- stab_thresholds |> filter(!is.na(n_draws_all_stable))
+stab_note <- if (nrow(stab_ok)) {
+  glue(
+    " Strong-HMC joint draw-stability median = **{median(stab_ok$n_draws_all_stable)}** ",
+    "(of {nrow(stab_ok)}/{nrow(stab_thresholds)} fits)."
+  )
+} else {
+  " Strong-HMC joint draw-stability thresholds were not identified under current tolerances."
+}
+
+cat(glue(
+  "Across {nrow(diag_view)} gene × formula cells ({n_pf} Pathfinder): ",
+  "**{n_pass} PASS**, **{n_warn} WARN**, **{n_fail} FAIL**. ",
+  "Tightest mean baseline SD: **{best_sd}** ({round(mean_sd$mean_sd[1], 3)}); ",
+  "widest: **{worst_sd}** ({round(mean_sd$mean_sd[nrow(mean_sd)], 3)}). ",
+  "Median |Pathfinder RE − HMC RE| baseline mean shift: ",
+  "**{round(median(pf_shift$abs_shift, na.rm = TRUE), 3)}** log units.",
+  "{stab_note}"
+))
+```
+
+**How to read Pathfinder in this report**
+
+1. **Convergence** — do not treat Pathfinder R̂ like HMC; use the Pathfinder-specific
+   gate and compare baselines to the strong HMC RE reference.  
+2. **Baseline mean** — Pathfinder is useful if it tracks HMC RE closely (small
+   `delta_pf_re`); large shifts mean the approximation is not yet a drop-in.  
+3. **Baseline SD** — Pathfinder can understate or overstate uncertainty; prefer
+   HMC SD for proximity scores unless Pathfinder SD is validated gene-wise.  
+4. **RE-split** — ask whether splitting ethnicity slopes buys speed/stability
+   without moving the liver baseline relative to Pathfinder original RE.
+
+**How to read HMC draw stability**
+
+1. Curves use **prefix draws** (first $k$ iterations × all chains), not random
+   subsets — early R̂ can look worse than the full run.  
+2. Prefer the **joint** threshold (`n_draws_all_stable`) over single metrics;
+   SD often stabilises later than the mean.  
+3. **Do not treat the median threshold as a universal budget.** Fits that never
+   clear R̂ ≤ 1.05, or genes whose baseline mean drifts slowly (e.g. high
+   `n_draws_mean_stable`), need the full strong-HMC length (or a longer one)
+   until diagnostics are fixed; shortening is only safe gene-by-gene.  
+4. Endpoint values are reconciled with the main diagnostics table (same all-draw
+   baseline and all-parameter max R̂).
+
+------------------------------------------------------------------------
+
+# Saved artefacts
+
+| File | Description |
+|------|-------------|
+| `r params$strong_out_dir`/`fit_*.rds` | Strong HMC fits |
+| `r params$strong_out_dir`/`fit_pathfinder_*.rds` | Pathfinder RE / RE-split |
+| `r params$diagnostics_csv` | Cached diagnostics (auto-refreshes when new models appear) |
+| `r params$draws_rds` | Cached baseline draws |
+| `r params$hmc_stability_rds` | Cached HMC cumulative draw-stability curves + thresholds |
+| Production | `V1_nk` `estimates_chunk_*` |
+| Pathfinder store | `/hpcfs/.../re_vs_interaction_pathfinder/_targets` |

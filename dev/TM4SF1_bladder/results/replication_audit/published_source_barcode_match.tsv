@@ -1,0 +1,13 @@
+patient_id	source_rows	source_simple_unique_barcodes	simple_barcodes_present_anywhere	best_single_library_overlap	best_library	best_library_assigned_patient	overlap_with_assigned_patient_libraries	barcode_interpretation_note
+VAR01	358	326	326	205	HY_21222_T2_48	VAR01	326	12-bp source barcodes can be compared to deposited DGE headers
+VAR07	848	792	792	289	HY_21226_T1_48	VAR07	697	12-bp source barcodes can be compared to deposited DGE headers
+VAR09	2917	2909	2909	1462	HY_21262_1_S39	VAR09	2909	12-bp source barcodes can be compared to deposited DGE headers
+VAR05	428	393	393	210	HY_FG_T1_37	VAR05	393	12-bp source barcodes can be compared to deposited DGE headers
+UC03	163	163	163	163	HY_HG_T2_37	UC03	163	12-bp source barcodes can be compared to deposited DGE headers
+VAR06	645	631	631	239	HY_20847_T3-1_S21	VAR06	631	12-bp source barcodes can be compared to deposited DGE headers
+VAR03	812	803	803	532	HY_JM_T2_S14	VAR03	803	12-bp source barcodes can be compared to deposited DGE headers
+VAR02	479	478	478	273	HY_PS_T2-1_S18	VAR02	478	12-bp source barcodes can be compared to deposited DGE headers
+VAR08	568	0	0	0	HY_20847_N2_S16	VAR06	0	source identifiers include pooled-library names rather than recoverable 12-bp barcodes
+VAR04	342	0	0	0	HY_20847_N2_S16	VAR06	0	source identifiers include pooled-library names rather than recoverable 12-bp barcodes
+UC01	605	605	3	1	HY_FG_CIS_48-1	VAR05	0	12-bp source barcodes can be compared to deposited DGE headers
+UC02	388	386	386	199	SG-1_S29	UC02	386	12-bp source barcodes can be compared to deposited DGE headers
