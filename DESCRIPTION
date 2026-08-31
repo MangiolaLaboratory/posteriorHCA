@@ -21,12 +21,19 @@ Imports:
     utils,
     ggrepel,
     qs2,
-    brms
+    brms,
+    readr,
+    edgeR
 LazyData: true
-RoxygenNote: 7.3.2
 Suggests: 
     knitr,
     rmarkdown,
-    testthat (>= 3.0.0)
+    testthat (>= 3.0.0),
+    SummarizedExperiment,
+    SingleCellExperiment,
+    Seurat,
+    SeuratObject,
+    S4Vectors
 Config/testthat/edition: 3
 VignetteBuilder: knitr
+Config/roxygen2/version: 8.0.0

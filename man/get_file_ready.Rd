@@ -8,7 +8,7 @@ get_file_ready(
   cache_directory = get_default_cache_dir(),
   use_cache = TRUE,
   container,
-  prefix,
+  prefix = NULL,
   filename
 )
 }
@@ -19,7 +19,9 @@ get_file_ready(
 
 \item{container}{Character. Name of the container in Nectar object storage.}
 
-\item{prefix}{Character. Prefix (folder name) in the container.}
+\item{prefix}{Character. Prefix (folder) in the container, e.g. a cell type
+(`cd8.naive`) or `reference_samples`. `NULL` or `""` for objects at the
+container root (e.g. `meta/latest.csv`).}
 
 \item{filename}{Character. Name of the file to download.}
 }

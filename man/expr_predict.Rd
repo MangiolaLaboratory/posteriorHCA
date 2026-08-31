@@ -2,7 +2,7 @@
 % Please edit documentation in R/method.R
 \name{expr_predict}
 \alias{expr_predict}
-\title{expr_predict: Predict gene expression using brms model}
+\title{Query a stored gene-level brms model}
 \usage{
 expr_predict(
   cell_type,
@@ -12,7 +12,12 @@ expr_predict(
   disease_groups = NA,
   ethnicity_groups = NA,
   assay_groups = NA,
-  tissue_groups = NA
+  tissue_groups = NA,
+  version = "latest",
+  quantity = c("linpred", "predict", "epred"),
+  collapse = c("mean", "pool", "sample"),
+  ndraws = NULL,
+  seed = NULL
 )
 }
 \arguments{
@@ -20,23 +25,32 @@ expr_predict(
 
 \item{gene_ensg}{A string indicating the gene ENSEMBL ID (e.g., "ENSG00000000419").}
 
-\item{age_decade}{A string or NA for age decade (default: NA).}
+\item{age_decade, sex, disease_groups, ethnicity_groups, assay_groups, tissue_groups}{Metadata choices. See the rules above.}
 
-\item{sex}{A string or NA for sex (default: NA).}
+\item{version}{`"latest"` or a pinned container/version (e.g. `"V1"`).}
 
-\item{disease_groups}{A string or NA for disease groups (default: NA).}
+\item{quantity}{`"linpred"` for log(μ), `"predict"` for posterior
+predicted counts, `"epred"` for expected counts.}
 
-\item{ethnicity_groups}{A string or NA for ethnicity groups (default: NA).}
+\item{collapse}{`"mean"` averages grid profiles within each draw.
+`"pool"` stacks every draw x profile. `"sample"` picks one profile
+per draw.}
 
-\item{assay_groups}{A string or NA for assay groups (default: NA).}
+\item{ndraws}{Number of posterior draws, or `NULL` for all.}
 
-\item{tissue_groups}{A string or NA for tissue groups (default: NA).}
+\item{seed}{Optional RNG seed.}
 }
 \value{
-A list containing predictions (pred), summary statistics (mean, median, peak location), and a density plot.
+A list with `pred` (data frame of draws), `summary`, `plot`,
+  plus `grid`, `quantity`, and `collapse`.
 }
 \description{
-This function downloads a brms model file for a specific cell type and gene,
-performs prediction based on provided metadata, and returns predictions with
-summary statistics and a density plot.
+Loads the fit, builds a covariate grid with [build_newdata_grid()],
+then draws with [expr_draws()].
+}
+\details{
+Metadata rules (same as [build_newdata_grid()]):
+* `NA` — marginalise over every level the model knows
+* one value — fix that level
+* several values — marginalise over only those levels
 }

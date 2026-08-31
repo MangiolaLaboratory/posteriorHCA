@@ -280,26 +280,33 @@ composition_posterior_test <-
 
 }
 
-#' expr_predict: Predict gene expression using brms model
+#' Query a stored gene-level brms model
 #'
-#' This function downloads a brms model file for a specific cell type and gene,
-#' performs prediction based on provided metadata, and returns predictions with
-#' summary statistics and a density plot.
+#' Loads the fit, builds a covariate grid with [build_newdata_grid()],
+#' then draws with [expr_draws()].
+#'
+#' Metadata rules (same as [build_newdata_grid()]):
+#' * `NA` — marginalise over every level the model knows
+#' * one value — fix that level
+#' * several values — marginalise over only those levels
 #'
 #' @param cell_type A string indicating the cell type.
 #' @param gene_ensg A string indicating the gene ENSEMBL ID (e.g., "ENSG00000000419").
-#' @param age_decade A string or NA for age decade (default: NA).
-#' @param sex A string or NA for sex (default: NA).
-#' @param disease_groups A string or NA for disease groups (default: NA).
-#' @param ethnicity_groups A string or NA for ethnicity groups (default: NA).
-#' @param assay_groups A string or NA for assay groups (default: NA).
-#' @param tissue_groups A string or NA for tissue groups (default: NA).
-#' @return A list containing predictions (pred), summary statistics (mean, median, peak location), and a density plot.
+#' @param age_decade,sex,disease_groups,ethnicity_groups,assay_groups,tissue_groups
+#'   Metadata choices. See the rules above.
+#' @param version `"latest"` or a pinned container/version (e.g. `"V1"`).
+#' @param quantity `"linpred"` for log(μ), `"predict"` for posterior
+#'   predicted counts, `"epred"` for expected counts.
+#' @param collapse `"mean"` averages grid profiles within each draw.
+#'   `"pool"` stacks every draw x profile. `"sample"` picks one profile
+#'   per draw.
+#' @param ndraws Number of posterior draws, or `NULL` for all.
+#' @param seed Optional RNG seed.
+#' @return A list with `pred` (data frame of draws), `summary`, `plot`,
+#'   plus `grid`, `quantity`, and `collapse`.
 #' @export
 #'
-#' @import dplyr ggplot2
-#' @importFrom qs2 qs_read
-#' @importFrom readr read_csv
+#' @import ggplot2
 expr_predict <- function(
   cell_type,
   gene_ensg,
@@ -308,93 +315,73 @@ expr_predict <- function(
   disease_groups = NA,
   ethnicity_groups = NA,
   assay_groups = NA,
-  tissue_groups = NA
+  tissue_groups = NA,
+  version = "latest",
+  quantity = c("linpred", "predict", "epred"),
+  collapse = c("mean", "pool", "sample"),
+  ndraws = NULL,
+  seed = NULL
 ) {
-  
-  # Convert cell_type to valid prefix using make.names
-  prefix <- cell_type %>% make.names
-  
-  container <- 
-    readr::read_csv(
-      'https://object-store.rc.nectar.org.au/v1/AUTH_b0a86a29c8b74630aac35f471cfe1396/meta/meta_available_cell_type.csv',
-      show_col_types = FALSE
-    ) %>% 
-    filter(ct_name == prefix) %>% 
-    pull(container)
-  
-  # Get file ready using get_file_ready
-  res <- get_file_ready(
-    container = container,
-    prefix = prefix,
-    filename = gene_ensg
+  quantity <- match.arg(quantity)
+  collapse <- match.arg(collapse)
+
+  fit <- load_expr_fit(
+    cell_type = cell_type,
+    gene_ensg = gene_ensg,
+    version = version
   )
-  
-  # Check if file was successfully retrieved
-  if (res$status != "success") {
-    error_msg <- if (!is.null(res$error)) res$error else "File not found"
-    stop(paste("Failed to retrieve file:", error_msg))
-  }
-  
-  # Load brms_fit from qs file
-  brms_fit <- qs_read(res$path) %>% 
-    pull(brms_fit) %>% 
-    .[[1]]
-  
-  # Create newdata data.frame with provided inputs
-  # Convert to character, keeping NA as NA
-  # Note: Column names use _altered suffix to match model expectations
-  newdata <- data.frame(
-    age_decade = if (is.na(age_decade)) NA_character_ else as.character(age_decade),
-    sex = if (is.na(sex)) NA_character_ else as.character(sex),
-    disease_groups_altered = if (is.na(disease_groups)) NA_character_ else as.character(disease_groups),
-    ethnicity_groups = if (is.na(ethnicity_groups)) NA_character_ else as.character(ethnicity_groups),
-    assay_groups_altered = if (is.na(assay_groups)) NA_character_ else as.character(assay_groups),
-    dataset_id_altered = NA_character_,
-    tissue_groups = if (is.na(tissue_groups)) NA_character_ else as.character(tissue_groups),
-    offset = 0
+
+  grid <- build_newdata_grid(
+    fit,
+    age_decade = age_decade,
+    sex = sex,
+    disease_groups = disease_groups,
+    ethnicity_groups = ethnicity_groups,
+    assay_groups = assay_groups,
+    tissue_groups = tissue_groups
   )
-  
-  # Perform prediction using brms
-  pred <- brms_fit %>% 
-    predict(
-      newdata = newdata,
-      summary = F,
-      re_formula = NULL,
-      allow_new_levels = T
-    )
-  
-  # Convert predictions to data.frame
-  pred_df <- as.data.frame(pred)
-  colnames(pred_df) <- "value"
-  
-  # Calculate summary statistics
-  mean_val <- mean(pred_df$value)
-  median_val <- median(pred_df$value)
-  
-  # Calculate peak location of density (mode)
-  # Use density estimation to find peak
-  dens <- density(pred_df$value)
-  peak_location <- dens$x[which.max(dens$y)]
-  
-  # Create density plot
+
+  out <- expr_draws(
+    fit,
+    newdata = grid,
+    quantity = quantity,
+    collapse = collapse,
+    ndraws = ndraws,
+    seed = seed
+  )
+
+  pred_df <- data.frame(value = out$draws)
+
+  peak_location <- tryCatch(
+    {
+      dens <- stats::density(out$draws)
+      dens$x[which.max(dens$y)]
+    },
+    error = function(e) NA_real_
+  )
+
+  x_lab <- switch(
+    quantity,
+    linpred = "log(mu)",
+    predict = "predicted count",
+    epred = "expected count"
+  )
+
   density_plot <- ggplot(pred_df, aes(x = value)) +
     geom_density(linewidth = 1) +
     theme_minimal() +
-    labs(x = "pred", y = "Density", title = "Density of pred values")
-  
-  # Create summary list
-  summary_stats <- list(
-    mean = mean_val,
-    median = median_val,
-    peak_location = peak_location
-  )
-  
-  # Return list with pred, summary, and plot
-  return(
-    list(
-      pred = pred_df,
-      summary = summary_stats,
-      plot = density_plot
-    )
+    labs(x = x_lab, y = "Density")
+
+  list(
+    pred = pred_df,
+    summary = list(
+      mean = mean(out$draws),
+      median = stats::median(out$draws),
+      peak_location = peak_location
+    ),
+    plot = density_plot,
+    grid = out$grid,
+    quantity = out$quantity,
+    collapse = out$collapse
   )
 }
