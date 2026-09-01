@@ -9,13 +9,14 @@ vignette: >
   %\VignetteEncoding{UTF-8}
 params:
   run_bootstrap: true
+  for_github_md: false
 knit: >
     (function(x, ...){
         proj_root <- rprojroot::find_package_root_file() |> normalizePath()
         rmarkdown::render(
             x,
             output_format = "rmarkdown::html_vignette",
-            params = list(run_bootstrap = TRUE)
+            params = list(run_bootstrap = TRUE, for_github_md = FALSE)
         )
         rmarkdown::render(
             x,
@@ -23,7 +24,7 @@ knit: >
             output_format = "github_document",
             output_dir = file.path(proj_root, "vignettes"),
             knit_root_dir = proj_root,
-            params = list(run_bootstrap = TRUE)
+            params = list(run_bootstrap = TRUE, for_github_md = TRUE)
         )
     })
 ---
@@ -37,6 +38,19 @@ knitr::opts_chunk$set(
   message = FALSE,
   warning = FALSE
 )
+
+# Relative figure paths for github_document output (see rmarkdown#2473).
+if (isTRUE(params$for_github_md)) {
+  root_dir <- knitr::opts_knit$get("root.dir")
+  if (!is.null(root_dir)) {
+    knitr::opts_knit$set(
+      output.dir = file.path(root_dir, "vignettes")
+    )
+  }
+  knitr::opts_chunk$set(
+    fig.path = "cohort-expression-workflow_files/figure-gfm/"
+  )
+}
 
 has_seurat <- requireNamespace("Seurat", quietly = TRUE)
 has_edb <- requireNamespace("org.Hs.eg.db", quietly = TRUE) &&

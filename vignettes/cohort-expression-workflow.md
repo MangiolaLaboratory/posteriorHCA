@@ -128,7 +128,7 @@ hca_res <- expr_draws(
 
 round(c(mean = mean(hca_res$draws), sd = sd(hca_res$draws)), 3)
 #>  mean    sd 
-#> 4.001 1.006
+#> 3.895 1.004
 ```
 
 `expr_predict()` is a convenience wrapper that also returns a density
@@ -146,7 +146,7 @@ hca_pred <- expr_predict(
 hca_pred$plot
 ```
 
-![](/scratchdata1/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/vignettes/cohort-expression-workflow_files/figure-gfm/hca-predict-1.png)<!-- -->
+![](cohort-expression-workflow_files/figure-gfm/hca-predict-1.png)<!-- -->
 
 ## Test cohorts against the healthy baseline (QL)
 
@@ -164,14 +164,14 @@ test_results
 #> 1 ENSG00000169252       ADRB2 monocytic         CTRL     ql      3.322306
 #> 2 ENSG00000169252       ADRB2 monocytic         SAVI     ql      6.945427
 #> 3 ENSG00000169252       ADRB2 monocytic SAVI_treated     ql      6.290005
-#>   cohort_se hca_mean   hca_sd delta_log_mu  se_diff     t_stat        df
-#> 1 0.6154281 4.000691 1.005533   -0.6783851 1.178918 -0.5754303  72.97328
-#> 2 0.3751294 4.000691 1.005533    2.9447367 1.073228  2.7438132 176.58832
-#> 3 0.3992543 4.000691 1.005533    2.2893147 1.081896  2.1160202 153.68834
+#>   cohort_se hca_mean   hca_sd delta_log_mu  se_diff     t_stat       df
+#> 1 0.6154281 3.895135 1.004446   -0.5728294 1.177991 -0.4862764  72.7745
+#> 2 0.3751294 3.895135 1.004446    3.0502924 1.072210  2.8448654 176.1785
+#> 3 0.3992543 3.895135 1.004446    2.3948704 1.080887  2.2156539 153.3055
 #>       p_value empirical_rank           direction
-#> 1 0.566770537         0.2325 consistent_with_hca
-#> 2 0.006700025         0.9950           above_hca
-#> 3 0.035954612         0.9875           above_hca
+#> 1 0.628232338         0.2700 consistent_with_hca
+#> 2 0.004969434         0.9975           above_hca
+#> 3 0.028189044         0.9850           above_hca
 ```
 
 ## Bootstrap cohort log(μ) (optional)
@@ -197,9 +197,9 @@ boot_est
 #> 2 ENSG00000169252       ADRB2 monocytic         SAVI 5 6.737798 843.7005
 #> 3 ENSG00000169252       ADRB2 monocytic SAVI_treated 5 6.291284 539.8458
 #>          se df dispersion    method boot_q025 boot_q975 empirical_rank
-#> 1 0.5189373 NA  0.2226158 bootstrap  1.834222  3.855647         0.2050
-#> 2 0.7082203 NA  0.2226158 bootstrap  5.540832  7.974241         0.9950
-#> 3 0.3158899 NA  0.2226158 bootstrap  5.569030  6.737193         0.9875
+#> 1 0.5189373 NA  0.2226158 bootstrap  1.834222  3.855647         0.2375
+#> 2 0.7082203 NA  0.2226158 bootstrap  5.540832  7.974241         0.9925
+#> 3 0.3158899 NA  0.2226158 bootstrap  5.569030  6.737193         0.9850
 
 boot_test <- welch_t_test_cohort_hca(
   cohort_est = boot_est,
@@ -210,14 +210,14 @@ boot_test
 #> 1 ENSG00000169252       ADRB2 monocytic         CTRL bootstrap      3.219623
 #> 2 ENSG00000169252       ADRB2 monocytic         SAVI bootstrap      6.737798
 #> 3 ENSG00000169252       ADRB2 monocytic SAVI_treated bootstrap      6.291284
-#>   cohort_se hca_mean   hca_sd delta_log_mu  se_diff     t_stat        df
-#> 1 0.5189373 4.000691 1.005533   -0.7810673 1.131544 -0.6902669 111.91299
-#> 2 0.7082203 4.000691 1.005533    2.7371068 1.229907  2.2254579  34.95704
-#> 3 0.3158899 4.000691 1.005533    2.2905929 1.053984  2.1732710 244.29445
+#>   cohort_se hca_mean   hca_sd delta_log_mu  se_diff    t_stat        df
+#> 1 0.5189373 3.895135 1.004446   -0.6755116 1.130578 -0.597492 111.61575
+#> 2 0.7082203 3.895135 1.004446    2.8426626 1.229019  2.312953  34.86205
+#> 3 0.3158899 3.895135 1.004446    2.3961486 1.052947  2.275659 243.86857
 #>      p_value empirical_rank           direction
-#> 1 0.49145543         0.2050 consistent_with_hca
-#> 2 0.03259825         0.9950           above_hca
-#> 3 0.03072111         0.9875           above_hca
+#> 1 0.55138919         0.2375 consistent_with_hca
+#> 2 0.02674884         0.9925           above_hca
+#> 3 0.02373455         0.9850           above_hca
 ```
 
 ## Visualise results
@@ -233,7 +233,7 @@ plot_hca_draws(
 )
 ```
 
-![](/scratchdata1/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/vignettes/cohort-expression-workflow_files/figure-gfm/plot-hca-1.png)<!-- -->
+![](cohort-expression-workflow_files/figure-gfm/plot-hca-1.png)<!-- -->
 
 ``` r
 plot_cohort_vs_hca(
@@ -244,7 +244,7 @@ plot_cohort_vs_hca(
 )
 ```
 
-![](/scratchdata1/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/vignettes/cohort-expression-workflow_files/figure-gfm/plot-cohort-ql-1.png)<!-- -->
+![](cohort-expression-workflow_files/figure-gfm/plot-cohort-ql-1.png)<!-- -->
 
 ``` r
 plot_cohort_vs_hca(
@@ -255,7 +255,7 @@ plot_cohort_vs_hca(
 )
 ```
 
-![](/scratchdata1/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/vignettes/cohort-expression-workflow_files/figure-gfm/plot-cohort-boot-1.png)<!-- -->
+![](cohort-expression-workflow_files/figure-gfm/plot-cohort-boot-1.png)<!-- -->
 
 You can also pass `cohort_est = est` or `cohort_est = boot_est` directly
 to `plot_cohort_vs_hca()` when test statistics are not needed on the
@@ -286,7 +286,7 @@ sessionInfo()
 #> 
 #> other attached packages:
 #> [1] ggplot2_4.0.3      Seurat_5.5.0       SeuratObject_5.4.0 sp_2.2-1          
-#> [5] posteriorHCA_0.1.0 testthat_3.3.2     rmarkdown_2.31    
+#> [5] posteriorHCA_0.2.0 testthat_3.3.2     rmarkdown_2.31    
 #> 
 #> loaded via a namespace (and not attached):
 #>   [1] fs_2.1.0                    matrixStats_1.5.0          
