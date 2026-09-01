@@ -1,7 +1,7 @@
 Package: posteriorHCA
 Type: Package
 Title: A Package for Sample Testing against Posterior Learned from Human Cell Atlas
-Version: 0.1.0
+Version: 0.2.0
 Authors@R: person("Chen", "Zhan", , "chen.zhan@adelaide.edu.au", role = c("aut", "cre"))
 Description: A Package for Sample Testing against Posterior Learned from Human Cell Atlas
 License: GPL-3 
@@ -25,10 +25,23 @@ Imports:
     readr,
     edgeR
 LazyData: true
+Collate:
+    'utlis.R'
+    'gene-id.R'
+    'cohort.R'
+    'expr-query.R'
+    'inference-cohort.R'
+    'inference-sample.R'
+    'plots.R'
+    'method.R'
+    'data_example.R'
+    'data_savi.R'
 Suggests: 
     knitr,
     rmarkdown,
     testthat (>= 3.0.0),
+    AnnotationDbi,
+    org.Hs.eg.db,
     SummarizedExperiment,
     SingleCellExperiment,
     Seurat,

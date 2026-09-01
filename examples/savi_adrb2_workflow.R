@@ -6,63 +6,61 @@
 suppressPackageStartupMessages({
   library(cli)
   library(edgeR)
-  library(SummarizedExperiment)
   library(Seurat)
-  library(org.Hs.eg.db)
-  library(AnnotationDbi)
   library(brms)
-  library(readr)
 })
 
-# Load posteriorHCA functions
 pkg_dir <- "/home/a1237163/lab/chen/posteriorHCA"
-for (f in list.files(file.path(pkg_dir, "R"), pattern = "\\.R$", full.names = TRUE)) source(f)
+devtools::load_all(pkg_dir)
 
 cli::cli_h1("posteriorHCA: SAVI ADRB2 Workflow")
 
 # ------------------------------------------------------------------------------
-# 1. Load SAVI pseudobulk Seurat object and prepare user counts
+# 1. Load SAVI pseudobulk Seurat object and harmonise gene ids to ENSG
 # ------------------------------------------------------------------------------
 cli::cli_h2("1. Preparing SAVI Disease-Associated Monocyte Counts")
 
-savi_path <- "/home/a1237163/lab/chen/posteriorHCA_case_studies/SAVI/data/GSE226598_SAVI_pseudobulk_Sample_CellType.rds"
-savi <- readRDS(savi_path)
-savi_mono <- subset(savi, subset = CellType == "17. Disease-associated monocytes")
-counts_sym <- as.matrix(LayerData(savi_mono, assay = "RNA", layer = "counts"))
+savi_path <- Sys.getenv(
+  "SAVI_PSEUDOBULK_RDS",
+  unset = "/home/a1237163/lab/chen/posteriorHCA_case_studies/SAVI/data/GSE226598_SAVI_pseudobulk_Sample_CellType.rds"
+)
 
-# Map gene symbols to Ensembl IDs
-ensg <- mapIds(org.Hs.eg.db, rownames(counts_sym), "ENSEMBL", "SYMBOL", multiVals = "first")
-keep <- !is.na(ensg) & !duplicated(ensg)
-user <- counts_sym[keep, , drop = FALSE]
-rownames(user) <- unname(ensg[keep])
+if (file.exists(savi_path)) {
+  savi <- readRDS(savi_path)
+  savi_mono <- subset(savi, subset = CellType == "17. Disease-associated monocytes")
+} else {
+  data(savi_mono, package = "posteriorHCA", envir = environment())
+}
 
-cli::cli_alert_info("User count matrix: {nrow(user)} genes x {ncol(user)} samples.")
+savi_mono <- harmonise_gene_ids(savi_mono, id_type = "symbol")
+cli::cli_alert_info(
+  "Harmonised Seurat object: {nrow(savi_mono)} genes x {ncol(savi_mono)} samples."
+)
 
 # ------------------------------------------------------------------------------
 # 2. Retrieve Atlas Reference Sample and Align
 # ------------------------------------------------------------------------------
 cli::cli_h2("2. Aligning to HCA Monocytic Reference Sample")
 
-ref <- get_reference_sample_ready("monocytic")
-aligned <- scale_to_hca_reference(user, ref)
+cell_type <- "monocytic"
+ref <- get_reference_sample_ready(cell_type)
+aligned <- scale_to_hca_reference(savi_mono, ref)
 
-cli::cli_alert_info("Reference sample ID: {aligned$reference_name}")
-cli::cli_alert_info("Reference sample offset: {aligned$offset[[aligned$reference_name]]}")
+cli::cli_alert_info("Reference sample ID: {aligned$hca_reference_name[1]}")
+cli::cli_alert_info("Cell type: {aligned$hca_cell_type[1]}")
+cli::cli_alert_info("Reference sample offset: {aligned$hca_offset[aligned$hca_reference_name[1]]}")
 cli::cli_alert_info("Sample role table:")
 print(table(aligned$sample_role))
 
 # ------------------------------------------------------------------------------
-# 3. Estimate Cohort log(mu) with edgeR / QL Wald SE
+# 3. Estimate Cohort log(mu) for ADRB2
 # ------------------------------------------------------------------------------
-cli::cli_h2("3. Estimating Cohort log(mu) for ADRB2 (ENSG00000169252)")
-
-group <- savi_mono$Category[match(colnames(user), colnames(savi_mono))]
-adrb2_id <- "ENSG00000169252" # ADRB2
+cli::cli_h2("3. Estimating Cohort log(mu) for ADRB2")
 
 est <- estimate_cohort_logmu(
   aligned,
-  group = group,
-  genes = adrb2_id
+  group = "Category",
+  genes = "ADRB2"
 )
 print(est)
 
@@ -71,18 +69,14 @@ print(est)
 # ------------------------------------------------------------------------------
 cli::cli_h2("4. Generating Healthy Baseline Draws (Normal, 10x Genomics 3)")
 
-# Load pre-trained brms model for monocytic ADRB2 from Nectar
-fit <- load_expr_fit(cell_type = "monocytic", gene_ensg = adrb2_id)
+fit <- load_expr_fit(cell_type = cell_type, gene = "ADRB2")
 
-# Build covariate grid (Normal disease, 10x Genomics 3 assay, marginalised demographics)
 grid <- build_newdata_grid(
   fit,
   disease_groups = "Normal",
-  assay_groups = "10x Genomics 3",
-  tissue_groups = 'liver'
+  assay_groups = "10x Genomics 3"
 )
 
-# Posterior draws of latent log(mu) (linpred without transformation)
 hca_res <- expr_draws(
   fit,
   newdata = grid,
@@ -90,24 +84,81 @@ hca_res <- expr_draws(
   collapse = "mean"
 )
 
-cli::cli_alert_info("Healthy HCA baseline: Mean log(mu) = {round(mean(hca_res$draws), 3)}, SD = {round(sd(hca_res$draws), 3)}.")
+cli::cli_alert_info(
+  "Healthy HCA baseline for {hca_res$gene_symbol} ({hca_res$gene_ensg}): mean log(mu) = {round(mean(hca_res$draws), 3)}, SD = {round(sd(hca_res$draws), 3)}."
+)
+
+hca_pred <- expr_predict(
+  cell_type      = cell_type,
+  gene           = "ADRB2",
+  disease_groups = "Normal",
+  assay_groups   = "10x Genomics 3",
+  quantity       = "predict",
+  collapse       = "mean"
+)
 
 # ------------------------------------------------------------------------------
-# 5. Conduct Welch t-Test for Each Cohort vs. Healthy Baseline
+# 5. Test cohorts against healthy baseline (QL point estimates)
 # ------------------------------------------------------------------------------
-cli::cli_h2("5. Testing Cohorts Against Healthy Baseline")
+cli::cli_h2("5. Testing Cohorts Against Healthy Baseline (QL)")
 
-test_results_list <- list()
-for (grp in setdiff(unique(est$group), "reference")) {
-  sub_est <- est[est$group == grp, , drop = FALSE]
-  res <- test_cohort_vs_hca(
-    cohort_est = sub_est,
-    hca_draws = hca_res$draws,
-    gene = "ADRB2",
-    cohort_name = grp
-  )
-  test_results_list[[grp]] <- res
-}
-
-test_results <- do.call(rbind, test_results_list)
+test_results <- welch_t_test_cohort_hca(
+  cohort_est = est,
+  hca_draws = hca_res
+)
 print(test_results)
+
+# ------------------------------------------------------------------------------
+# 5b. Optional: bootstrap cohort log(mu) and test
+# ------------------------------------------------------------------------------
+cli::cli_h2("5b. Bootstrap Cohort log(mu) and Test (optional)")
+
+boot_est <- bootstrap_cohort_logmu_batch(
+  aligned,
+  group = "Category",
+  genes = "ADRB2",
+  cohort_est = est,
+  hca_draws = hca_res,
+  n_boot = 2000L,
+  seed = 42L
+)
+print(boot_est)
+
+boot_test <- welch_t_test_cohort_hca(
+  cohort_est = boot_est,
+  hca_draws = hca_res
+)
+print(boot_test)
+
+# ------------------------------------------------------------------------------
+# 6. Visualise healthy baseline and cohort comparisons
+# ------------------------------------------------------------------------------
+cli::cli_h2("6. Plotting Healthy Baseline and Cohort Comparisons")
+
+hca_plot <- plot_hca_draws(
+  draws = hca_res,
+  subtitle = "Normal, 10x Genomics 3 healthy baseline"
+)
+print(hca_plot)
+
+cohort_plot <- plot_cohort_vs_hca(
+  hca_draws = hca_res,
+  test_results = test_results,
+  subtitle = "QL cohort estimates",
+  annotate = c("group", "p_value", "direction")
+)
+print(cohort_plot)
+
+boot_plot <- plot_cohort_vs_hca(
+  hca_draws = hca_res,
+  test_results = boot_test,
+  subtitle = "Bootstrap cohort estimates",
+  annotate = c("group", "p_value", "direction", "method")
+)
+print(boot_plot)
+
+hca_count_plot <- plot_hca_draws(
+  draws = hca_pred,
+  title = "ADRB2 predicted count posterior (healthy HCA)"
+)
+print(hca_count_plot)

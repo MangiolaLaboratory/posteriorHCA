@@ -29,9 +29,12 @@ Default is the atlas sample id, or `"hca_reference"`.}
 \item{version}{Nectar version pin, used when `reference` is a cell type.}
 }
 \value{
-A list with `counts` (shared genes, user columns plus reference),
-  `offset`, `multiplier`, `shared_features`, `reference_name`, and
-  `sample_role`.
+An object of the same class as `counts` (matrix, `Seurat`, or
+  `SummarizedExperiment`) with the atlas reference library appended.
+
+`reference` is usually a cell type (`"cd8 naive"`) or the list returned
+by [get_reference_sample_ready()]. A one-column `SummarizedExperiment`,
+named count vector, or matrix is also accepted (tests / local files).
 }
 \description{
 The atlas reference is provided by this package: one sample per cell
@@ -42,10 +45,8 @@ together, with the atlas column as `refColumn`. The returned offset is
 `log(1 / multiplier)` so the reference sits at offset 0.
 }
 \details{
-`counts` may be a matrix, `SummarizedExperiment` /
-`SingleCellExperiment`, or `Seurat` object.
-
-`reference` is usually a cell type (`"cd8 naive"`) or the list returned
-by [get_reference_sample_ready()]. A one-column `SummarizedExperiment`,
-named count vector, or matrix is also accepted (tests / local files).
+`counts` may be a matrix, `SummarizedExperiment` / `SingleCellExperiment`,
+or `Seurat` object. The returned object matches the input class. Sample
+metadata columns `sample_role`, `hca_offset`, `hca_multiplier`,
+`hca_reference_name`, and `hca_cell_type` describe the atlas alignment.
 }

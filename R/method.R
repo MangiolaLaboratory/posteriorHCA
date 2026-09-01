@@ -291,7 +291,7 @@ composition_posterior_test <-
 #' * several values — marginalise over only those levels
 #'
 #' @param cell_type A string indicating the cell type.
-#' @param gene_ensg A string indicating the gene ENSEMBL ID (e.g., "ENSG00000000419").
+#' @param gene A gene symbol or Ensembl id (e.g. `"ADRB2"` or `"ENSG00000169252"`).
 #' @param age_decade,sex,disease_groups,ethnicity_groups,assay_groups,tissue_groups
 #'   Metadata choices. See the rules above.
 #' @param version `"latest"` or a pinned container/version (e.g. `"V1"`).
@@ -302,14 +302,16 @@ composition_posterior_test <-
 #'   per draw.
 #' @param ndraws Number of posterior draws, or `NULL` for all.
 #' @param seed Optional RNG seed.
-#' @return A list with `pred` (data frame of draws), `summary`, `plot`,
-#'   plus `grid`, `quantity`, and `collapse`.
+#' @return A list with `pred` (data frame of draws), `summary`, `plot`
+#'   (from [plot_hca_draws()]), plus `grid`, `quantity`, and `collapse`.
+#'   For `quantity = "predict"` or `"epred"`, the density plot uses a
+#'   log1p-scaled x-axis.
 #' @export
 #'
 #' @import ggplot2
 expr_predict <- function(
   cell_type,
-  gene_ensg,
+  gene,
   age_decade = NA,
   sex = NA,
   disease_groups = NA,
@@ -327,7 +329,7 @@ expr_predict <- function(
 
   fit <- load_expr_fit(
     cell_type = cell_type,
-    gene_ensg = gene_ensg,
+    gene = gene,
     version = version
   )
 
@@ -360,17 +362,7 @@ expr_predict <- function(
     error = function(e) NA_real_
   )
 
-  x_lab <- switch(
-    quantity,
-    linpred = "log(mu)",
-    predict = "predicted count",
-    epred = "expected count"
-  )
-
-  density_plot <- ggplot(pred_df, aes(x = value)) +
-    geom_density(linewidth = 1) +
-    theme_minimal() +
-    labs(x = x_lab, y = "Density")
+  density_plot <- plot_hca_draws(out)
 
   list(
     pred = pred_df,
@@ -380,8 +372,12 @@ expr_predict <- function(
       peak_location = peak_location
     ),
     plot = density_plot,
+    draws = out$draws,
     grid = out$grid,
     quantity = out$quantity,
-    collapse = out$collapse
+    collapse = out$collapse,
+    cell_type = out$cell_type,
+    gene_ensg = out$gene_ensg,
+    gene_symbol = out$gene_symbol
   )
 }

@@ -9,6 +9,10 @@ expr_query_file <- file.path(testthat::test_path("..", ".."), "R", "expr-query.R
 if (!file.exists(expr_query_file)) {
   expr_query_file <- file.path("R", "expr-query.R")
 }
+gene_id_file <- file.path(dirname(expr_query_file), "gene-id.R")
+if (file.exists(gene_id_file)) {
+  sys.source(gene_id_file, envir = environment())
+}
 sys.source(expr_query_file, envir = environment())
 
 fake_expr_fit <- function() {

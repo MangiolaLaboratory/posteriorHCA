@@ -9,6 +9,8 @@ estimate_cohort_logmu(
   offset = NULL,
   group,
   genes = NULL,
+  cell_type = NULL,
+  version = "latest",
   robust = TRUE,
   assay = NULL
 )
@@ -20,19 +22,26 @@ estimate_cohort_logmu(
 \item{offset}{Named or unnamed numeric vector, one value per sample.
 Taken from `counts$offset` when `counts` is an aligned list.}
 
-\item{group}{Group label per sample, or a column name in SE / Seurat
-metadata.}
+\item{group}{Group labels per sample. See details above.}
 
-\item{genes}{Optional gene ids to report. Default is all rows. Dispersion
-is still estimated from the full `counts` matrix.}
+\item{genes}{Optional gene identifiers (symbols or ENSG). Default is all
+rows. Values are resolved to canonical ENSG ids. Dispersion is still
+estimated from the full `counts` matrix.}
+
+\item{cell_type}{Optional cell type label stored in the output. Taken from
+an aligned list when available.}
+
+\item{version}{Nectar version pin used when validating genes against the
+cell-type universe.}
 
 \item{robust}{Passed to [edgeR::estimateDisp()] and [edgeR::glmQLFit()].}
 
 \item{assay}{Assay name for SE / Seurat input.}
 }
 \value{
-A data frame with one row per gene x group: `gene`, `group`,
-  `n`, `log_mu`, `mu`, `se`, `df`, `dispersion`.
+A data frame with one row per gene x group: `gene` (ENSG),
+  `gene_symbol`, `cell_type`, `group`, `n`, `log_mu`, `mu`, `se`, `df`,
+  `dispersion`.
 }
 \description{
 Point estimates come from [edgeR::mglmOneGroup()] with the TMM offset
@@ -40,7 +49,12 @@ applied directly. [edgeR::glmQLFit()] is used only for the QL Wald SE.
 }
 \details{
 `counts` may be a matrix, SE/SCE, Seurat object, or the list returned
-by [scale_to_hca_reference()]. `group` may be a vector or the name of
-a metadata column. If `counts` is an aligned list and `group` covers
-only the user samples, `"reference"` is appended for the atlas library.
+by [scale_to_hca_reference()]. `group` may be:
+\itemize{
+  \item a metadata column name for Seurat / SummarizedExperiment inputs,
+  \item a named vector or list keyed by sample id for matrix inputs, or
+  \item a vector in sample order.
+}
+If `counts` is an aligned list and `group` covers only the user samples,
+`"reference"` is appended for the atlas library.
 }

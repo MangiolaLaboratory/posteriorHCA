@@ -91,6 +91,7 @@ is_missing_choice <- function(x) {
 #' @return Character vector of allowed levels.
 #' @export
 expr_model_levels <- function(fit, variable) {
+  fit <- as_brms_fit(fit)
   if (is.null(fit$data)) {
     cli::cli_abort("`fit` must have a `$data` element.")
   }
@@ -173,6 +174,7 @@ build_newdata_grid <- function(
   offset = 0,
   new_study_id = "__new_study__"
 ) {
+  fit <- as_brms_fit(fit)
   if (is.null(fit$data)) {
     cli_abort("`fit` must have a `$data` element.")
   }
@@ -319,8 +321,8 @@ marginalize_draw_matrix <- function(y_mat, method = c("mean", "pool", "sample"))
 #'   keeps log(μ). Set `TRUE` for μ on the count-mean scale.
 #' @param re_formula,allow_new_levels,sample_new_levels Passed to brms.
 #' @param seed Optional RNG seed.
-#' @return A list with `draws`, `grid`, `quantity`, `collapse`, and
-#'   `n_grid`.
+#' @return A list with `draws`, `grid`, `quantity`, `collapse`, `n_grid`,
+#'   `cell_type`, `gene_ensg`, and `gene_symbol` (when available on `fit`).
 #' @export
 #' @importFrom cli cli_abort
 expr_draws <- function(
@@ -337,6 +339,8 @@ expr_draws <- function(
 ) {
   quantity <- match.arg(quantity)
   collapse <- match.arg(collapse)
+  meta <- expr_metadata(fit)
+  brms_fit <- as_brms_fit(fit)
 
   if (is.null(newdata) || nrow(newdata) < 1L) {
     cli_abort("`newdata` must have at least one row.")
@@ -348,7 +352,7 @@ expr_draws <- function(
   }
 
   pred_args <- list(
-    object = fit,
+    object = brms_fit,
     newdata = newdata,
     summary = FALSE,
     re_formula = re_formula,
@@ -374,24 +378,38 @@ expr_draws <- function(
     grid = newdata,
     quantity = quantity,
     collapse = collapse,
-    n_grid = nrow(newdata)
+    n_grid = nrow(newdata),
+    cell_type = meta$cell_type,
+    gene_ensg = meta$gene_ensg,
+    gene_symbol = meta$gene_symbol
   )
 }
 
 #' Load a stored gene-level brms fit
 #'
 #' @inheritParams get_brms_ready
-#' @return A `brmsfit`.
+#' @return A `posteriorHCA_expr_fit` object: a list with `fit` (`brmsfit`),
+#'   `cell_type`, `gene_ensg`, and `gene_symbol`.
 #' @export
 #' @importFrom qs2 qs_read
 #' @importFrom cli cli_abort
 load_expr_fit <- function(
   cell_type,
-  gene_ensg,
+  gene,
   version = "latest",
   cache_directory = get_default_cache_dir(),
-  use_cache = TRUE
+  use_cache = TRUE,
+  orgdb = NULL
 ) {
+  gene_ensg <- resolve_gene_one(
+    gene,
+    cell_type = cell_type,
+    version = version,
+    orgdb = orgdb,
+    cache_directory = cache_directory,
+    use_cache = use_cache
+  )
+
   res <- get_brms_ready(
     cell_type = cell_type,
     gene_ensg = gene_ensg,
@@ -410,5 +428,15 @@ load_expr_fit <- function(
     cli_abort("Cached file does not contain a `brms_fit` column: {res$path}")
   }
 
-  obj$brms_fit[[1]]
+  gene_symbol <- NA_character_
+  if (!is_ensembl_gene_id(gene)) {
+    gene_symbol <- as.character(gene)
+  }
+
+  new_expr_fit(
+    fit = obj$brms_fit[[1]],
+    cell_type = res$cell_type,
+    gene_ensg = gene_ensg,
+    gene_symbol = gene_symbol
+  )
 }

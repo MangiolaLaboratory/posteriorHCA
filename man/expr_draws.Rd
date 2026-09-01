@@ -39,8 +39,8 @@ keeps log(μ). Set `TRUE` for μ on the count-mean scale.}
 \item{seed}{Optional RNG seed.}
 }
 \value{
-A list with `draws`, `grid`, `quantity`, `collapse`, and
-  `n_grid`.
+A list with `draws`, `grid`, `quantity`, `collapse`, `n_grid`,
+  `cell_type`, `gene_ensg`, and `gene_symbol` (when available on `fit`).
 }
 \description{
 Posterior draws of gene expression from a fitted brms model

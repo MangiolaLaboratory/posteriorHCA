@@ -27,7 +27,7 @@ dispersion values. If `NULL`, dispersion is estimated across `counts`.}
 \item{group}{Optional group vector or column name to subset samples. If
 `NULL`, all non-reference samples (or all samples) are used.}
 
-\item{gene}{Character scalar; gene id (must be in `rownames(counts)`).}
+\item{gene}{Character scalar; gene id resolved to ENSG (must be in `rownames(counts)`).}
 
 \item{n_boot}{Integer; number of bootstrap iterations (default 2000L).}
 

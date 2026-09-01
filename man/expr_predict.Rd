@@ -6,7 +6,7 @@
 \usage{
 expr_predict(
   cell_type,
-  gene_ensg,
+  gene,
   age_decade = NA,
   sex = NA,
   disease_groups = NA,
@@ -23,7 +23,7 @@ expr_predict(
 \arguments{
 \item{cell_type}{A string indicating the cell type.}
 
-\item{gene_ensg}{A string indicating the gene ENSEMBL ID (e.g., "ENSG00000000419").}
+\item{gene}{A gene symbol or Ensembl id (e.g. `"ADRB2"` or `"ENSG00000169252"`).}
 
 \item{age_decade, sex, disease_groups, ethnicity_groups, assay_groups, tissue_groups}{Metadata choices. See the rules above.}
 
@@ -41,8 +41,10 @@ per draw.}
 \item{seed}{Optional RNG seed.}
 }
 \value{
-A list with `pred` (data frame of draws), `summary`, `plot`,
-  plus `grid`, `quantity`, and `collapse`.
+A list with `pred` (data frame of draws), `summary`, `plot`
+  (from [plot_hca_draws()]), plus `grid`, `quantity`, and `collapse`.
+  For `quantity = "predict"` or `"epred"`, the density plot uses a
+  log1p-scaled x-axis.
 }
 \description{
 Loads the fit, builds a covariate grid with [build_newdata_grid()],

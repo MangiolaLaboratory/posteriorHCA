@@ -13,6 +13,7 @@ if (!dir.exists(file.path(pkg_root, "R"))) {
   pkg_root <- "."
 }
 sys.source(file.path(pkg_root, "R", "cohort.R"), envir = environment())
+sys.source(file.path(pkg_root, "R", "gene-id.R"), envir = environment())
 sys.source(file.path(pkg_root, "R", "inference-cohort.R"), envir = environment())
 utils_file <- file.path(pkg_root, "R", "utlis.R")
 if (file.exists(utils_file)) {
@@ -70,8 +71,7 @@ test_that("bootstrap_cohort_logmu supports group subsetting", {
   group <- c("A", "A", "A", "B", "B", "B", "reference")
 
   draws_a <- bootstrap_cohort_logmu(
-    aligned$counts,
-    aligned$offset,
+    aligned,
     dispersion = 0.1,
     group = group,
     gene = "g1",
@@ -82,42 +82,138 @@ test_that("bootstrap_cohort_logmu supports group subsetting", {
   expect_true(all(is.finite(draws_a)))
 })
 
-test_that("test_cohort_vs_hca correctly identifies difference and rank", {
-  hca_draws <- rnorm(500, mean = 2.0, sd = 0.2)
+test_that("bootstrap_cohort_logmu_batch returns one row per cohort", {
+  toy <- toy_counts()
+  aligned <- suppressMessages(scale_to_hca_reference(toy$user, toy$ref))
+  group <- c("A", "A", "A", "B", "B", "B", "reference")
 
-  # Cohort significantly above HCA
-  cohort_high <- data.frame(gene = "g1", group = "disease", log_mu = 4.0, se = 0.1, n = 10)
-  res_high <- test_cohort_vs_hca(cohort_high, hca_draws)
+  boot_est <- bootstrap_cohort_logmu_batch(
+    aligned,
+    group = group,
+    genes = "g1",
+    dispersion = 0.1,
+    n_boot = 30L,
+    seed = 42L
+  )
 
-  expect_equal(res_high$direction, "above_hca")
-  expect_lt(res_high$p_value, 0.001)
-  expect_gt(res_high$t_stat, 5)
-  expect_equal(res_high$empirical_rank, 1)
-
-  # Cohort consistent with HCA
-  cohort_mid <- data.frame(gene = "g1", group = "control", log_mu = 2.02, se = 0.15, n = 10)
-  res_mid <- test_cohort_vs_hca(cohort_mid, hca_draws)
-
-  expect_equal(res_mid$direction, "consistent_with_hca")
-  expect_gt(res_mid$p_value, 0.05)
-
-  # Cohort significantly below HCA
-  cohort_low <- data.frame(gene = "g1", group = "suppressed", log_mu = 0.5, se = 0.1, n = 10)
-  res_low <- test_cohort_vs_hca(cohort_low, hca_draws)
-
-  expect_equal(res_low$direction, "below_hca")
-  expect_lt(res_low$p_value, 0.001)
-  expect_lt(res_low$t_stat, -5)
-  expect_equal(res_low$empirical_rank, 0)
+  expect_equal(nrow(boot_est), 2L)
+  expect_setequal(boot_est$group, c("A", "B"))
+  expect_equal(boot_est$method, c("bootstrap", "bootstrap"))
+  expect_true(all(c("log_mu", "se", "boot_q025", "boot_q975") %in% names(boot_est)))
 })
 
-test_that("test_cohort_vs_hca accepts bootstrap vector directly", {
-  hca_draws <- rnorm(200, mean = 1.5, sd = 0.1)
-  cohort_boot <- rnorm(100, mean = 3.0, sd = 0.2)
+test_that("bootstrap_cohort_logmu_batch works with cohort_est from estimate_cohort_logmu", {
+  toy <- toy_counts()
+  aligned <- suppressMessages(scale_to_hca_reference(toy$user, toy$ref))
+  est <- estimate_cohort_logmu(aligned, group = c("A", "A", "A", "B", "B", "B"), genes = "g1")
 
-  res <- test_cohort_vs_hca(cohort_boot, hca_draws, gene = "ACTB", cohort_name = "test_boot")
-  expect_equal(res$gene, "ACTB")
-  expect_equal(res$cohort, "test_boot")
-  expect_equal(res$direction, "above_hca")
-  expect_lt(res$p_value, 0.001)
+  boot_est <- bootstrap_cohort_logmu_batch(
+    aligned,
+    group = c("A", "A", "A", "B", "B", "B", "reference"),
+    cohort_est = est,
+    n_boot = 20L,
+    seed = 1L
+  )
+
+  expect_equal(nrow(boot_est), 2L)
+  expect_true(all(boot_est$gene == "g1"))
+})
+
+test_that("bootstrap_cohort_logmu_batch uses cohort_est dispersion when provided", {
+  toy <- toy_counts()
+  aligned <- suppressMessages(scale_to_hca_reference(toy$user, toy$ref))
+  est <- estimate_cohort_logmu(aligned, group = c("A", "A", "A", "B", "B", "B"), genes = "g1")
+
+  boot_est <- bootstrap_cohort_logmu_batch(
+    aligned,
+    group = c("A", "A", "A", "B", "B", "B", "reference"),
+    cohort_est = est,
+    genes = "g1",
+    n_boot = 20L,
+    seed = 1L
+  )
+
+  expect_true(all(is.finite(boot_est$dispersion)))
+})
+
+test_that("welch_t_test_cohort_hca accepts bootstrap_cohort_logmu_batch output", {
+  hca_draws <- list(
+    draws = rnorm(500, mean = 2.0, sd = 0.2),
+    cell_type = "monocytic",
+    gene_ensg = "ENSG00000169252",
+    gene_symbol = "ADRB2"
+  )
+
+  cohort_est <- data.frame(
+    gene = rep("ENSG00000169252", 3),
+    gene_symbol = rep("ADRB2", 3),
+    cell_type = rep("monocytic", 3),
+    group = c("disease", "control", "suppressed"),
+    log_mu = c(4.0, 2.02, 0.5),
+    se = c(0.1, 0.15, 0.1),
+    n = c(10, 10, 10),
+    stringsAsFactors = FALSE
+  )
+
+  res <- welch_t_test_cohort_hca(cohort_est, hca_draws, exclude_groups = character(0))
+
+  expect_equal(nrow(res), 3L)
+  expect_equal(res$direction[res$cohort == "disease"], "above_hca")
+  expect_equal(res$direction[res$cohort == "control"], "consistent_with_hca")
+  expect_equal(res$direction[res$cohort == "suppressed"], "below_hca")
+  expect_lt(res$p_value[res$cohort == "disease"], 0.001)
+  expect_equal(res$empirical_rank[res$cohort == "disease"], 1)
+})
+
+test_that("welch_t_test_cohort_hca excludes reference by default", {
+  hca_draws <- list(draws = rnorm(100, 2, 0.1), gene_ensg = "ENSG00000169252")
+  cohort_est <- data.frame(
+    gene = c("ENSG00000169252", "ENSG00000169252"),
+    group = c("reference", "SAVI"),
+    log_mu = c(2, 3),
+    se = c(0.1, 0.1),
+    n = c(1, 5),
+    stringsAsFactors = FALSE
+  )
+
+  res <- welch_t_test_cohort_hca(cohort_est, hca_draws)
+  expect_equal(nrow(res), 1L)
+  expect_equal(res$cohort, "SAVI")
+})
+
+test_that("welch_t_test_cohort_hca errors on metadata mismatch", {
+  hca_draws <- list(
+    draws = rnorm(100, 2, 0.1),
+    cell_type = "monocytic",
+    gene_ensg = "ENSG00000169252"
+  )
+  cohort_est <- data.frame(
+    gene = "ENSG00000073756",
+    cell_type = "monocytic",
+    group = "A",
+    log_mu = 2,
+    se = 0.1,
+    n = 5,
+    stringsAsFactors = FALSE
+  )
+  expect_error(
+    welch_t_test_cohort_hca(cohort_est, hca_draws),
+    "Mismatched gene_ensg"
+  )
+})
+
+test_that("welch_t_test_cohort_hca accepts cohort subset", {
+  hca_draws <- list(draws = rnorm(200, 2, 0.1), gene_ensg = "ENSG00000169252")
+  cohort_est <- data.frame(
+    gene = rep("ENSG00000169252", 2),
+    group = c("A", "B"),
+    log_mu = c(2.5, 3.5),
+    se = c(0.1, 0.1),
+    n = c(5, 5),
+    stringsAsFactors = FALSE
+  )
+
+  res <- welch_t_test_cohort_hca(cohort_est, hca_draws, cohorts = "B")
+  expect_equal(nrow(res), 1L)
+  expect_equal(res$cohort, "B")
 })
