@@ -186,7 +186,7 @@ for specific cell types and genes based on sample metadata:
 # Predict gene expression for a specific cell type and gene
 expr_result <- expr_predict(
   cell_type = 'cd4 naive',
-  gene_ensg = 'ENSG00000000419',
+  gene = "ENSG00000000419",
   age_decade = '7',
   sex = 'female',
   disease_groups = 'Normal',

@@ -8,11 +8,12 @@ composition_posterior_test(
   proportions = NULL,
   sex = NULL,
   age_decade = NULL,
-  disease_groups = NULL,
   ethnicity_groups = NULL,
   assay_groups = NULL,
   tissue_groups = NULL,
-  load_model_to_global_env = T
+  disease_groups = NULL,
+  load_model_to_global_env = NULL,
+  fit = NULL
 )
 }
 \arguments{
@@ -20,7 +21,7 @@ composition_posterior_test(
 
 \item{sex}{A string indicating sex ("male", "female", or "unknown").}
 
-\item{disease_groups}{A string indicating disease group.}
+\item{age_decade}{A string for age decade category.}
 
 \item{ethnicity_groups}{A string indicating ethnicity group.}
 
@@ -28,9 +29,13 @@ composition_posterior_test(
 
 \item{tissue_groups}{A string indicating tissue group.}
 
-\item{load_model_to_global_env}{Flag whether load model file to global env.}
+\item{disease_groups}{Deprecated and ignored. The default healthy sccomp
+model is trained on healthy samples only.}
 
-\item{age_bin}{A string for age bin category.}
+\item{load_model_to_global_env}{Deprecated and ignored.}
+
+\item{fit}{Optional `posteriorHCA_sccomp_fit` object from [load_sccomp_fit()].
+When `NULL`, the default healthy model is loaded.}
 }
 \value{
 A list with a result table and a density plot.

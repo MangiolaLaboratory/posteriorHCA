@@ -119,37 +119,57 @@ data(example_proportions)
 print(example_proportions)
 ```
 
-#### Run Composition Posterior Testing
+#### Load the healthy sccomp reference
 
-The `composition_posterior_test()` function allows testing new cellular composition data against the probabilistic model:
+The default composition model is a healthy-only CellNexus sccomp fit. Unknown
+covariates can be left as `NA`; sccomp marginalises over them automatically.
 
-```{r eval = instantiate::stan_cmdstan_exists(), fig.width= 12, fig.height= 10 }
+```{r eval = requireNamespace("sccomp", quietly = TRUE)}
+sccomp_fit <- load_sccomp_fit()
+```
+
+#### Draw healthy reference proportions
+
+```{r eval = requireNamespace("sccomp", quietly = TRUE)}
+comp_draws <- composition_draws(
+  sccomp_fit,
+  sex = "male",
+  age_decade = "4",
+  ethnicity_groups = "European",
+  assay_groups = "10x Genomics 3",
+  tissue_groups = "blood"
+)
+head(comp_draws$draws)
+```
+
+#### Compare observed proportions
+
+`composition_posterior_test()` keeps the legacy table + plot interface, but
+now uses [load_sccomp_fit()] and [composition_draws()] internally.
+
+```{r eval = requireNamespace("sccomp", quietly = TRUE), fig.width= 12, fig.height= 10 }
 result <- composition_posterior_test(
     proportions = example_proportions,
     sex = "male",
-    age_decade = '4',
-    disease_groups = "Normal",
+    age_decade = "4",
     ethnicity_groups = "European",
-    tissue_groups = "blood", 
-    load_model_to_global_env = T
+    assay_groups = "10x Genomics 3",
+    tissue_groups = "blood",
+    fit = sccomp_fit
 )
 ```
-
-#### About `load_model_to_global_env`
-
-In the `composition_posterior_test` function, we added arg - `load_model_to_global_env` to determine if the model file should be loaded into global env or local env (scope within the function running) in R session. By default, it is set to be TRUE - `load_model_to_global_env = T`, and this is particularly useful when you wish to repeatedly run the function. Loading model file into global env prevents re-loading the model file, which usually will cost you minutes to run.
 
 #### Inspect Composition Results
 
 **Posterior Distribution Table:**
 
-```{r eval = instantiate::stan_cmdstan_exists()}
+```{r eval = requireNamespace("sccomp", quietly = TRUE)}
 print(result$result_table)
 ```
 
 **Density Plot of Posterior Predictions:**
 
-```{r eval = instantiate::stan_cmdstan_exists(), fig.width= 12, fig.height= 10 }
+```{r eval = requireNamespace("sccomp", quietly = TRUE), fig.width= 12, fig.height= 10 }
 print(result$plot)
 ```
 
@@ -160,14 +180,14 @@ The `expr_predict()` function allows predicting gene expression levels for speci
 ```{r eval = requireNamespace("brms", quietly = TRUE), fig.width= 10, fig.height= 6 }
 # Predict gene expression for a specific cell type and gene
 expr_result <- expr_predict(
-  cell_type = 'cd4 naive',
-  gene_ensg = 'ENSG00000000419',
-  age_decade = '7',
-  sex = 'female',
-  disease_groups = 'Normal',
-  ethnicity_groups = 'European',
-  assay_groups = '10x Genomics 3',
-  tissue_groups = 'blood'
+  cell_type = "cd4 naive",
+  gene = "ENSG00000000419",
+  age_decade = "7",
+  sex = "female",
+  disease_groups = "Normal",
+  ethnicity_groups = "European",
+  assay_groups = "10x Genomics 3",
+  tissue_groups = "blood"
 )
 ```
 
@@ -193,7 +213,12 @@ head(expr_result$pred)
 
 ## **Input Arguments and Valid Values**
 
-Both `composition_posterior_test()` and `expr_predict()` functions accept various metadata inputs corresponding to observed sample characteristics. These include **sex, age decade, disease condition, ethnicity, and tissue type, etc**. For composition analysis, users can also provide observed cell type proportions. However, if some metadata or proportions are unknown, users can leave these fields empty, and the functions will still generate meaningful posterior estimates based on the comprehensive reference.
+Both `composition_posterior_test()` / [composition_draws()] and [expr_predict()]
+accept metadata inputs corresponding to observed sample characteristics. For
+composition, the default healthy sccomp model uses **sex, age decade,
+ethnicity, assay, and tissue**. Unknown covariates can be set to `NA` and are
+marginalised automatically by sccomp. For expression queries, metadata can also
+be left empty to marginalise over the pre-trained model.
 
 If users choose to specify metadata, it must be consistent with the **Human Cell Atlas (HCA) annotations** to ensure accurate comparisons. Below is a comprehensive list of valid arguments:
 

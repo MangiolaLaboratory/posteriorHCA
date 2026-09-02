@@ -15,5 +15,6 @@ get_sub_formula(full_formula, factor_names)
 A sub-formula as a string.
 }
 \description{
-This function extracts a sub-formula that contains only the specified factor names.
+Deprecated. sccomp now marginalises over `NA` metadata directly, so
+sub-formulas are no longer needed for composition queries.
 }

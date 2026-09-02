@@ -1,6 +1,7 @@
 #' Extract sub-formula from full formula
 #'
-#' This function extracts a sub-formula that contains only the specified factor names.
+#' Deprecated. sccomp now marginalises over `NA` metadata directly, so
+#' sub-formulas are no longer needed for composition queries.
 #'
 #' @param full_formula A full formula object.
 #' @param factor_names A vector of factor names to retain.
@@ -9,6 +10,7 @@
 #' @import purrr
 get_sub_formula <-
   function(full_formula, factor_names){
+    .Deprecated(msg = "get_sub_formula() is deprecated because sccomp now marginalises NA metadata directly.")
 
     terms <-
       full_formula %>%
@@ -266,38 +268,22 @@ get_reference_sample_ready <- function(cell_type,
 }
 
 #' @title Get the file path for the pre-trained model
-#' @description Checks if the pre-trained model file is cached locally. If not, downloads it from the cloud.
+#' @description
+#' Deprecated in favour of [get_sccomp_ready()] or [load_sccomp_fit()].
+#'
 #' @param cache_directory Character. Directory to store the cached file. Defaults to the standard cache directory.
 #' @param use_cache Logical. If TRUE, uses the cached version if available.
 #' @return Character. The local file path of the model.
 #' @export
-#' @importFrom tools file_path_sans_ext
-#' @importFrom httr GET write_disk stop_for_status
 #' @importFrom cli cli_alert_info cli_abort
 get_model_ready <- function(cache_directory = get_default_cache_dir(), use_cache = TRUE) {
-  model_url <- "https://object-store.rc.nectar.org.au/v1/AUTH_b0a86a29c8b74630aac35f471cfe1396/sccomp_est/estimates_age_decade___L3___disease_TRUE___immune_only_TRUE.rds"
-  model_filename <- basename(model_url)
-  model_path <- file.path(cache_directory, model_filename)
-
-  if (file.exists(model_path) && use_cache) {
-    cli_alert_info("Using cached model file: {model_path}")
-    return(model_path)
-  }
-
-  cli_alert_info("Downloading pre-trained model file...")
-  dir.create(cache_directory, recursive = TRUE, showWarnings = FALSE)
-
-  tryCatch(
-    {
-      httr::GET(model_url, httr::write_disk(model_path, overwrite = TRUE)) |> httr::stop_for_status()
-    },
-    error = function(e) {
-      file.remove(model_path)
-      cli_abort("Failed to download model file: {e}")
-    }
+  .Deprecated(msg = "get_model_ready() is deprecated; use get_sccomp_ready() or load_sccomp_fit() instead.")
+  res <- get_sccomp_ready(
+    cache_directory = cache_directory,
+    use_cache = use_cache
   )
-
-  return(model_path)
+  cli_alert_info("Using cached model file: {res$path}")
+  res$path
 }
 
 #' @title Get file from Nectar object storage

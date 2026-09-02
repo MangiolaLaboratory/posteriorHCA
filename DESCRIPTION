@@ -30,6 +30,7 @@ Collate:
     'gene-id.R'
     'cohort.R'
     'expr-query.R'
+    'composition-query.R'
     'inference-cohort.R'
     'inference-sample.R'
     'plots.R'

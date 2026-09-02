@@ -15,5 +15,5 @@ get_model_ready(cache_directory = get_default_cache_dir(), use_cache = TRUE)
 Character. The local file path of the model.
 }
 \description{
-Checks if the pre-trained model file is cached locally. If not, downloads it from the cloud.
+Deprecated in favour of [get_sccomp_ready()] or [load_sccomp_fit()].
 }
