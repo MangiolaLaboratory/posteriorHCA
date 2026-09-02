@@ -124,7 +124,7 @@ comp_draws <- composition_draws(
 #> Loading model from cache...
 #> Running standalone generated quantities after 1 MCMC chain, with 1 thread(s) per chain...
 #> 
-#> Chain 1  Elapsed Time: 4.318 seconds (Generated Quantities) 
+#> Chain 1  Elapsed Time: 3.44 seconds (Generated Quantities) 
 #> Chain 1 finished in 0.0 seconds.
 head(comp_draws$draws)
 #>      sample_id age_decade  sex ethnicity_groups_imputed assay_groups___altered
@@ -135,12 +135,12 @@ head(comp_draws$draws)
 #> 5 query_sample          4 male                 European         10x Genomics 3
 #> 6 query_sample          4 male                 European         10x Genomics 3
 #>   dataset_id___altered tissue_groups       L3 proportion .draw cell_type
-#> 1                   NA         blood b memory 0.05109034     1  b memory
-#> 2                   NA         blood b memory 0.04868110     2  b memory
-#> 3                   NA         blood b memory 0.04549951     3  b memory
-#> 4                   NA         blood b memory 0.04742480     4  b memory
-#> 5                   NA         blood b memory 0.04457948     5  b memory
-#> 6                   NA         blood b memory 0.04695580     6  b memory
+#> 1                   NA         blood b memory 0.04390783     1  b memory
+#> 2                   NA         blood b memory 0.04764503     2  b memory
+#> 3                   NA         blood b memory 0.04989014     3  b memory
+#> 4                   NA         blood b memory 0.04684835     4  b memory
+#> 5                   NA         blood b memory 0.04677623     5  b memory
+#> 6                   NA         blood b memory 0.04676158     6  b memory
 ```
 
 #### Compare observed proportions
@@ -162,26 +162,26 @@ result <- composition_posterior_test(
 #> Loading model from cache...
 #> Running standalone generated quantities after 1 MCMC chain, with 1 thread(s) per chain...
 #> 
-#> Chain 1  Elapsed Time: 3.447 seconds (Generated Quantities) 
+#> Chain 1  Elapsed Time: 3.441 seconds (Generated Quantities) 
 #> Chain 1 finished in 0.0 seconds.
 #> # A tibble: 26 × 7
 #>    sample_id_observed cell_type proportion_observed Empirical_Confidence    mean
 #>    <chr>              <chr>                   <dbl>                <dbl>   <dbl>
-#>  1 0000c153da22cf963… b memory             0                           0 4.64e-2
-#>  2 0000c153da22cf963… b naive              0                           0 5.10e-2
-#>  3 0000c153da22cf963… cd14 mono            0                           0 3.73e-2
-#>  4 0000c153da22cf963… cd16 mono            0.00502                     0 1.22e-2
-#>  5 0000c153da22cf963… cd4 fh em            0                           0 6.82e-4
+#>  1 0000c153da22cf963… b memory             0                           0 4.65e-2
+#>  2 0000c153da22cf963… b naive              0                           0 5.11e-2
+#>  3 0000c153da22cf963… cd14 mono            0                           0 3.71e-2
+#>  4 0000c153da22cf963… cd16 mono            0.00502                     0 1.24e-2
+#>  5 0000c153da22cf963… cd4 fh em            0                           0 6.85e-4
 #>  6 0000c153da22cf963… cd4 naive            0                           0 2.12e-1
 #>  7 0000c153da22cf963… cd4 tcm              0.000359                    0 1.85e-1
-#>  8 0000c153da22cf963… cd4 th1 …            0                           0 3.74e-3
-#>  9 0000c153da22cf963… cd4 th1/…            0.000359                    0 6.91e-3
-#> 10 0000c153da22cf963… cd4 th17…            0                           0 1.73e-3
+#>  8 0000c153da22cf963… cd4 th1 …            0                           0 3.77e-3
+#>  9 0000c153da22cf963… cd4 th1/…            0.000359                    0 6.95e-3
+#> 10 0000c153da22cf963… cd4 th17…            0                           0 1.71e-3
 #> # ℹ 16 more rows
 #> # ℹ 2 more variables: lower <dbl>, upper <dbl>
 ```
 
-![](/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/README_files/figure-gfm/unnamed-chunk-7-1.png)<!-- -->
+![](README_files/figure-gfm/unnamed-chunk-7-1.png)<!-- -->
 
 #### Inspect Composition Results
 
@@ -192,16 +192,16 @@ print(result$result_table)
 #> # A tibble: 26 × 7
 #>    sample_id_observed cell_type proportion_observed Empirical_Confidence    mean
 #>    <chr>              <chr>                   <dbl>                <dbl>   <dbl>
-#>  1 0000c153da22cf963… b memory             0                           0 4.64e-2
-#>  2 0000c153da22cf963… b naive              0                           0 5.10e-2
-#>  3 0000c153da22cf963… cd14 mono            0                           0 3.73e-2
-#>  4 0000c153da22cf963… cd16 mono            0.00502                     0 1.22e-2
-#>  5 0000c153da22cf963… cd4 fh em            0                           0 6.82e-4
+#>  1 0000c153da22cf963… b memory             0                           0 4.65e-2
+#>  2 0000c153da22cf963… b naive              0                           0 5.11e-2
+#>  3 0000c153da22cf963… cd14 mono            0                           0 3.71e-2
+#>  4 0000c153da22cf963… cd16 mono            0.00502                     0 1.24e-2
+#>  5 0000c153da22cf963… cd4 fh em            0                           0 6.85e-4
 #>  6 0000c153da22cf963… cd4 naive            0                           0 2.12e-1
 #>  7 0000c153da22cf963… cd4 tcm              0.000359                    0 1.85e-1
-#>  8 0000c153da22cf963… cd4 th1 …            0                           0 3.74e-3
-#>  9 0000c153da22cf963… cd4 th1/…            0.000359                    0 6.91e-3
-#> 10 0000c153da22cf963… cd4 th17…            0                           0 1.73e-3
+#>  8 0000c153da22cf963… cd4 th1 …            0                           0 3.77e-3
+#>  9 0000c153da22cf963… cd4 th1/…            0.000359                    0 6.95e-3
+#> 10 0000c153da22cf963… cd4 th17…            0                           0 1.71e-3
 #> # ℹ 16 more rows
 #> # ℹ 2 more variables: lower <dbl>, upper <dbl>
 ```
@@ -212,7 +212,7 @@ print(result$result_table)
 print(result$plot)
 ```
 
-![](/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/README_files/figure-gfm/unnamed-chunk-9-1.png)<!-- -->
+![](README_files/figure-gfm/unnamed-chunk-9-1.png)<!-- -->
 
 ### **2. Gene Expression Prediction**
 
@@ -245,13 +245,13 @@ expr_result <- expr_predict(
 ``` r
 print(expr_result$summary)
 #> $mean
-#> [1] 4.442823
+#> [1] 4.453388
 #> 
 #> $median
-#> [1] 4.45129
+#> [1] 4.513088
 #> 
 #> $peak_location
-#> [1] 4.459412
+#> [1] 4.560336
 ```
 
 **Density Plot of Predicted Expression:**
@@ -260,19 +260,19 @@ print(expr_result$summary)
 print(expr_result$plot)
 ```
 
-![](/hpcfs/groups/phoenix-hpc-mangiola_laboratory/chen/posteriorHCA/README_files/figure-gfm/unnamed-chunk-12-1.png)<!-- -->
+![](README_files/figure-gfm/unnamed-chunk-12-1.png)<!-- -->
 
 **Predicted Values:**
 
 ``` r
 head(expr_result$pred)
 #>      value
-#> 1 3.670794
-#> 2 4.554274
-#> 3 4.264375
-#> 4 4.193046
-#> 5 4.535664
-#> 6 3.602183
+#> 1 4.635210
+#> 2 4.666047
+#> 3 5.007506
+#> 4 5.288961
+#> 5 3.724696
+#> 6 3.528344
 ```
 
 ## **Input Arguments and Valid Values**
