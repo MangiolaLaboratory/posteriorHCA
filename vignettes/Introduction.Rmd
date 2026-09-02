@@ -8,25 +8,10 @@ vignette: >
   %\VignetteEncoding{UTF-8}
   %\VignetteEngine{knitr::rmarkdown}
 knit: >
-    (function(x, ...){
-        proj_root <- rprojroot::find_package_root_file() |> normalizePath()
-        rmarkdown::render(
-            x,
-            output_format = "html_document",
-            params = list(
-                demo_metadata = TRUE
-            )
-        )
-        rmarkdown::render(
-            x,
-            output_file = "README.md",
-            output_format = "github_document",
-            output_dir = proj_root,
-            knit_root_dir = proj_root,
-            params = list(
-                demo_metadata = FALSE
-            )
-        )
+    (function(x, ...) {
+        source(file.path(dirname(x), "..", "scripts", "render_introduction.R"),
+               local = TRUE)
+        render_introduction(input = x)
     })
 ---
 
@@ -102,6 +87,11 @@ Once installed, load the package:
 ```{r}
 library(posteriorHCA)
 ```
+
+To rebuild this vignette **and** sync `README.md`, run
+`source("scripts/render_introduction.R"); render_introduction()` (or
+`Rscript scripts/render_introduction_cli.R` from the package root). Plain
+`rmarkdown::render("vignettes/Introduction.Rmd")` only builds the vignette HTML.
 
 ## Usage Examples
 
@@ -228,7 +218,7 @@ If users choose to specify metadata, it must be consistent with the **Human Cell
 
 -   **Age Decades:** 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
 
--   **Disease Groups:** "Normal", "COVID-19 related_blood", "Metabolic and Other Disorders: Renal and Urinary Disorders_renal system", "Systemic Lupus Erythematosus_blood", "Respiratory Conditions: General Respiratory Disorders_blood", "COVID-19 related_nasal, oral, and pharyngeal regions", "COVID-19 related_respiratory system", "Glioblastoma_cerebral lobes and cortical areas", "Cancer: Hematologic Cancer_bone marrow", "Lung Adenocarcinoma_respiratory system", "Infectious and Immune-related Diseases: Autoimmune and Immune-Related Disorders_small intestine", "Infectious and Immune-related Diseases: Respiratory Infections_blood", "Metabolic and Other Disorders: Gastrointestinal Disorders_large intestine", "Cancer: Renal Cancer_renal system", "Infectious and Immune-related Diseases: Autoimmune and Immune-Related Disorders_respiratory system", "Infectious and Immune-related Diseases: Respiratory Infections_nasal, oral, and pharyngeal regions", "Metabolic and Other Disorders: Renal and Urinary Disorders_prostate", "Metabolic and Other Disorders_sensory-related structures", "Cancer: Gastrointestinal Cancer_large intestine", "Other Diseases_brainstem and cerebellar structures", "Metabolic and Other Disorders: Gastrointestinal Disorders_oesophagus", "Cancer: Lung Cancer_respiratory system", "Lung Adenocarcinoma_cerebral lobes and cortical areas", "Metabolic and Other Disorders: Gastrointestinal Disorders_stomach", "Lung Adenocarcinoma_liver", "Cancer: Lung Cancer_liver", "Respiratory Conditions: Restrictive Lung Diseases_respiratory system", "Cancer_integumentary system (skin)", "Infectious and Immune-related Diseases: Autoimmune and Immune-Related Disorders_large intestine", "Other Diseases_nasal, oral, and pharyngeal regions", "Cancer: Lung Cancer_lymphatic system", "Neurodegenerative and Neurological Disorders: Neurodegenerative Disorders_cerebral lobes and cortical areas", "Cancer: Breast Cancer_respiratory system", "Metabolic and Other Disorders: Metabolic Disorders_blood", "Cancer: Gastrointestinal Cancer_liver", "Cancer: Renal Cancer_blood", "Glioblastoma_brainstem and cerebellar structures", "Lung Adenocarcinoma_lymphatic system", "Cancer: Lung Cancer_integumentary system (skin)", "Respiratory Conditions: Obstructive Lung Diseases_respiratory system", "Metabolic and Other Disorders_female reproductive system", "Metabolic and Other Disorders: Gastrointestinal Disorders_liver", "Cancer: Lung Cancer_endocrine system", "Lung Adenocarcinoma_endocrine system", "COVID-19 related_trachea", "Neurodegenerative and Neurological Disorders_cerebral lobes and cortical areas", "Other Diseases_renal system", "Cancer: Renal Cancer_endocrine system", "Cancer: Renal Cancer_lymphatic system"
+<!-- -   **Disease Groups:** "Normal", "COVID-19 related_blood", "Metabolic and Other Disorders: Renal and Urinary Disorders_renal system", "Systemic Lupus Erythematosus_blood", "Respiratory Conditions: General Respiratory Disorders_blood", "COVID-19 related_nasal, oral, and pharyngeal regions", "COVID-19 related_respiratory system", "Glioblastoma_cerebral lobes and cortical areas", "Cancer: Hematologic Cancer_bone marrow", "Lung Adenocarcinoma_respiratory system", "Infectious and Immune-related Diseases: Autoimmune and Immune-Related Disorders_small intestine", "Infectious and Immune-related Diseases: Respiratory Infections_blood", "Metabolic and Other Disorders: Gastrointestinal Disorders_large intestine", "Cancer: Renal Cancer_renal system", "Infectious and Immune-related Diseases: Autoimmune and Immune-Related Disorders_respiratory system", "Infectious and Immune-related Diseases: Respiratory Infections_nasal, oral, and pharyngeal regions", "Metabolic and Other Disorders: Renal and Urinary Disorders_prostate", "Metabolic and Other Disorders_sensory-related structures", "Cancer: Gastrointestinal Cancer_large intestine", "Other Diseases_brainstem and cerebellar structures", "Metabolic and Other Disorders: Gastrointestinal Disorders_oesophagus", "Cancer: Lung Cancer_respiratory system", "Lung Adenocarcinoma_cerebral lobes and cortical areas", "Metabolic and Other Disorders: Gastrointestinal Disorders_stomach", "Lung Adenocarcinoma_liver", "Cancer: Lung Cancer_liver", "Respiratory Conditions: Restrictive Lung Diseases_respiratory system", "Cancer_integumentary system (skin)", "Infectious and Immune-related Diseases: Autoimmune and Immune-Related Disorders_large intestine", "Other Diseases_nasal, oral, and pharyngeal regions", "Cancer: Lung Cancer_lymphatic system", "Neurodegenerative and Neurological Disorders: Neurodegenerative Disorders_cerebral lobes and cortical areas", "Cancer: Breast Cancer_respiratory system", "Metabolic and Other Disorders: Metabolic Disorders_blood", "Cancer: Gastrointestinal Cancer_liver", "Cancer: Renal Cancer_blood", "Glioblastoma_brainstem and cerebellar structures", "Lung Adenocarcinoma_lymphatic system", "Cancer: Lung Cancer_integumentary system (skin)", "Respiratory Conditions: Obstructive Lung Diseases_respiratory system", "Metabolic and Other Disorders_female reproductive system", "Metabolic and Other Disorders: Gastrointestinal Disorders_liver", "Cancer: Lung Cancer_endocrine system", "Lung Adenocarcinoma_endocrine system", "COVID-19 related_trachea", "Neurodegenerative and Neurological Disorders_cerebral lobes and cortical areas", "Other Diseases_renal system", "Cancer: Renal Cancer_endocrine system", "Cancer: Renal Cancer_lymphatic system" -->
 
 -   **Ethnicity Groups:** "African", "Other/Unknown", "European", "East Asian", "Hispanic/Latin American", "South Asian", "Native American & Pacific Islander"
 
