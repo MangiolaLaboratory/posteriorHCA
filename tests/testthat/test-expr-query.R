@@ -228,3 +228,34 @@ test_that("expr_draws rejects a bad quantity before calling brms", {
     "arg"
   )
 })
+
+test_that("resolve_expr_fit accepts a posteriorHCA_expr_fit", {
+  fit <- new_expr_fit(
+    fit = fake_expr_fit(),
+    cell_type = "monocytic",
+    gene_ensg = "ENSG00000169252",
+    gene_symbol = "ADRB2"
+  )
+  out <- resolve_expr_fit(fit = fit)
+  expect_identical(out, fit)
+})
+
+test_that("resolve_expr_fit requires cell_type and gene when fit is missing", {
+  expect_error(
+    resolve_expr_fit(),
+    "Supply `fit`"
+  )
+})
+
+test_that("resolve_expr_fit errors when fit and gene disagree", {
+  fit <- new_expr_fit(
+    fit = fake_expr_fit(),
+    cell_type = "monocytic",
+    gene_ensg = "ENSG00000169252",
+    gene_symbol = "ADRB2"
+  )
+  expect_error(
+    resolve_expr_fit(fit = fit, gene = "ENSG00000073756"),
+    "does not match `fit`"
+  )
+})

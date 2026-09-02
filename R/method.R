@@ -196,19 +196,24 @@ composition_posterior_test <-
 
 #' Query a stored gene-level brms model
 #'
-#' Loads the fit, builds a covariate grid with [build_newdata_grid()],
-#' then draws with [expr_draws()].
+#' Builds a covariate grid with [build_newdata_grid()], then draws with
+#' [expr_draws()]. Pass a pre-loaded fit from [load_expr_fit()], or supply
+#' `cell_type` and `gene` to load from Nectar.
 #'
 #' Metadata rules (same as [build_newdata_grid()]):
 #' * `NA` — marginalise over every level the model knows
 #' * one value — fix that level
 #' * several values — marginalise over only those levels
 #'
-#' @param cell_type A string indicating the cell type.
-#' @param gene A gene symbol or Ensembl id (e.g. `"ADRB2"` or `"ENSG00000169252"`).
+#' @param fit Optional `posteriorHCA_expr_fit` object from [load_expr_fit()].
+#' @param cell_type Cell type when `fit` is not supplied.
+#' @param gene Gene symbol or Ensembl id (e.g. `"ADRB2"` or `"ENSG00000169252"`)
+#'   when `fit` is not supplied.
 #' @param age_decade,sex,disease_groups,ethnicity_groups,assay_groups,tissue_groups
 #'   Metadata choices. See the rules above.
 #' @param version `"latest"` or a pinned container/version (e.g. `"V1"`).
+#' @param cache_directory,use_cache Passed to [load_expr_fit()] when `fit` is
+#'   not supplied.
 #' @param quantity `"linpred"` for log(μ), `"predict"` for posterior
 #'   predicted counts, `"epred"` for expected counts.
 #' @param collapse `"mean"` averages grid profiles within each draw.
@@ -224,8 +229,9 @@ composition_posterior_test <-
 #'
 #' @import ggplot2
 expr_predict <- function(
-  cell_type,
-  gene,
+  fit = NULL,
+  cell_type = NULL,
+  gene = NULL,
   age_decade = NA,
   sex = NA,
   disease_groups = NA,
@@ -233,6 +239,8 @@ expr_predict <- function(
   assay_groups = NA,
   tissue_groups = NA,
   version = "latest",
+  cache_directory = get_default_cache_dir(),
+  use_cache = TRUE,
   quantity = c("linpred", "predict", "epred"),
   collapse = c("mean", "pool", "sample"),
   ndraws = NULL,
@@ -241,10 +249,13 @@ expr_predict <- function(
   quantity <- match.arg(quantity)
   collapse <- match.arg(collapse)
 
-  fit <- load_expr_fit(
+  fit <- resolve_expr_fit(
+    fit = fit,
     cell_type = cell_type,
     gene = gene,
-    version = version
+    version = version,
+    cache_directory = cache_directory,
+    use_cache = use_cache
   )
 
   grid <- build_newdata_grid(

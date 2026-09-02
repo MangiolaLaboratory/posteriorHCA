@@ -109,9 +109,6 @@ To rebuild this vignette **and** sync `README.md`, run
 The package includes a small example dataset for demonstration:
 
 ```{r message=FALSE, warning=FALSE}
-library(tidyverse)
-library(ggplot2)
-
 data(example_proportions)
 print(example_proportions)
 ```

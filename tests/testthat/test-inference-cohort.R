@@ -105,7 +105,14 @@ test_that("bootstrap_cohort_logmu_batch returns one row per cohort", {
 test_that("bootstrap_cohort_logmu_batch works with cohort_est from estimate_cohort_logmu", {
   toy <- toy_counts()
   aligned <- suppressMessages(scale_to_hca_reference(toy$user, toy$ref))
-  est <- estimate_cohort_logmu(aligned, group = c("A", "A", "A", "B", "B", "B"), genes = "g1")
+  meta <- aligned_fields(aligned)$sample_metadata
+  meta$cohort <- c("A", "A", "A", "B", "B", "B", "reference")
+  est <- estimate_cohort_logmu(
+    aligned,
+    metadata = meta,
+    formula = ~ 0 + cohort,
+    genes = "g1"
+  )
 
   boot_est <- bootstrap_cohort_logmu_batch(
     aligned,
@@ -122,7 +129,14 @@ test_that("bootstrap_cohort_logmu_batch works with cohort_est from estimate_coho
 test_that("bootstrap_cohort_logmu_batch uses cohort_est dispersion when provided", {
   toy <- toy_counts()
   aligned <- suppressMessages(scale_to_hca_reference(toy$user, toy$ref))
-  est <- estimate_cohort_logmu(aligned, group = c("A", "A", "A", "B", "B", "B"), genes = "g1")
+  meta <- aligned_fields(aligned)$sample_metadata
+  meta$cohort <- c("A", "A", "A", "B", "B", "B", "reference")
+  est <- estimate_cohort_logmu(
+    aligned,
+    metadata = meta,
+    formula = ~ 0 + cohort,
+    genes = "g1"
+  )
 
   boot_est <- bootstrap_cohort_logmu_batch(
     aligned,
@@ -216,4 +230,53 @@ test_that("welch_t_test_cohort_hca accepts cohort subset", {
   res <- welch_t_test_cohort_hca(cohort_est, hca_draws, cohorts = "B")
   expect_equal(nrow(res), 1L)
   expect_equal(res$cohort, "B")
+})
+
+test_that("welch_test_means returns expected statistics", {
+  out <- welch_test_means(3, 0.1, 2, 0.1, n1 = 10, n2 = 500)
+  expect_equal(out$delta, 1)
+  expect_equal(out$se_diff, sqrt(0.02))
+  expect_lt(out$p_value, 0.001)
+  expect_true(is.finite(out$df))
+})
+
+test_that("summarize_posterior_draws computes rank", {
+  draws <- rnorm(100, mean = 2, sd = 0.2)
+  out <- summarize_posterior_draws(draws, value = 2.5)
+  expect_equal(out$n, 100L)
+  expect_true(out$empirical_rank > 0.9)
+})
+
+test_that("manual workflow matches welch_t_test_cohort_hca", {
+  set.seed(1)
+  hca_draws <- list(
+    draws = rnorm(200, mean = 2.0, sd = 0.2),
+    cell_type = "monocytic",
+    gene_ensg = "ENSG00000169252",
+    gene_symbol = "ADRB2"
+  )
+  cohort_est <- data.frame(
+    gene = "ENSG00000169252",
+    gene_symbol = "ADRB2",
+    cell_type = "monocytic",
+    group = "SAVI",
+    log_mu = 3.0,
+    se = 0.12,
+    n = 5,
+    stringsAsFactors = FALSE
+  )
+
+  auto <- welch_t_test_cohort_hca(cohort_est, hca_draws)
+  cohort <- cohort_estimate_at(cohort_est, group = "SAVI")
+  baseline <- summarize_posterior_draws(hca_draws, value = cohort$mu)
+  manual <- welch_test_means(
+    cohort$mu, cohort$se, baseline$mean, baseline$sd,
+    n1 = cohort$n, n2 = baseline$n
+  )
+
+  expect_equal(auto$cohort_log_mu, manual$mu1)
+  expect_equal(auto$hca_mean, manual$mu2)
+  expect_equal(auto$t_stat, manual$t_stat)
+  expect_equal(auto$p_value, manual$p_value)
+  expect_equal(auto$empirical_rank, baseline$empirical_rank)
 })

@@ -463,92 +463,44 @@ welch_t_test_one_cohort <- function(
   cohort_meta <- cohort_est_metadata(cohort_row)
   validate_expr_metadata_match(cohort_meta, hca_meta, context = "`cohort_est` and `hca_draws`")
 
-  hca_mean <- mean(hca_draws)
-  hca_sd <- stats::sd(hca_draws)
-  n_hca <- length(hca_draws)
-
-  c_log_mu <- cohort_row$log_mu[[1]]
-  c_se <- cohort_row$se[[1]]
-  c_n <- if ("n" %in% names(cohort_row)) cohort_row$n[[1]] else 10L
-  cohort_name <- if ("group" %in% names(cohort_row)) {
-    as.character(cohort_row$group[[1]])
-  } else {
-    "cohort"
-  }
-
-  delta <- c_log_mu - hca_mean
-  se_diff <- sqrt(c_se^2 + hca_sd^2)
-  t_stat <- delta / se_diff
-
-  var1_mean <- c_se^2
-  var2_mean <- hca_sd^2
-
-  denom <- (var1_mean^2 / max(1L, c_n - 1L)) + (var2_mean^2 / max(1L, n_hca - 1L))
-  df <- if (denom > 0) {
-    (var1_mean + var2_mean)^2 / denom
-  } else {
-    Inf
-  }
-
-  p_val <- if (is.finite(df) && df > 0) {
-    2 * stats::pt(abs(t_stat), df = df, lower.tail = FALSE)
-  } else {
-    2 * stats::pnorm(-abs(t_stat))
-  }
-
-  empirical_rank <- mean(hca_draws <= c_log_mu)
-
-  direction <- if (p_val < alpha && delta > 0) {
-    "above_hca"
-  } else if (p_val < alpha && delta < 0) {
-    "below_hca"
-  } else {
-    "consistent_with_hca"
-  }
-
-  gene_ensg <- cohort_meta$gene_ensg
+  cohort <- cohort_estimate_at(cohort_row, row = 1L)
+  gene_ensg <- cohort$gene
   if (is.na(gene_ensg) || !nzchar(gene_ensg)) {
     gene_ensg <- hca_meta$gene_ensg
   }
-  gene_symbol <- cohort_meta$gene_symbol
+  gene_symbol <- cohort$gene_symbol
   if (is.na(gene_symbol) || !nzchar(gene_symbol)) {
     gene_symbol <- hca_meta$gene_symbol
   }
-  cell_type <- cohort_meta$cell_type
+  cell_type <- cohort$cell_type
   if (is.na(cell_type) || !nzchar(cell_type)) {
     cell_type <- hca_meta$cell_type
   }
 
-  data.frame(
-    gene = if (!is.na(gene_ensg)) as.character(gene_ensg) else NA_character_,
-    gene_symbol = if (!is.na(gene_symbol)) as.character(gene_symbol) else NA_character_,
-    cell_type = if (!is.na(cell_type)) as.character(cell_type) else NA_character_,
-    cohort = cohort_name,
-    method = if ("method" %in% names(cohort_row)) {
-      as.character(cohort_row$method[[1]])
-    } else {
-      "ql"
-    },
-    cohort_log_mu = c_log_mu,
-    cohort_se = c_se,
-    hca_mean = hca_mean,
-    hca_sd = hca_sd,
-    delta_log_mu = delta,
-    se_diff = se_diff,
-    t_stat = t_stat,
-    df = df,
-    p_value = p_val,
-    empirical_rank = empirical_rank,
-    direction = direction,
-    stringsAsFactors = FALSE
+  out <- compare_logmu_to_baseline(
+    mu = cohort$mu,
+    se = cohort$se,
+    n = cohort$n,
+    baseline_draws = hca_draws,
+    cohort = cohort$group,
+    method = cohort$method,
+    gene = gene_ensg,
+    gene_symbol = gene_symbol,
+    cell_type = cell_type,
+    alpha = alpha
   )
+  out
 }
 
 #' Welch t-test of cohort log(mu) against HCA posterior draws
 #'
 #' Compares cohort estimates from [estimate_cohort_logmu()] to healthy HCA
-#' posterior draws using a heteroscedastic Welch t-test and empirical posterior
-#' rank. By default, tests every cohort in `cohort_est` except `exclude_groups`.
+#' posterior draws using [compare_logmu_to_baseline()]. By default, tests
+#' every cohort in `cohort_est` except `exclude_groups`.
+#'
+#' For a manual workflow, extract summaries with [cohort_estimate_at()] and
+#' [summarize_posterior_draws()], then call [welch_test_means()] or
+#' [compare_logmu_to_baseline()] directly.
 #'
 #' @param cohort_est A data frame from [estimate_cohort_logmu()] or
 #'   [bootstrap_cohort_logmu_batch()] with columns `group`, `log_mu`, and `se`.
@@ -559,22 +511,8 @@ welch_t_test_one_cohort <- function(
 #' @param exclude_groups Groups omitted when `cohorts` is `NULL` (default
 #'   `"reference"`).
 #' @param alpha Significance level used for the `direction` column.
-#' @return A data frame with one row per tested cohort:
-#'   \item{gene}{Canonical ENSG id}
-#'   \item{gene_symbol}{Gene symbol when available}
-#'   \item{cell_type}{Cell type label when available}
-#'   \item{cohort}{Cohort label}
-#'   \item{cohort_log_mu}{Estimated cohort latent log(mu)}
-#'   \item{cohort_se}{Cohort standard error}
-#'   \item{hca_mean}{Mean of HCA posterior log(mu) draws}
-#'   \item{hca_sd}{Standard deviation of HCA posterior log(mu) draws}
-#'   \item{delta_log_mu}{Difference: `cohort_log_mu - hca_mean`}
-#'   \item{se_diff}{Combined standard error: `sqrt(cohort_se^2 + hca_sd^2)`}
-#'   \item{t_stat}{Welch-style t-statistic}
-#'   \item{df}{Welch-Satterthwaite degrees of freedom}
-#'   \item{p_value}{Two-sided p-value}
-#'   \item{empirical_rank}{Proportion of HCA draws below `cohort_log_mu`}
-#'   \item{direction}{`"above_hca"`, `"below_hca"`, or `"consistent_with_hca"`}
+#' @return A data frame with one row per tested cohort (see
+#'   [compare_logmu_to_baseline()]).
 #' @export
 #' @importFrom cli cli_abort
 welch_t_test_cohort_hca <- function(
@@ -592,11 +530,9 @@ welch_t_test_cohort_hca <- function(
   }
 
   hca_meta <- expr_metadata(hca_draws)
-  if (is.list(hca_draws) && !is.data.frame(hca_draws) && "draws" %in% names(hca_draws)) {
-    hca_draws <- hca_draws$draws
-  }
-  if (!is.numeric(hca_draws) || length(hca_draws) < 2L) {
-    cli_abort("`hca_draws` must be a numeric vector with at least 2 draws.")
+  hca_vec <- extract_posterior_draws(hca_draws)
+  if (length(hca_vec) < 2L) {
+    cli_abort("`hca_draws` must contain at least 2 numeric draws.")
   }
 
   if (is.null(cohorts)) {
@@ -630,7 +566,7 @@ welch_t_test_cohort_hca <- function(
   out <- lapply(seq_len(nrow(sub)), function(i) {
     welch_t_test_one_cohort(
       cohort_row = sub[i, , drop = FALSE],
-      hca_draws = hca_draws,
+      hca_draws = hca_vec,
       hca_meta = hca_meta,
       alpha = alpha
     )

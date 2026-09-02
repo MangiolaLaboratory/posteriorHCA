@@ -385,6 +385,91 @@ expr_draws <- function(
   )
 }
 
+#' Resolve an expression-model fit for querying
+#'
+#' Accepts a `posteriorHCA_expr_fit` from [load_expr_fit()], or loads one when
+#' `cell_type` and `gene` are supplied. Supports legacy positional calls
+#' `expr_predict(cell_type, gene, ...)`.
+#'
+#' @param fit Optional `posteriorHCA_expr_fit` object.
+#' @param cell_type Cell type name when `fit` is not supplied.
+#' @param gene Gene symbol or Ensembl id when `fit` is not supplied.
+#' @inheritParams get_brms_ready
+#' @return A `posteriorHCA_expr_fit` object.
+#' @keywords internal
+#' @noRd
+resolve_expr_fit <- function(
+  fit = NULL,
+  cell_type = NULL,
+  gene = NULL,
+  version = "latest",
+  cache_directory = get_default_cache_dir(),
+  use_cache = TRUE,
+  orgdb = NULL
+) {
+  if (is_expr_fit(fit)) {
+    if (!is.null(cell_type) || !is.null(gene)) {
+      meta <- expr_metadata(fit)
+      if (!is.null(cell_type) && !is.na(meta$cell_type) && nzchar(meta$cell_type) &&
+          !identical(as.character(cell_type), meta$cell_type)) {
+        cli_abort(c(
+          "`cell_type` does not match `fit`.",
+          "i" = "Fit cell type: `{meta$cell_type}`; supplied: `{cell_type}`."
+        ))
+      }
+      if (!is.null(gene)) {
+        resolved_gene <- tryCatch(
+          resolve_gene_one(
+            gene,
+            cell_type = meta$cell_type,
+            version = version,
+            orgdb = orgdb,
+            cache_directory = cache_directory,
+            use_cache = use_cache,
+            strict = FALSE
+          ),
+          error = function(e) as.character(gene)
+        )
+        if (!is.na(meta$gene_ensg) && nzchar(meta$gene_ensg) &&
+            !identical(resolved_gene, meta$gene_ensg)) {
+          cli_abort(c(
+            "`gene` does not match `fit`.",
+            "i" = "Fit gene: `{meta$gene_ensg}`; supplied: `{resolved_gene}`."
+          ))
+        }
+      }
+    }
+    return(fit)
+  }
+
+  if (!is.null(fit) && is.character(fit) && length(fit) == 1L) {
+    if (!is.null(gene)) {
+      cell_type <- fit
+      fit <- NULL
+    } else if (!is.null(cell_type)) {
+      gene <- cell_type
+      cell_type <- fit
+      fit <- NULL
+    }
+  }
+
+  if (is.null(cell_type) || is.null(gene)) {
+    cli_abort(c(
+      "Supply `fit` from [load_expr_fit()], or both `cell_type` and `gene`.",
+      "i" = "Example: `expr_predict(fit, disease_groups = \"Normal\")`."
+    ))
+  }
+
+  load_expr_fit(
+    cell_type = cell_type,
+    gene = gene,
+    version = version,
+    cache_directory = cache_directory,
+    use_cache = use_cache,
+    orgdb = orgdb
+  )
+}
+
 #' Load a stored gene-level brms fit
 #'
 #' @inheritParams get_brms_ready

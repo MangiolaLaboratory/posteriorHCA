@@ -28,25 +28,16 @@ to all groups in `cohort_est` except those in `exclude_groups`.}
 \item{alpha}{Significance level used for the `direction` column.}
 }
 \value{
-A data frame with one row per tested cohort:
-  \item{gene}{Canonical ENSG id}
-  \item{gene_symbol}{Gene symbol when available}
-  \item{cell_type}{Cell type label when available}
-  \item{cohort}{Cohort label}
-  \item{cohort_log_mu}{Estimated cohort latent log(mu)}
-  \item{cohort_se}{Cohort standard error}
-  \item{hca_mean}{Mean of HCA posterior log(mu) draws}
-  \item{hca_sd}{Standard deviation of HCA posterior log(mu) draws}
-  \item{delta_log_mu}{Difference: `cohort_log_mu - hca_mean`}
-  \item{se_diff}{Combined standard error: `sqrt(cohort_se^2 + hca_sd^2)`}
-  \item{t_stat}{Welch-style t-statistic}
-  \item{df}{Welch-Satterthwaite degrees of freedom}
-  \item{p_value}{Two-sided p-value}
-  \item{empirical_rank}{Proportion of HCA draws below `cohort_log_mu`}
-  \item{direction}{`"above_hca"`, `"below_hca"`, or `"consistent_with_hca"`}
+A data frame with one row per tested cohort (see
+  [compare_logmu_to_baseline()]).
 }
 \description{
 Compares cohort estimates from [estimate_cohort_logmu()] to healthy HCA
-posterior draws using a heteroscedastic Welch t-test and empirical posterior
-rank. By default, tests every cohort in `cohort_est` except `exclude_groups`.
+posterior draws using [compare_logmu_to_baseline()]. By default, tests
+every cohort in `cohort_est` except `exclude_groups`.
+}
+\details{
+For a manual workflow, extract summaries with [cohort_estimate_at()] and
+[summarize_posterior_draws()], then call [welch_test_means()] or
+[compare_logmu_to_baseline()] directly.
 }

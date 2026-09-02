@@ -78,9 +78,6 @@ vignette HTML.
 The package includes a small example dataset for demonstration:
 
 ``` r
-library(tidyverse)
-library(ggplot2)
-
 data(example_proportions)
 print(example_proportions)
 #> # A tibble: 26 × 3
@@ -124,7 +121,7 @@ comp_draws <- composition_draws(
 #> Loading model from cache...
 #> Running standalone generated quantities after 1 MCMC chain, with 1 thread(s) per chain...
 #> 
-#> Chain 1  Elapsed Time: 3.44 seconds (Generated Quantities) 
+#> Chain 1  Elapsed Time: 3.472 seconds (Generated Quantities) 
 #> Chain 1 finished in 0.0 seconds.
 head(comp_draws$draws)
 #>      sample_id age_decade  sex ethnicity_groups_imputed assay_groups___altered
@@ -135,12 +132,12 @@ head(comp_draws$draws)
 #> 5 query_sample          4 male                 European         10x Genomics 3
 #> 6 query_sample          4 male                 European         10x Genomics 3
 #>   dataset_id___altered tissue_groups       L3 proportion .draw cell_type
-#> 1                   NA         blood b memory 0.04390783     1  b memory
-#> 2                   NA         blood b memory 0.04764503     2  b memory
-#> 3                   NA         blood b memory 0.04989014     3  b memory
-#> 4                   NA         blood b memory 0.04684835     4  b memory
-#> 5                   NA         blood b memory 0.04677623     5  b memory
-#> 6                   NA         blood b memory 0.04676158     6  b memory
+#> 1                   NA         blood b memory 0.04567696     1  b memory
+#> 2                   NA         blood b memory 0.04531969     2  b memory
+#> 3                   NA         blood b memory 0.04686371     3  b memory
+#> 4                   NA         blood b memory 0.05109034     4  b memory
+#> 5                   NA         blood b memory 0.04660289     5  b memory
+#> 6                   NA         blood b memory 0.04953086     6  b memory
 ```
 
 #### Compare observed proportions
@@ -162,21 +159,21 @@ result <- composition_posterior_test(
 #> Loading model from cache...
 #> Running standalone generated quantities after 1 MCMC chain, with 1 thread(s) per chain...
 #> 
-#> Chain 1  Elapsed Time: 3.441 seconds (Generated Quantities) 
+#> Chain 1  Elapsed Time: 3.523 seconds (Generated Quantities) 
 #> Chain 1 finished in 0.0 seconds.
 #> # A tibble: 26 × 7
 #>    sample_id_observed cell_type proportion_observed Empirical_Confidence    mean
 #>    <chr>              <chr>                   <dbl>                <dbl>   <dbl>
-#>  1 0000c153da22cf963… b memory             0                           0 4.65e-2
+#>  1 0000c153da22cf963… b memory             0                           0 4.62e-2
 #>  2 0000c153da22cf963… b naive              0                           0 5.11e-2
-#>  3 0000c153da22cf963… cd14 mono            0                           0 3.71e-2
-#>  4 0000c153da22cf963… cd16 mono            0.00502                     0 1.24e-2
-#>  5 0000c153da22cf963… cd4 fh em            0                           0 6.85e-4
-#>  6 0000c153da22cf963… cd4 naive            0                           0 2.12e-1
+#>  3 0000c153da22cf963… cd14 mono            0                           0 3.72e-2
+#>  4 0000c153da22cf963… cd16 mono            0.00502                     0 1.23e-2
+#>  5 0000c153da22cf963… cd4 fh em            0                           0 6.81e-4
+#>  6 0000c153da22cf963… cd4 naive            0                           0 2.11e-1
 #>  7 0000c153da22cf963… cd4 tcm              0.000359                    0 1.85e-1
-#>  8 0000c153da22cf963… cd4 th1 …            0                           0 3.77e-3
-#>  9 0000c153da22cf963… cd4 th1/…            0.000359                    0 6.95e-3
-#> 10 0000c153da22cf963… cd4 th17…            0                           0 1.71e-3
+#>  8 0000c153da22cf963… cd4 th1 …            0                           0 3.74e-3
+#>  9 0000c153da22cf963… cd4 th1/…            0.000359                    0 6.92e-3
+#> 10 0000c153da22cf963… cd4 th17…            0                           0 1.72e-3
 #> # ℹ 16 more rows
 #> # ℹ 2 more variables: lower <dbl>, upper <dbl>
 ```
@@ -192,16 +189,16 @@ print(result$result_table)
 #> # A tibble: 26 × 7
 #>    sample_id_observed cell_type proportion_observed Empirical_Confidence    mean
 #>    <chr>              <chr>                   <dbl>                <dbl>   <dbl>
-#>  1 0000c153da22cf963… b memory             0                           0 4.65e-2
+#>  1 0000c153da22cf963… b memory             0                           0 4.62e-2
 #>  2 0000c153da22cf963… b naive              0                           0 5.11e-2
-#>  3 0000c153da22cf963… cd14 mono            0                           0 3.71e-2
-#>  4 0000c153da22cf963… cd16 mono            0.00502                     0 1.24e-2
-#>  5 0000c153da22cf963… cd4 fh em            0                           0 6.85e-4
-#>  6 0000c153da22cf963… cd4 naive            0                           0 2.12e-1
+#>  3 0000c153da22cf963… cd14 mono            0                           0 3.72e-2
+#>  4 0000c153da22cf963… cd16 mono            0.00502                     0 1.23e-2
+#>  5 0000c153da22cf963… cd4 fh em            0                           0 6.81e-4
+#>  6 0000c153da22cf963… cd4 naive            0                           0 2.11e-1
 #>  7 0000c153da22cf963… cd4 tcm              0.000359                    0 1.85e-1
-#>  8 0000c153da22cf963… cd4 th1 …            0                           0 3.77e-3
-#>  9 0000c153da22cf963… cd4 th1/…            0.000359                    0 6.95e-3
-#> 10 0000c153da22cf963… cd4 th17…            0                           0 1.71e-3
+#>  8 0000c153da22cf963… cd4 th1 …            0                           0 3.74e-3
+#>  9 0000c153da22cf963… cd4 th1/…            0.000359                    0 6.92e-3
+#> 10 0000c153da22cf963… cd4 th17…            0                           0 1.72e-3
 #> # ℹ 16 more rows
 #> # ℹ 2 more variables: lower <dbl>, upper <dbl>
 ```
@@ -245,13 +242,13 @@ expr_result <- expr_predict(
 ``` r
 print(expr_result$summary)
 #> $mean
-#> [1] 4.453388
+#> [1] 4.420162
 #> 
 #> $median
-#> [1] 4.513088
+#> [1] 4.440863
 #> 
 #> $peak_location
-#> [1] 4.560336
+#> [1] 4.567612
 ```
 
 **Density Plot of Predicted Expression:**
@@ -267,12 +264,12 @@ print(expr_result$plot)
 ``` r
 head(expr_result$pred)
 #>      value
-#> 1 4.635210
-#> 2 4.666047
-#> 3 5.007506
-#> 4 5.288961
-#> 5 3.724696
-#> 6 3.528344
+#> 1 4.958353
+#> 2 4.829741
+#> 3 4.772091
+#> 4 4.446765
+#> 5 5.235605
+#> 6 3.406768
 ```
 
 ## **Input Arguments and Valid Values**
@@ -320,12 +317,11 @@ Below is a comprehensive list of valid arguments:
 ``` r
 sessionInfo()
 #> R version 4.5.3 (2026-03-11)
-#> Platform: x86_64-pc-linux-gnu
-#> Running under: Ubuntu 24.04.4 LTS
+#> Platform: x86_64-conda-linux-gnu
+#> Running under: Red Hat Enterprise Linux 8.4 (Ootpa)
 #> 
 #> Matrix products: default
-#> BLAS:   /usr/lib/x86_64-linux-gnu/openblas-pthread/libblas.so.3 
-#> LAPACK: /usr/lib/x86_64-linux-gnu/openblas-pthread/libopenblasp-r0.3.26.so;  LAPACK version 3.12.0
+#> BLAS/LAPACK: /home/a1237163/miniconda3/envs/R_env/lib/libopenblasp-r0.3.29.so;  LAPACK version 3.12.0
 #> 
 #> locale:
 #>  [1] LC_CTYPE=en_US.UTF-8       LC_NUMERIC=C              
@@ -335,16 +331,14 @@ sessionInfo()
 #>  [9] LC_ADDRESS=C               LC_TELEPHONE=C            
 #> [11] LC_MEASUREMENT=en_US.UTF-8 LC_IDENTIFICATION=C       
 #> 
-#> time zone: Etc/UTC
+#> time zone: Australia/Adelaide
 #> tzcode source: system (glibc)
 #> 
 #> attached base packages:
 #> [1] stats     graphics  grDevices utils     datasets  methods   base     
 #> 
 #> other attached packages:
-#>  [1] lubridate_1.9.5    forcats_1.0.1      stringr_1.6.0      dplyr_1.2.1       
-#>  [5] purrr_1.2.2        readr_2.2.0        tidyr_1.3.2        tibble_3.3.1      
-#>  [9] ggplot2_4.0.3      tidyverse_2.0.0    posteriorHCA_0.2.0 testthat_3.3.2    
+#> [1] posteriorHCA_0.2.0 testthat_3.3.2    
 #> 
 #> loaded via a namespace (and not attached):
 #>   [1] RColorBrewer_1.1-3          tensorA_0.36.2.1           
@@ -354,62 +348,66 @@ sessionInfo()
 #>   [9] rmarkdown_2.31              fs_2.1.0                   
 #>  [11] vctrs_0.7.3                 memoise_2.0.1              
 #>  [13] htmltools_0.5.9             S4Arrays_1.10.1            
-#>  [15] usethis_3.2.1               curl_7.1.0                 
-#>  [17] distributional_0.7.0        SparseArray_1.10.10        
-#>  [19] StanHeaders_2.39.0.9000     sass_0.4.10                
-#>  [21] bslib_0.10.0                desc_1.4.3                 
-#>  [23] sandwich_3.1-1              emmeans_2.0.3              
-#>  [25] zoo_1.8-15                  cachem_1.1.0               
-#>  [27] lifecycle_1.0.5             pkgconfig_2.0.3            
-#>  [29] Matrix_1.7-5                R6_2.6.1                   
-#>  [31] fastmap_1.2.0               MatrixGenerics_1.22.0      
-#>  [33] digest_0.6.39               colorspace_2.1-2           
-#>  [35] patchwork_1.3.2             S4Vectors_0.48.1           
-#>  [37] ps_1.9.3                    rprojroot_2.1.1            
-#>  [39] brms_2.23.0                 pkgload_1.5.2              
-#>  [41] GenomicRanges_1.62.1        labeling_0.4.3             
-#>  [43] timechange_0.4.0            httr_1.4.8                 
+#>  [15] forcats_1.0.1               usethis_3.2.1              
+#>  [17] curl_7.1.0                  distributional_0.8.1       
+#>  [19] SparseArray_1.10.10         StanHeaders_2.39.0.9000    
+#>  [21] sass_0.4.10                 bslib_0.12.0               
+#>  [23] desc_1.4.3                  sandwich_3.1-1             
+#>  [25] emmeans_2.0.3               zoo_1.8-15                 
+#>  [27] cachem_1.1.0                lifecycle_1.0.5            
+#>  [29] pkgconfig_2.0.3             Matrix_1.7-5               
+#>  [31] R6_2.6.1                    fastmap_1.2.0              
+#>  [33] MatrixGenerics_1.22.0       digest_0.6.39              
+#>  [35] colorspace_2.1-2            patchwork_1.3.2            
+#>  [37] S4Vectors_0.48.1            ps_1.9.3                   
+#>  [39] rprojroot_2.1.1             brms_2.23.1                
+#>  [41] pkgload_1.5.2               GenomicRanges_1.62.1       
+#>  [43] labeling_0.4.3              httr_1.4.8                 
 #>  [45] abind_1.4-8                 compiler_4.5.3             
-#>  [47] bit64_4.8.0                 withr_3.0.2                
+#>  [47] bit64_4.8.2                 withr_3.0.3                
 #>  [49] inline_0.3.21               S7_0.2.2                   
-#>  [51] backports_1.5.1             QuickJSR_1.9.2             
+#>  [51] backports_1.5.1             QuickJSR_1.10.0            
 #>  [53] pkgbuild_1.4.8              MASS_7.3-65                
 #>  [55] DelayedArray_0.36.1         sessioninfo_1.2.3          
-#>  [57] loo_2.10.1.9000             tools_4.5.3                
+#>  [57] loo_2.10.0.9000             tools_4.5.3                
 #>  [59] otel_0.2.0                  glue_1.8.1                 
-#>  [61] callr_3.7.6                 nlme_3.1-169               
-#>  [63] cmdstanr_0.9.0              grid_4.5.3                 
+#>  [61] callr_3.8.0                 nlme_3.1-169               
+#>  [63] grid_4.5.3                  cmdstanr_0.9.0             
 #>  [65] instantiate_0.2.3           checkmate_2.3.4            
 #>  [67] generics_0.1.4              gtable_0.3.6               
-#>  [69] tzdb_0.5.0                  data.table_1.18.2.1        
-#>  [71] hms_1.1.4                   utf8_1.2.6                 
-#>  [73] stringfish_0.19.0           XVector_0.50.0             
-#>  [75] BiocGenerics_0.56.0         ggrepel_0.9.8              
-#>  [77] pillar_1.11.1               vroom_1.7.1                
-#>  [79] limma_3.66.0                posterior_1.7.1            
-#>  [81] splines_4.5.3               lattice_0.22-9             
-#>  [83] bit_4.6.0                   survival_3.8-6             
-#>  [85] tidyselect_1.2.1            SingleCellExperiment_1.32.0
-#>  [87] locfit_1.5-9.12             knitr_1.51                 
-#>  [89] gridExtra_2.3               IRanges_2.44.0             
-#>  [91] Seqinfo_1.0.0               edgeR_4.8.2                
-#>  [93] SummarizedExperiment_1.40.0 stats4_4.5.3               
-#>  [95] xfun_0.57                   dittoSeq_1.22.0            
-#>  [97] bridgesampling_1.2-1        Biobase_2.70.0             
-#>  [99] statmod_1.5.1               devtools_2.5.1             
-#> [101] brio_1.1.5                  matrixStats_1.5.0          
-#> [103] rstan_2.39.0.9000           pheatmap_1.0.13            
-#> [105] stringi_1.8.7               sccomp_2.2.0               
-#> [107] yaml_2.3.12                 evaluate_1.0.5             
-#> [109] codetools_0.2-20            cli_3.6.6                  
-#> [111] RcppParallel_5.1.11-2       xtable_1.8-8               
-#> [113] processx_3.9.0              jquerylib_0.1.4            
-#> [115] dichromat_2.0-0.1           Rcpp_1.1.1-1               
-#> [117] coda_0.19-4.1               parallel_4.5.3             
-#> [119] rstantools_2.7.0            ellipsis_0.3.3             
-#> [121] bayesplot_1.16.0.9000       Brobdingnag_1.2-9          
-#> [123] mvtnorm_1.3-7               scales_1.4.0               
-#> [125] ggridges_0.5.7              crayon_1.5.3               
-#> [127] rlang_1.2.0                 cowplot_1.2.0              
-#> [129] qs2_0.2.0                   multcomp_1.4-30
+#>  [69] tzdb_0.5.0                  tidyr_1.3.2                
+#>  [71] data.table_1.18.4           hms_1.1.4                  
+#>  [73] stringfish_0.19.0           utf8_1.2.6                 
+#>  [75] XVector_0.50.0              BiocGenerics_0.56.0        
+#>  [77] ggrepel_0.9.8               pillar_1.11.1              
+#>  [79] stringr_1.6.0               vroom_1.7.1                
+#>  [81] limma_3.66.0                posterior_1.7.1            
+#>  [83] splines_4.5.3               dplyr_1.2.1                
+#>  [85] lattice_0.22-9              bit_4.6.0                  
+#>  [87] survival_3.8-6              tidyselect_1.2.1           
+#>  [89] SingleCellExperiment_1.32.0 locfit_1.5-9.12            
+#>  [91] knitr_1.51                  gridExtra_2.3.1            
+#>  [93] IRanges_2.44.0              Seqinfo_1.0.0              
+#>  [95] edgeR_4.8.2                 SummarizedExperiment_1.40.0
+#>  [97] stats4_4.5.3                xfun_0.57                  
+#>  [99] dittoSeq_1.22.0             bridgesampling_1.2-1       
+#> [101] Biobase_2.70.0              statmod_1.5.2              
+#> [103] devtools_2.5.2              brio_1.1.5                 
+#> [105] matrixStats_1.5.0           rstan_2.39.0.9000          
+#> [107] pheatmap_1.0.13             stringi_1.8.9              
+#> [109] sccomp_2.2.0                yaml_2.3.12                
+#> [111] evaluate_1.0.5              codetools_0.2-20           
+#> [113] tibble_3.3.1                cli_3.6.6                  
+#> [115] RcppParallel_5.1.11-2       xtable_1.8-8               
+#> [117] processx_3.9.0              jquerylib_0.1.4            
+#> [119] dichromat_2.0-0.1           Rcpp_1.1.2                 
+#> [121] coda_0.19-4.1               parallel_4.5.3             
+#> [123] rstantools_2.6.0.9000       ellipsis_0.3.3             
+#> [125] ggplot2_4.0.3               readr_2.2.0                
+#> [127] bayesplot_1.15.0.9000       Brobdingnag_1.2-9          
+#> [129] mvtnorm_1.4-2               scales_1.4.0               
+#> [131] ggridges_0.5.7              purrr_1.2.2                
+#> [133] crayon_1.5.3                rlang_1.3.0                
+#> [135] cowplot_1.2.0               qs2_0.2.1                  
+#> [137] multcomp_1.4-30
 ```

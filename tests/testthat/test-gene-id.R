@@ -39,6 +39,30 @@ test_that("resolve_gene maps symbols when orgdb is available", {
   expect_equal(unname(out), "ENSG00000169252")
 })
 
+test_that("resolve_gene accepts ENSG ids with id_type symbol", {
+  skip_if_not_installed("org.Hs.eg.db")
+  skip_if_not_installed("AnnotationDbi")
+  out <- resolve_gene(
+    c("ENSG00000169252", "ADRB2"),
+    id_type = "symbol",
+    strict = TRUE
+  )
+  expect_equal(unname(out), c("ENSG00000169252", "ENSG00000169252"))
+})
+
+test_that("harmonise_gene_ids is idempotent for ENSG rownames", {
+  skip_if_not_installed("org.Hs.eg.db")
+  skip_if_not_installed("AnnotationDbi")
+  mat <- matrix(
+    1:6,
+    nrow = 2,
+    dimnames = list(c("ENSG00000169252", "ENSG00000073756"), c("s1", "s2", "s3"))
+  )
+  out <- harmonise_gene_ids(mat, id_type = "symbol", strict = FALSE)
+  out2 <- harmonise_gene_ids(out, id_type = "symbol", strict = FALSE)
+  expect_equal(rownames(out2), rownames(out))
+})
+
 test_that("harmonise_gene_ids renames matrix rownames", {
   skip_if_not_installed("org.Hs.eg.db")
   skip_if_not_installed("AnnotationDbi")

@@ -136,15 +136,20 @@ resolve_gene <- function(
       }
       orgdb <- get("org.Hs.eg.db", envir = asNamespace("org.Hs.eg.db"))
     }
-    mapped <- suppressMessages(AnnotationDbi::mapIds(
-      orgdb,
-      keys = genes,
-      column = "ENSEMBL",
-      keytype = "SYMBOL",
-      multiVals = "first"
-    ))
-    resolved <- strip_ensembl_version(unname(mapped))
-    names(resolved) <- input_names
+    is_ensg <- is_ensembl_gene_id(genes)
+    resolved[is_ensg] <- toupper(genes[is_ensg])
+
+    to_map <- genes[!is_ensg]
+    if (length(to_map) > 0L) {
+      mapped <- suppressMessages(AnnotationDbi::mapIds(
+        orgdb,
+        keys = to_map,
+        column = "ENSEMBL",
+        keytype = "SYMBOL",
+        multiVals = "first"
+      ))
+      resolved[!is_ensg] <- strip_ensembl_version(unname(mapped))
+    }
     if (strict && any(is.na(resolved))) {
       cli_abort("Could not map gene symbol{?s} to ENSG: {genes[is.na(resolved)]}.")
     }

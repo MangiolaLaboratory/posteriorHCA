@@ -5,9 +5,9 @@
 \title{Cohort log(mu) at the atlas offset-zero scale}
 \usage{
 estimate_cohort_logmu(
-  counts,
-  offset = NULL,
-  group,
+  data,
+  metadata = NULL,
+  formula = ~1,
   genes = NULL,
   cell_type = NULL,
   version = "latest",
@@ -16,20 +16,23 @@ estimate_cohort_logmu(
 )
 }
 \arguments{
-\item{counts}{Gene-by-sample counts, or an aligned list from
-[scale_to_hca_reference()].}
+\item{data}{Gene-by-sample counts, or a scaled matrix / SE / Seurat object
+from [scale_to_hca_reference()].}
 
-\item{offset}{Named or unnamed numeric vector, one value per sample.
-Taken from `counts$offset` when `counts` is an aligned list.}
+\item{metadata}{Optional sample metadata `data.frame`. Required for a plain
+matrix without alignment attributes. Must include `hca_offset` and any
+columns referenced in `formula`. Row names (or a `sample_id` column) must
+match `colnames(data)`.}
 
-\item{group}{Group labels per sample. See details above.}
+\item{formula}{One-sided model formula passed to [stats::model.matrix()] for
+the edgeR design. Default `~ 1` estimates one pooled cohort.}
 
 \item{genes}{Optional gene identifiers (symbols or ENSG). Default is all
 rows. Values are resolved to canonical ENSG ids. Dispersion is still
-estimated from the full `counts` matrix.}
+estimated from the full count matrix.}
 
 \item{cell_type}{Optional cell type label stored in the output. Taken from
-an aligned list when available.}
+metadata (`hca_cell_type`) or alignment attributes when available.}
 
 \item{version}{Nectar version pin used when validating genes against the
 cell-type universe.}
@@ -39,7 +42,7 @@ cell-type universe.}
 \item{assay}{Assay name for SE / Seurat input.}
 }
 \value{
-A data frame with one row per gene x group: `gene` (ENSG),
+A data frame with one row per gene x design term: `gene` (ENSG),
   `gene_symbol`, `cell_type`, `group`, `n`, `log_mu`, `mu`, `se`, `df`,
   `dispersion`.
 }
@@ -48,13 +51,14 @@ Point estimates come from [edgeR::mglmOneGroup()] with the TMM offset
 applied directly. [edgeR::glmQLFit()] is used only for the QL Wald SE.
 }
 \details{
-`counts` may be a matrix, SE/SCE, Seurat object, or the list returned
-by [scale_to_hca_reference()]. `group` may be:
-\itemize{
-  \item a metadata column name for Seurat / SummarizedExperiment inputs,
-  \item a named vector or list keyed by sample id for matrix inputs, or
-  \item a vector in sample order.
-}
-If `counts` is an aligned list and `group` covers only the user samples,
-`"reference"` is appended for the atlas library.
+`data` may be a matrix, `SummarizedExperiment` / `SingleCellExperiment`,
+`Seurat` object, or the output of [scale_to_hca_reference()]. Sample
+metadata (including `hca_offset`) is taken from `metadata`, from
+`colData` / `meta.data`, or from alignment attributes on scaled objects.
+A plain matrix with no attached metadata requires an explicit `metadata`
+argument.
+
+`formula` defines the edgeR design matrix, e.g. `~ 0 + Category` for
+group means. All variables in the formula must appear as columns in the
+resolved metadata.
 }

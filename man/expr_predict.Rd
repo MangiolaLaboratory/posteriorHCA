@@ -5,8 +5,9 @@
 \title{Query a stored gene-level brms model}
 \usage{
 expr_predict(
-  cell_type,
-  gene,
+  fit = NULL,
+  cell_type = NULL,
+  gene = NULL,
   age_decade = NA,
   sex = NA,
   disease_groups = NA,
@@ -14,6 +15,8 @@ expr_predict(
   assay_groups = NA,
   tissue_groups = NA,
   version = "latest",
+  cache_directory = get_default_cache_dir(),
+  use_cache = TRUE,
   quantity = c("linpred", "predict", "epred"),
   collapse = c("mean", "pool", "sample"),
   ndraws = NULL,
@@ -21,13 +24,19 @@ expr_predict(
 )
 }
 \arguments{
-\item{cell_type}{A string indicating the cell type.}
+\item{fit}{Optional `posteriorHCA_expr_fit` object from [load_expr_fit()].}
 
-\item{gene}{A gene symbol or Ensembl id (e.g. `"ADRB2"` or `"ENSG00000169252"`).}
+\item{cell_type}{Cell type when `fit` is not supplied.}
+
+\item{gene}{Gene symbol or Ensembl id (e.g. `"ADRB2"` or `"ENSG00000169252"`)
+when `fit` is not supplied.}
 
 \item{age_decade, sex, disease_groups, ethnicity_groups, assay_groups, tissue_groups}{Metadata choices. See the rules above.}
 
 \item{version}{`"latest"` or a pinned container/version (e.g. `"V1"`).}
+
+\item{cache_directory, use_cache}{Passed to [load_expr_fit()] when `fit` is
+not supplied.}
 
 \item{quantity}{`"linpred"` for log(μ), `"predict"` for posterior
 predicted counts, `"epred"` for expected counts.}
@@ -47,8 +56,9 @@ A list with `pred` (data frame of draws), `summary`, `plot`
   log1p-scaled x-axis.
 }
 \description{
-Loads the fit, builds a covariate grid with [build_newdata_grid()],
-then draws with [expr_draws()].
+Builds a covariate grid with [build_newdata_grid()], then draws with
+[expr_draws()]. Pass a pre-loaded fit from [load_expr_fit()], or supply
+`cell_type` and `gene` to load from Nectar.
 }
 \details{
 Metadata rules (same as [build_newdata_grid()]):

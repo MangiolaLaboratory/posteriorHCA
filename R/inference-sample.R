@@ -191,16 +191,20 @@ test_sample_predictive <- function(
         shape_val <- if (!is.null(nb_shape)) nb_shape[[i]] else Inf
         pat_se <- sqrt(1 / y + (if (is.finite(shape_val) && shape_val > 0) 1 / shape_val else 0))
         delta_mu <- pat_log_mu - lp_mean
-        delta_se <- sqrt(pat_se^2 + lp_sd^2)
-        w_z <- delta_mu / delta_se
-        w_p <- 2 * stats::pnorm(-abs(w_z))
+        w_test <- welch_test_means(
+          mu1 = pat_log_mu,
+          se1 = pat_se,
+          mu2 = lp_mean,
+          se2 = lp_sd,
+          n2 = length(lp)
+        )
 
         res$patient_log_mu <- pat_log_mu
         res$patient_log_mu_se <- pat_se
         res$delta_log_mu_vs_healthy <- delta_mu
-        res$delta_log_mu_se <- delta_se
-        res$welch_style_z <- w_z
-        res$welch_style_p <- w_p
+        res$delta_log_mu_se <- w_test$se_diff
+        res$welch_style_z <- w_test$t_stat
+        res$welch_style_p <- w_test$p_value
       } else {
         res$patient_log_mu <- NA_real_
         res$patient_log_mu_se <- NA_real_

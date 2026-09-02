@@ -8,7 +8,6 @@ vignette: >
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 params:
-  run_bootstrap: true
   for_github_md: false
 knit: >
     (function(x, ...){
@@ -16,7 +15,7 @@ knit: >
         rmarkdown::render(
             x,
             output_format = "rmarkdown::html_vignette",
-            params = list(run_bootstrap = TRUE, for_github_md = FALSE)
+            params = list(for_github_md = FALSE)
         )
         rmarkdown::render(
             x,
@@ -24,7 +23,7 @@ knit: >
             output_format = "github_document",
             output_dir = file.path(proj_root, "vignettes"),
             knit_root_dir = proj_root,
-            params = list(run_bootstrap = TRUE, for_github_md = TRUE)
+            params = list(for_github_md = TRUE)
         )
     })
 ---
@@ -72,40 +71,34 @@ if (requireNamespace("devtools", quietly = TRUE)) {
 }
 ```
 
-This vignette walks through the **cohort vs healthy HCA baseline** workflow
-using the SAVI case study and *ADRB2* in disease-associated monocytes. The
-steps mirror `examples/savi_adrb2_workflow.R`:
+This vignette follows `examples/savi_adrb2_workflow.R` for the SAVI case study
+(*ADRB2* in disease-associated monocytes, PBMC / blood):
 
 1. Prepare pseudobulk counts (`savi_mono`)
-2. Align cohort libraries to an HCA reference sample
+2. Align to the HCA monocytic reference
 3. Estimate cohort log(μ) with edgeR QL
-4. Draw a healthy HCA posterior from pre-trained `brms` models
-5. Test cohorts with a Welch *t*-test against the HCA draws
-6. Optionally bootstrap cohort log(μ) and repeat the test
-7. Plot healthy baseline and cohort comparisons
+4. Draw healthy HCA posterior (Normal, blood, 10x Genomics 3)
+5. Welch test vs HCA (wrapper + manual helpers)
+6. Plot results
 
 ## Setup
 
 ```{r libraries, eval = can_run}
 library(posteriorHCA)
 library(Seurat)
+library(tidyseurat)
+library(dplyr)
+library(purrr)
 library(ggplot2)
+
+cell_type <- "monocytic"
 ```
 
-The workflow needs **Seurat**, **brms**, and gene-id mapping packages
-(`org.Hs.eg.db`, `AnnotationDbi`). Chunks below run only when those are
-available (`can_run = TRUE`).
-
-## Prepare `savi_mono`
+## 1. Prepare `savi_mono`
 
 The SAVI study ([de Cevins *et al.*, 2023](https://doi.org/10.1016/j.xcrm.2023.101333))
-includes pseudobulk RNA-seq from PBMC cell types. We focus on
-**disease-associated monocytes** and the gene **ADRB2**.
-
-The full pseudobulk object can be built from GEO accession
-[GSE226598](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE226598)
-(see the case-study `prepare_data.R` script). The code below shows how
-`savi_mono` is defined:
+is PBMC scRNA-seq pseudobulked by sample and cell type. We subset
+**disease-associated monocytes** (17 samples: CTRL, SAVI, SAVI_treated).
 
 ```{r savi-mono-code, eval = FALSE}
 savi_path <- "GSE226598_SAVI_pseudobulk_Sample_CellType.rds"
@@ -113,53 +106,64 @@ savi <- readRDS(savi_path)
 savi_mono <- subset(savi, subset = CellType == "17. Disease-associated monocytes")
 ```
 
-For this vignette we load the bundled example object:
-
 ```{r load-savi-mono, eval = can_run}
 data(savi_mono)
 dim(savi_mono)
 table(savi_mono$Category)
 ```
 
-Gene symbols are harmonised to Ensembl IDs so cohort counts and HCA models
-use the same row names:
+Harmonise gene symbols to Ensembl IDs so cohort counts and HCA models share
+row names:
 
 ```{r harmonise, eval = can_run}
-savi_mono <- harmonise_gene_ids(savi_mono, id_type = "symbol")
+savi_mono <- harmonise_gene_ids(savi_mono, id_type = "auto")
 ```
 
-## Align to the HCA monocytic reference
+## 2. Align to the HCA monocytic reference
 
-`scale_to_hca_reference()` appends one HCA reference library, computes TMM
-normalisation factors, and stores alignment metadata (`hca_offset`,
-`sample_role`, etc.) on each sample.
+`scale_to_hca_reference()` appends one HCA library, TMM-aligns all samples,
+and stores `hca_offset` and `sample_role` on each column.
 
 ```{r align, eval = can_run}
-cell_type <- "monocytic"
-ref <- get_reference_sample_ready(cell_type)
-aligned <- scale_to_hca_reference(savi_mono, ref)
+aligned <- scale_to_hca_reference(savi_mono, cell_type)
 
 table(aligned$sample_role)
 ```
 
-## Estimate cohort log(μ)
+## 3. Estimate cohort log(μ)
 
-Cohort point estimates use edgeR quasi-likelihood standard errors at the
-atlas offset-zero scale:
+Primary model: group means with `~ 0 + Category` (includes atlas reference).
 
 ```{r estimate, eval = can_run}
 est <- estimate_cohort_logmu(
   aligned,
-  group = "Category",
+  formula = ~ 0 + Category,
   genes = "ADRB2"
 )
 est
 ```
 
-## Healthy HCA baseline draws
+Alternative: estimate each `Category` level separately with `~ 1` (as in the
+reference script):
 
-Load the pre-trained expression model for monocytic *ADRB2* and draw from the
-healthy (`Normal`) 10x Genomics 3 reference:
+```{r estimate-by-level, eval = can_run}
+est_by_level <- purrr::map_dfr(
+  aligned$Category %>% levels(),
+  .f = function(x) {
+    estimate_cohort_logmu(
+      aligned %>% dplyr::filter(Category == x),
+      formula = ~ 1,
+      genes = "ADRB2"
+    ) %>%
+      dplyr::mutate(group = x)
+  }
+)
+est_by_level
+```
+
+## 4. Healthy HCA baseline draws
+
+Load the cached brms fit and draw from Normal / blood / 10x Genomics 3.
 
 ```{r hca-draws, eval = can_run}
 fit <- load_expr_fit(cell_type = cell_type, gene = "ADRB2")
@@ -167,6 +171,7 @@ fit <- load_expr_fit(cell_type = cell_type, gene = "ADRB2")
 grid <- build_newdata_grid(
   fit,
   disease_groups = "Normal",
+  tissue_groups = "blood",
   assay_groups = "10x Genomics 3"
 )
 
@@ -180,64 +185,46 @@ hca_res <- expr_draws(
 round(c(mean = mean(hca_res$draws), sd = sd(hca_res$draws)), 3)
 ```
 
-`expr_predict()` is a convenience wrapper that also returns a density plot for
-count-scale predictions:
+Same fit via `expr_predict()` (convenience wrapper used in the Welch wrapper
+below):
 
-```{r hca-predict, eval = can_run, fig.asp = 0.7}
+```{r hca-predict, eval = can_run}
 hca_pred <- expr_predict(
-  cell_type = cell_type,
-  gene = "ADRB2",
+  fit = fit,
   disease_groups = "Normal",
+  tissue_groups = "blood",
   assay_groups = "10x Genomics 3",
-  quantity = "predict",
+  quantity = "linpred",
   collapse = "mean"
 )
-hca_pred$plot
 ```
 
-## Test cohorts against the healthy baseline (QL)
+## 5. Test cohorts against the healthy baseline
 
-`welch_t_test_cohort_hca()` compares each cohort log(μ) estimate to the HCA
-posterior using a Welch *t*-test. The reference group is excluded by default.
+### Wrapper
 
 ```{r welch, eval = can_run}
 test_results <- welch_t_test_cohort_hca(
   cohort_est = est,
-  hca_draws = hca_res
+  hca_draws = hca_pred
 )
 test_results
 ```
 
-## Bootstrap cohort log(μ) (optional)
+### Manual workflow (one cohort)
 
-For a non-parametric cohort uncertainty estimate, `bootstrap_cohort_logmu_batch()`
-mirrors the QL workflow: one call bootstraps every cohort and returns a table
-compatible with testing and plotting.
+```{r welch-manual, eval = can_run}
+cohort <- cohort_estimate_at(est, group = "SAVI")
+baseline <- summarize_posterior_draws(hca_res, value = cohort$mu)
 
-```{r bootstrap, eval = can_run && isTRUE(params$run_bootstrap)}
-boot_est <- bootstrap_cohort_logmu_batch(
-  aligned,
-  group = "Category",
-  genes = "ADRB2",
-  cohort_est = est,
-  hca_draws = hca_res,
-  n_boot = 200L,
-  seed = 42L
+welch_test_means(
+  cohort$mu, cohort$se,
+  baseline$mean, baseline$sd,
+  n1 = cohort$n, n2 = baseline$n
 )
-boot_est
-
-boot_test <- welch_t_test_cohort_hca(
-  cohort_est = boot_est,
-  hca_draws = hca_res
-)
-boot_test
 ```
 
-## Visualise results
-
-`plot_hca_draws()` shows the healthy HCA posterior alone.
-`plot_cohort_vs_hca()` overlays cohort estimates and accepts either Welch test
-output or cohort estimate tables (QL or bootstrap).
+## 6. Visualise results
 
 ```{r plot-hca, eval = can_run, fig.asp = 0.7}
 plot_hca_draws(
@@ -246,7 +233,7 @@ plot_hca_draws(
 )
 ```
 
-```{r plot-cohort-ql, eval = can_run, fig.asp = 0.7}
+```{r plot-cohort, eval = can_run, fig.asp = 0.7}
 plot_cohort_vs_hca(
   hca_draws = hca_res,
   test_results = test_results,
@@ -255,17 +242,12 @@ plot_cohort_vs_hca(
 )
 ```
 
-```{r plot-cohort-boot, eval = can_run && isTRUE(params$run_bootstrap), fig.asp = 0.7}
-plot_cohort_vs_hca(
-  hca_draws = hca_res,
-  test_results = boot_test,
-  subtitle = "Bootstrap cohort estimates",
-  annotate = c("group", "p_value", "direction", "method")
+```{r plot-hca-pred, eval = can_run, fig.asp = 0.7}
+plot_hca_draws(
+  draws = hca_pred,
+  title = "ADRB2 predicted count posterior (healthy HCA)"
 )
 ```
-
-You can also pass `cohort_est = est` or `cohort_est = boot_est` directly to
-`plot_cohort_vs_hca()` when test statistics are not needed on the plot.
 
 ## Session info
 

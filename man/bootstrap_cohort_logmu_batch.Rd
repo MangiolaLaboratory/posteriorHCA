@@ -20,14 +20,14 @@ bootstrap_cohort_logmu_batch(
 )
 }
 \arguments{
-\item{counts}{Gene-by-sample counts, or an aligned list from
-[scale_to_hca_reference()].}
+\item{counts}{Count container or matrix.}
 
-\item{group}{Group labels per sample. See details above.}
+\item{group}{Optional group vector or column name to subset samples. If
+`NULL`, all non-reference samples (or all samples) are used.}
 
 \item{genes}{Optional gene identifiers (symbols or ENSG). Default is all
 rows. Values are resolved to canonical ENSG ids. Dispersion is still
-estimated from the full `counts` matrix.}
+estimated from the full count matrix.}
 
 \item{cohorts}{Optional cohort labels to bootstrap. Defaults to all groups
 except `exclude_groups`.}
