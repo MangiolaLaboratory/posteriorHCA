@@ -3,6 +3,7 @@ title: "posteriorHCA"
 output: "html_vignette"
 params:
   demo_metadata: true
+  for_github_md: false
 vignette: >
   %\VignetteIndexEntry{posteriorHCA}
   %\VignetteEncoding{UTF-8}
@@ -20,19 +21,25 @@ knitr::opts_chunk$set(
     collapse = TRUE,
     comment = "#>"
 )
-root_dir <- knitr::opts_knit$get("root.dir")
-if (!is.null(root_dir)){
-    # This hack fixes the relative image paths. 
-    # See https://github.com/rstudio/rmarkdown/issues/2473
+
+# Relative figure paths for github_document / README.md (see rmarkdown#2473).
+if (isTRUE(params$for_github_md)) {
+  root_dir <- knitr::opts_knit$get("root.dir")
+  if (!is.null(root_dir)) {
     knitr::opts_knit$set(
-        output.dir = root_dir
+      output.dir = root_dir
     )
+  }
+  knitr::opts_chunk$set(
+    fig.path = "README_files/figure-gfm/"
+  )
 }
-proj_root <- rprojroot::find_package_root_file() |> normalizePath() 
+
+proj_root <- rprojroot::find_package_root_file() |> normalizePath()
 # Utility function for figures to force them to have the correct path
 find_figure <- function(names){
     rprojroot::find_package_root_file() |>
-        file.path("man", "figures", names) 
+        file.path("man", "figures", names)
 }
 ```
 
