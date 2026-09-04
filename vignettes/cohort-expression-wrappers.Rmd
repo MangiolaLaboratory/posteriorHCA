@@ -1,0 +1,219 @@
+---
+title: "Cohort expression workflow (wrappers)"
+author: "Chen Zhan"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Cohort expression workflow (wrappers)}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+params:
+  for_github_md: false
+knit: >
+    (function(x, ...){
+        proj_root <- rprojroot::find_package_root_file() |> normalizePath()
+        rmarkdown::render(
+            x,
+            output_file = "cohort-expression-wrappers.md",
+            output_format = "github_document",
+            output_dir = file.path(proj_root, "vignettes"),
+            knit_root_dir = proj_root,
+            params = list(for_github_md = TRUE)
+        )
+        rmarkdown::render(
+            x,
+            output_format = "rmarkdown::html_vignette",
+            params = list(for_github_md = FALSE)
+        )
+    })
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.width = 7,
+  fig.height = 4.5,
+  message = FALSE,
+  warning = FALSE
+)
+
+if (isTRUE(params$for_github_md)) {
+  root_dir <- knitr::opts_knit$get("root.dir")
+  if (!is.null(root_dir)) {
+    knitr::opts_knit$set(output.dir = file.path(root_dir, "vignettes"))
+  }
+  knitr::opts_chunk$set(fig.path = "cohort-expression-wrappers_files/figure-gfm/")
+}
+
+has_seurat <- requireNamespace("Seurat", quietly = TRUE)
+has_edb <- requireNamespace("org.Hs.eg.db", quietly = TRUE) &&
+  requireNamespace("AnnotationDbi", quietly = TRUE)
+has_brms <- requireNamespace("brms", quietly = TRUE)
+can_run <- has_seurat && has_edb && has_brms
+
+if (requireNamespace("devtools", quietly = TRUE)) {
+  pkg_root <- if (file.exists("DESCRIPTION") && dir.exists("R")) {
+    normalizePath(".")
+  } else if (file.exists("../DESCRIPTION") && dir.exists("../R")) {
+    normalizePath("..")
+  } else {
+    NULL
+  }
+  if (!is.null(pkg_root)) {
+    devtools::load_all(pkg_root, quiet = TRUE)
+  }
+}
+```
+
+**Wrapper** path for the SAVI case study (*ADRB2* in disease-associated
+monocytes, PBMC / blood). Same marked steps as the core vignette, with
+Seurat / formula / gene-id handling. See
+`vignette("cohort-expression-core", package = "posteriorHCA")` for the
+matrix-level cores.
+
+Steps:
+
+0. Align to one HCA reference library (`scale_to_hca_reference`)  
+1. Estimate cohort log(μ) (`estimate_cohort_logmu`)  
+2. Load the healthy expression fit (`load_expr_fit`)  
+3. Draw the HCA baseline (`expr_predict`)  
+4–5. Welch test vs baseline (`welch_t_test_cohort_hca`)  
+
+## Setup
+
+```{r libraries, eval = can_run}
+library(posteriorHCA)
+library(Seurat)
+library(dplyr)
+
+cell_type <- "monocytic"
+```
+
+## Prepare `savi_mono`
+
+The SAVI study ([de Cevins *et al.*, 2023](https://doi.org/10.1016/j.xcrm.2023.101333))
+is PBMC scRNA-seq pseudobulked by sample and cell type. We subset
+**disease-associated monocytes** (17 samples: CTRL, SAVI, SAVI_treated).
+
+```{r savi-mono-code, eval = FALSE}
+savi_path <- "GSE226598_SAVI_pseudobulk_Sample_CellType.rds"
+savi <- readRDS(savi_path)
+savi_mono <- subset(savi, subset = CellType == "17. Disease-associated monocytes")
+```
+
+```{r load-savi-mono, eval = can_run}
+data(savi_mono)
+savi_mono <- harmonise_gene_ids(savi_mono, id_type = "auto")
+dim(savi_mono)
+table(savi_mono$Category)
+```
+
+## Step 0. Align to the HCA monocytic reference
+
+Calls `merge_with_reference_sample()` + `calculate_tmm_offset()`, then rebuilds
+the Seurat object with `hca_offset` and `sample_role`.
+
+```{r step0-align, eval = can_run}
+aligned <- scale_to_hca_reference(savi_mono, cell_type)
+
+table(aligned$sample_role)
+aligned$hca_reference_name[1]
+aligned$hca_offset[aligned$hca_reference_name[1]]
+```
+
+## Step 1. Estimate cohort log(μ)
+
+`estimate_cohort_logmu()` builds the design from a formula, fits all genes
+via `estimate_logmu_ql()`, then filters to `genes`. Dispersion still uses the
+full matrix. Prefer a cell-means design such as `~ 0 + Category`.
+
+```{r step1-estimate, eval = can_run}
+est <- estimate_cohort_logmu(
+  aligned,
+  formula = ~ 0 + Category,
+  genes = "ADRB2"
+)
+est
+```
+
+### Optional: single-cohort `~ 1`
+
+Subset to one `Category`, fit with `formula = ~ 1`, and treat the intercept as
+that cohort's absolute log(μ).
+
+```{r step1-by-level, eval = can_run}
+est_by_level <- purrr::map_dfr(
+  levels(aligned$Category),
+  .f = function(x) {
+    estimate_cohort_logmu(
+      subset(aligned, Category == x),
+      formula = ~ 1,
+      genes = "ADRB2"
+    ) %>%
+      dplyr::mutate(group = x)
+  }
+)
+est_by_level
+```
+
+## Step 2. Load the healthy expression fit
+
+```{r step2-fit, eval = can_run}
+fit <- load_expr_fit(cell_type = cell_type, gene = "ADRB2")
+```
+
+## Step 3. Draw the healthy HCA baseline
+
+`expr_predict()` wraps grid construction and `expr_draws()`.
+`quantity = "linpred"` is log(μ) on the natural-log scale.
+
+```{r step3-predict, eval = can_run}
+hca_pred <- expr_predict(
+  fit = fit,
+  disease_groups = "Normal",
+  tissue_groups = "blood",
+  assay_groups = "10x Genomics 3",
+  quantity = "linpred",
+  collapse = "mean"
+)
+
+round(c(mean = mean(hca_pred$draws), sd = sd(hca_pred$draws)), 3)
+```
+
+## Steps 4–5. Welch test vs the healthy baseline
+
+`welch_t_test_cohort_hca()` loops cohorts (skips atlas `reference` by default)
+and combines baseline summary + `welch_test_means()`.
+
+```{r step45-welch, eval = can_run}
+test_results <- welch_t_test_cohort_hca(
+  cohort_est = est,
+  hca_draws = hca_pred
+)
+test_results
+```
+
+## Plots
+
+```{r plot-hca, eval = can_run, fig.asp = 0.7}
+plot_hca_draws(
+  draws = hca_pred,
+  subtitle = "Normal, 10x Genomics 3 healthy baseline"
+)
+```
+
+```{r plot-cohort, eval = can_run, fig.asp = 0.7}
+plot_cohort_vs_hca(
+  hca_draws = hca_pred,
+  test_results = test_results,
+  subtitle = "QL cohort estimates (wrapper path)",
+  annotate = c("group", "p_value", "direction")
+)
+```
+
+## Session info
+
+```{r session-info}
+sessionInfo()
+```

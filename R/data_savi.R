@@ -7,7 +7,8 @@
 #'   metadata columns including `Category`, `Treatment`, `Sample`, and
 #'   `CellType`.
 #' @source Derived from `GSE226598_SAVI_pseudobulk_Sample_CellType.rds`; see
-#'   `vignette("cohort-expression-workflow", package = "posteriorHCA")` for
+#'   `vignette("cohort-expression-core", package = "posteriorHCA")` or
+#'   `vignette("cohort-expression-wrappers", package = "posteriorHCA")` for
 #'   preparation code.
 #' @seealso [scale_to_hca_reference()], [estimate_cohort_logmu()],
 #'   [welch_t_test_cohort_hca()]

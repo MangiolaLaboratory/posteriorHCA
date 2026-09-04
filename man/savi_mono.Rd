@@ -11,7 +11,8 @@ A Seurat object with 17 samples (pseudobulk libraries) and sample
 }
 \source{
 Derived from `GSE226598_SAVI_pseudobulk_Sample_CellType.rds`; see
-  `vignette("cohort-expression-workflow", package = "posteriorHCA")` for
+  `vignette("cohort-expression-core", package = "posteriorHCA")` or
+  `vignette("cohort-expression-wrappers", package = "posteriorHCA")` for
   preparation code.
 }
 \usage{

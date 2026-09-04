@@ -2,7 +2,8 @@
 # ==============================================================================
 # SAVI case study: ADRB2 in disease-associated monocytes (PBMC / blood)
 #
-# Reference script for vignettes/cohort-expression-workflow.Rmd
+# Reference script for vignettes/cohort-expression-core.Rmd and
+# vignettes/cohort-expression-wrappers.Rmd
 #
 # Pipeline:
 #   1. Pseudobulk counts -> harmonise gene ids (ENSG)
