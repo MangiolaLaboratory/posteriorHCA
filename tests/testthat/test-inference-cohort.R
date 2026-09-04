@@ -39,6 +39,51 @@ test_that("draw_dirichlet_weights sums to n and are positive", {
   expect_true(all(w > 0))
 })
 
+test_that("bootstrap_logmu_mglm matches bootstrap_cohort_logmu on a matrix", {
+  genes <- paste0("g", 1:10)
+  set.seed(7)
+  counts <- matrix(
+    rnbinom(10 * 5, mu = 40, size = 8),
+    nrow = 10,
+    dimnames = list(genes, paste0("s", 1:5))
+  )
+  offset <- rep(0, 5)
+  names(offset) <- colnames(counts)
+  disp <- 0.15
+
+  core <- bootstrap_logmu_mglm(
+    y = counts["g1", , drop = FALSE],
+    offset = offset,
+    dispersion = disp,
+    n_boot = 40L,
+    seed = 99
+  )
+  wrap <- bootstrap_cohort_logmu(
+    counts,
+    offset = offset,
+    dispersion = disp,
+    gene = "g1",
+    n_boot = 40L,
+    seed = 99
+  )
+  expect_equal(core, wrap)
+})
+
+test_that("estimate_dispersion_nb returns named dispersions", {
+  genes <- paste0("g", 1:20)
+  set.seed(3)
+  counts <- matrix(
+    rnbinom(20 * 6, mu = 30, size = 5),
+    nrow = 20,
+    dimnames = list(genes, paste0("s", 1:6))
+  )
+  offset <- rep(0, 6)
+  disp <- estimate_dispersion_nb(counts, offset = offset)
+  expect_equal(length(disp), 20L)
+  expect_equal(names(disp), genes)
+  expect_true(all(is.finite(disp) & disp > 0))
+})
+
 test_that("bootstrap_cohort_logmu returns n_boot draws", {
   toy <- toy_counts()
   aligned <- suppressMessages(scale_to_hca_reference(toy$user, toy$ref))

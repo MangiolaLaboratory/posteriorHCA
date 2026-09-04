@@ -26,8 +26,8 @@ bootstrap_cohort_logmu_batch(
 `NULL`, all non-reference samples (or all samples) are used.}
 
 \item{genes}{Optional gene identifiers (symbols or ENSG). Default is all
-rows. Values are resolved to canonical ENSG ids. Dispersion is still
-estimated from the full count matrix.}
+rows. Dispersion is always estimated from the full count matrix; this
+argument only filters the returned table.}
 
 \item{cohorts}{Optional cohort labels to bootstrap. Defaults to all groups
 except `exclude_groups`.}
@@ -36,7 +36,8 @@ except `exclude_groups`.}
 `"reference"`).}
 
 \item{dispersion}{Numeric scalar or named vector of negative-binomial
-dispersion values. If `NULL`, dispersion is estimated across `counts`.}
+dispersion values. If `NULL`, dispersion is estimated across `counts`
+with [estimate_dispersion_nb()].}
 
 \item{cohort_est}{Optional output from [estimate_cohort_logmu()]. When
 supplied, `genes` and `dispersion` can be taken from this table.}

@@ -33,109 +33,18 @@ scalar_gene_dispersion <- function(dispersion, gene_ensg) {
   as.numeric(dispersion[[1]])
 }
 
-#' Estimate negative-binomial dispersion for one gene
+#' Extract count matrix, offset, and sample_role from a container
 #' @keywords internal
 #' @noRd
-estimate_gene_dispersion <- function(source_obj, gene_ensg, offset = NULL, assay = NULL) {
+extract_counts_offset <- function(source_obj, offset = NULL, assay = NULL) {
+  sample_role <- NULL
   if (is_aligned_result(source_obj)) {
     aligned <- aligned_fields(source_obj)
     counts <- aligned$counts
     if (is.null(offset)) {
       offset <- aligned$offset
     }
-  } else {
-    counts <- extract_count_matrix(source_obj, assay = assay, arg_name = "counts")
-    if (is.null(offset)) {
-      fields <- aligned_fields(source_obj)
-      if (!is.null(fields) && !is.null(fields$offset)) {
-        offset <- fields$offset
-      }
-    }
-    if (is.null(offset) && inherits(source_obj, "SummarizedExperiment")) {
-      cd <- as.data.frame(SummarizedExperiment::colData(source_obj))
-      if ("hca_offset" %in% names(cd)) {
-        offset <- cd$hca_offset
-        names(offset) <- rownames(cd)
-      }
-    }
-    if (is.null(offset) && inherits(source_obj, "Seurat")) {
-      meta <- tryCatch(source_obj[[]], error = function(e) NULL)
-      if (!is.null(meta) && "hca_offset" %in% names(meta)) {
-        offset <- meta$hca_offset
-        names(offset) <- rownames(meta)
-      }
-    }
-  }
-
-  if (is.null(offset)) {
-    cli_abort("`offset` is missing.")
-  }
-  if (!is.null(names(offset)) && all(names(offset) %in% colnames(counts))) {
-    offset <- offset[colnames(counts)]
-  }
-
-  samples_df <- data.frame(
-    sample_id = colnames(counts),
-    group = factor(rep("cohort", ncol(counts))),
-    stringsAsFactors = FALSE
-  )
-  dge <- edgeR::DGEList(counts = counts, samples = samples_df)
-  dge$offset <- matrix(as.numeric(offset), nrow = nrow(dge), ncol = ncol(dge), byrow = TRUE)
-  design <- stats::model.matrix(~ 1, data = samples_df)
-  dge <- edgeR::estimateDisp(dge, design, robust = TRUE)
-  disp_vec <- dispersion_from_dge(dge)
-  as.numeric(disp_vec[[gene_ensg]])
-}
-
-#' Bayesian bootstrap of cohort log(mu)
-#'
-#' Computes posterior draws of cohort latent log(mu) by repeatedly fitting
-#' [edgeR::mglmOneGroup()] with Dirichlet weights.
-#'
-#' `counts` may be a matrix, `SummarizedExperiment`, `SingleCellExperiment`,
-#' `Seurat` object, or an aligned list from [scale_to_hca_reference()].
-#'
-#' @param counts Count container or matrix.
-#' @param offset Numeric vector of sample offsets, or `NULL` if provided in
-#'   an aligned `counts` list.
-#' @param dispersion Numeric scalar or named vector of negative-binomial
-#'   dispersion values. If `NULL`, dispersion is estimated across `counts`.
-#' @param group Optional group vector or column name to subset samples. If
-#'   `NULL`, all non-reference samples (or all samples) are used.
-#' @param gene Character scalar; gene id resolved to ENSG (must be in `rownames(counts)`).
-#' @param n_boot Integer; number of bootstrap iterations (default 2000L).
-#' @param seed Optional RNG seed for reproducibility.
-#' @param assay Assay name for SE / Seurat input.
-#' @return A numeric vector of length `n_boot` containing posterior log(mu) draws.
-#' @export
-#' @importFrom cli cli_abort
-bootstrap_cohort_logmu <- function(
-  counts,
-  offset = NULL,
-  dispersion = NULL,
-  group = NULL,
-  gene,
-  n_boot = 2000L,
-  seed = NULL,
-  assay = NULL
-) {
-  if (missing(gene) || is.null(gene) || length(gene) != 1L) {
-    cli_abort("`gene` must be a single gene identifier.")
-  }
-  n_boot <- as.integer(n_boot[[1L]])
-  if (length(n_boot) != 1L || is.na(n_boot) || n_boot < 1L) {
-    cli_abort("`n_boot` must be a positive integer.")
-  }
-
-  sample_role <- NULL
-  source_obj <- counts
-  if (is_aligned_result(counts)) {
-    aligned <- aligned_fields(counts)
-    if (is.null(offset)) {
-      offset <- aligned$offset
-    }
     sample_role <- aligned$sample_role
-    counts <- aligned$counts
   } else {
     counts <- extract_count_matrix(source_obj, assay = assay, arg_name = "counts")
     fields <- aligned_fields(source_obj)
@@ -152,16 +61,6 @@ bootstrap_cohort_logmu <- function(
         sample_role <- stats::setNames(cd$sample_role, rownames(cd))
       }
     }
-  }
-
-  if (as.character(gene) %in% rownames(counts)) {
-    gene_ensg <- as.character(gene)
-  } else {
-    gene_ensg <- resolve_gene_one(gene, strict = TRUE)
-  }
-
-  if (!gene_ensg %in% rownames(counts)) {
-    cli_abort("Gene `{gene_ensg}` not found in `counts`.")
   }
 
   if (is.null(offset)) {
@@ -188,10 +87,186 @@ bootstrap_cohort_logmu <- function(
     cli_abort("`offset` is missing.")
   }
   if (length(offset) != ncol(counts)) {
-    cli_abort("`offset` length ({length(offset)}) must match `ncol(counts)` ({ncol(counts)}).")
+    cli_abort(
+      "`offset` length ({length(offset)}) must match `ncol(counts)` ({ncol(counts)})."
+    )
   }
   if (!is.null(names(offset)) && all(names(offset) %in% colnames(counts))) {
     offset <- offset[colnames(counts)]
+  }
+  offset <- stats::setNames(as.numeric(offset), colnames(counts))
+
+  list(
+    counts = counts,
+    offset = offset,
+    sample_role = sample_role
+  )
+}
+
+#' Estimate NB dispersions from a count matrix with explicit offset
+#'
+#' Core matrix helper. Fits an intercept-only edgeR QL model and returns the
+#' gene-wise dispersion vector. Prefer this over fitting a one-gene matrix
+#' alone: dispersion shrinks better with many genes.
+#'
+#' @param counts Gene-by-sample numeric count matrix.
+#' @param offset Numeric vector (length `ncol(counts)`) or matrix. Typically
+#'   from [calculate_tmm_offset()].
+#' @param robust Passed to [edgeR::estimateDisp()] / [edgeR::glmQLFit()].
+#' @return Named numeric vector of dispersions (names = gene ids).
+#' @seealso [estimate_logmu_ql()], [bootstrap_logmu_mglm()]
+#' @export
+#' @importFrom cli cli_abort
+estimate_dispersion_nb <- function(counts, offset, robust = TRUE) {
+  counts <- as.matrix(counts)
+  design <- matrix(1, nrow = ncol(counts), ncol = 1L)
+  colnames(design) <- "(Intercept)"
+  rownames(design) <- colnames(counts)
+  fit_nb_ql(
+    counts = counts,
+    offset = offset,
+    design = design,
+    robust = robust
+  )$dispersion
+}
+
+#' Estimate negative-binomial dispersion for one gene (container wrapper)
+#'
+#' Extracts counts and offset from a matrix / SE / Seurat / aligned object,
+#' then calls [estimate_dispersion_nb()].
+#'
+#' @keywords internal
+#' @noRd
+estimate_gene_dispersion <- function(source_obj, gene_ensg, offset = NULL, assay = NULL) {
+  resolved <- extract_counts_offset(source_obj, offset = offset, assay = assay)
+  if (!gene_ensg %in% rownames(resolved$counts)) {
+    cli_abort("Gene `{gene_ensg}` not found in `counts`.")
+  }
+  disp <- estimate_dispersion_nb(resolved$counts, resolved$offset)
+  as.numeric(disp[[gene_ensg]])
+}
+
+#' Bayesian bootstrap of log(μ) via weighted mglmOneGroup
+#'
+#' Core matrix helper. Repeatedly draws Dirichlet(1,…,1) weights and fits
+#' [edgeR::mglmOneGroup()] for a single gene (one row of counts). Returns
+#' posterior draws of latent log(μ) on the supplied offset scale.
+#'
+#' @param y Numeric vector or one-row matrix of counts for one gene.
+#' @param offset Numeric vector of sample offsets (same length as `y`).
+#' @param dispersion Positive scalar NB dispersion.
+#' @param n_boot Integer number of bootstrap iterations (default `2000L`).
+#' @param seed Optional RNG seed.
+#' @return Numeric vector of length `n_boot`.
+#' @seealso [bootstrap_cohort_logmu()], [estimate_logmu_ql()]
+#' @export
+#' @importFrom cli cli_abort
+bootstrap_logmu_mglm <- function(
+  y,
+  offset,
+  dispersion,
+  n_boot = 2000L,
+  seed = NULL
+) {
+  n_boot <- as.integer(n_boot[[1L]])
+  if (length(n_boot) != 1L || is.na(n_boot) || n_boot < 1L) {
+    cli_abort("`n_boot` must be a positive integer.")
+  }
+  if (is.null(dispersion) || length(dispersion) != 1L ||
+      !is.finite(dispersion) || dispersion <= 0) {
+    cli_abort("`dispersion` must be a finite positive scalar.")
+  }
+  if (is.null(dim(y))) {
+    y <- matrix(as.numeric(y), nrow = 1L)
+  } else {
+    y <- as.matrix(y)
+    if (nrow(y) != 1L) {
+      cli_abort("`y` must be a numeric vector or a one-row matrix.")
+    }
+  }
+  storage.mode(y) <- "double"
+  if (anyNA(y)) {
+    cli_abort("`y` must not contain NA counts.")
+  }
+  offset <- as.numeric(offset)
+  if (length(offset) != ncol(y)) {
+    cli_abort(
+      "`offset` length ({length(offset)}) must match the number of samples ({ncol(y)})."
+    )
+  }
+  if (anyNA(offset) || !all(is.finite(offset))) {
+    cli_abort("`offset` must contain finite numeric values.")
+  }
+
+  n_samples <- ncol(y)
+  if (!is.null(seed)) {
+    set.seed(seed)
+  }
+
+  vapply(seq_len(n_boot), function(i) {
+    w <- draw_dirichlet_weights(n_samples)
+    edgeR::mglmOneGroup(
+      y,
+      offset = offset,
+      dispersion = as.numeric(dispersion),
+      weights = w
+    )[[1]]
+  }, numeric(1))
+}
+
+#' Bayesian bootstrap of cohort log(mu)
+#'
+#' Wrapper over [bootstrap_logmu_mglm()]. Extracts counts and offsets from a
+#' matrix / SE / Seurat / aligned object, resolves the gene id, optionally
+#' subsets to a cohort, estimates dispersion via [estimate_dispersion_nb()]
+#' when needed, then bootstraps log(μ).
+#'
+#' `counts` may be a matrix, `SummarizedExperiment`, `SingleCellExperiment`,
+#' `Seurat` object, or an aligned object from [scale_to_hca_reference()].
+#'
+#' @param counts Count container or matrix.
+#' @param offset Numeric vector of sample offsets, or `NULL` if provided in
+#'   an aligned `counts` object.
+#' @param dispersion Numeric scalar or named vector of negative-binomial
+#'   dispersion values. If `NULL`, dispersion is estimated across `counts`
+#'   with [estimate_dispersion_nb()].
+#' @param group Optional group vector or column name to subset samples. If
+#'   `NULL`, all non-reference samples (or all samples) are used.
+#' @param gene Character scalar; gene id resolved to ENSG (must be in `rownames(counts)`).
+#' @param n_boot Integer; number of bootstrap iterations (default 2000L).
+#' @param seed Optional RNG seed for reproducibility.
+#' @param assay Assay name for SE / Seurat input.
+#' @return A numeric vector of length `n_boot` containing posterior log(mu) draws.
+#' @seealso [bootstrap_logmu_mglm()], [estimate_dispersion_nb()]
+#' @export
+#' @importFrom cli cli_abort
+bootstrap_cohort_logmu <- function(
+  counts,
+  offset = NULL,
+  dispersion = NULL,
+  group = NULL,
+  gene,
+  n_boot = 2000L,
+  seed = NULL,
+  assay = NULL
+) {
+  if (missing(gene) || is.null(gene) || length(gene) != 1L) {
+    cli_abort("`gene` must be a single gene identifier.")
+  }
+
+  source_obj <- counts
+  resolved <- extract_counts_offset(source_obj, offset = offset, assay = assay)
+  counts <- resolved$counts
+  offset <- resolved$offset
+  sample_role <- resolved$sample_role
+
+  if (as.character(gene) %in% rownames(counts)) {
+    gene_ensg <- as.character(gene)
+  } else {
+    gene_ensg <- resolve_gene_one(gene, strict = TRUE)
+  }
+  if (!gene_ensg %in% rownames(counts)) {
+    cli_abort("Gene `{gene_ensg}` not found in `counts`.")
   }
 
   cols_idx <- seq_len(ncol(counts))
@@ -201,23 +276,21 @@ bootstrap_cohort_logmu <- function(
   } else if (!is.null(sample_role)) {
     cols_idx <- which(sample_role == "user")
   }
-
   if (length(cols_idx) == 0L) {
     cli_abort("No samples selected for cohort bootstrap.")
   }
 
   y <- counts[gene_ensg, cols_idx, drop = FALSE]
-  y <- as.matrix(y)
-  storage.mode(y) <- "double"
-  if (anyNA(y)) {
-    cli_abort("Gene `{gene_ensg}` has NA counts in the selected samples.")
-  }
   o <- as.numeric(offset)[cols_idx]
-  n_samples <- length(cols_idx)
 
   disp <- scalar_gene_dispersion(dispersion, gene_ensg)
   if (!is.finite(disp) || disp <= 0) {
-    disp <- estimate_gene_dispersion(source_obj, gene_ensg, offset = offset, assay = assay)
+    disp <- estimate_gene_dispersion(
+      source_obj,
+      gene_ensg,
+      offset = resolved$offset,
+      assay = assay
+    )
   }
   if (!is.finite(disp) || disp <= 0) {
     cli_abort(
@@ -225,21 +298,13 @@ bootstrap_cohort_logmu <- function(
     )
   }
 
-  if (!is.null(seed)) {
-    set.seed(seed)
-  }
-
-  draws <- vapply(seq_len(n_boot), function(i) {
-    w <- draw_dirichlet_weights(n_samples)
-    edgeR::mglmOneGroup(
-      y,
-      offset = o,
-      dispersion = disp,
-      weights = w
-    )[[1]]
-  }, numeric(1))
-
-  draws
+  bootstrap_logmu_mglm(
+    y = y,
+    offset = o,
+    dispersion = disp,
+    n_boot = n_boot,
+    seed = seed
+  )
 }
 
 #' Summarise bootstrap log(mu) draws for one cohort

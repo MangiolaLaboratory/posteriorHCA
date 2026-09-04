@@ -11,12 +11,10 @@ params:
   for_github_md: false
 knit: >
     (function(x, ...){
+        # RStudio Knit opens whatever this function *returns*. Render HTML
+        # last (or return its path explicitly) so the viewer shows HTML; the
+        # github_document pass only writes the companion .md for GitHub.
         proj_root <- rprojroot::find_package_root_file() |> normalizePath()
-        rmarkdown::render(
-            x,
-            output_format = "rmarkdown::html_vignette",
-            params = list(for_github_md = FALSE)
-        )
         rmarkdown::render(
             x,
             output_file = "cohort-expression-workflow.md",
@@ -24,6 +22,11 @@ knit: >
             output_dir = file.path(proj_root, "vignettes"),
             knit_root_dir = proj_root,
             params = list(for_github_md = TRUE)
+        )
+        rmarkdown::render(
+            x,
+            output_format = "rmarkdown::html_vignette",
+            params = list(for_github_md = FALSE)
         )
     })
 ---
@@ -72,23 +75,37 @@ if (requireNamespace("devtools", quietly = TRUE)) {
 ```
 
 This vignette follows `examples/savi_adrb2_workflow.R` for the SAVI case study
-(*ADRB2* in disease-associated monocytes, PBMC / blood):
+(*ADRB2* in disease-associated monocytes, PBMC / blood).
 
-1. Prepare pseudobulk counts (`savi_mono`)
-2. Align to the HCA monocytic reference
-3. Estimate cohort log(μ) with edgeR QL
-4. Draw healthy HCA posterior (Normal, blood, 10x Genomics 3)
-5. Welch test vs HCA (wrapper + manual helpers)
-6. Plot results
+At each modelling step we show **two equivalent paths**:
+
+- **Core / manual** — matrix-level helpers you can wire yourself  
+- **Wrapper** — same cores, with Seurat / SE / gene-id / metadata handling
+
+Pipeline:
+
+1. Prepare pseudobulk counts (`savi_mono`) and harmonise gene ids  
+2. Align to the HCA monocytic reference  
+   - core: `merge_with_reference_sample()` + `calculate_tmm_offset()`  
+   - wrapper: `scale_to_hca_reference()`  
+3. Estimate cohort log(μ)  
+   - core: `design_from_formula()` + `estimate_logmu_ql()` (all genes)  
+   - wrapper: `estimate_cohort_logmu()` (filter genes)  
+   - demo: single-cohort `~ 1` (intercept as cohort log(μ))  
+4. Healthy HCA posterior (Normal, blood, 10x Genomics 3)  
+   - manual: `load_expr_fit()` → `build_newdata_grid()` → `expr_draws()`  
+   - wrapper: `expr_predict()`  
+5. Welch test vs HCA  
+   - wrapper: `welch_t_test_cohort_hca()`  
+   - manual: `cohort_estimate_at()` + `summarize_posterior_draws()` + `welch_test_means()`  
+6. Plot results  
 
 ## Setup
 
 ```{r libraries, eval = can_run}
 library(posteriorHCA)
 library(Seurat)
-library(tidyseurat)
 library(dplyr)
-library(purrr)
 library(ggplot2)
 
 cell_type <- "monocytic"
@@ -119,22 +136,92 @@ row names:
 savi_mono <- harmonise_gene_ids(savi_mono, id_type = "auto")
 ```
 
-## 2. Align to the HCA monocytic reference
+## 2. Align to the HCA monocytic reference - step 0
 
-`scale_to_hca_reference()` appends one HCA library, TMM-aligns all samples,
-and stores `hca_offset` and `sample_role` on each column.
+Reference sits at offset 0 (same convention as atlas brms training:
+`offset = log(1 / multiplier)`).
 
-```{r align, eval = can_run}
+### 2a. Core functions (matrix)
+
+```{r align-core, eval = can_run}
+ref <- load_reference_sample(cell_type)
+user_mat <- as.matrix(Seurat::GetAssayData(savi_mono, layer = "counts"))
+
+combined <- merge_with_reference_sample(
+  user_mat,
+  reference = ref$counts,
+  reference_name = ref$sample_id
+)
+scaling <- calculate_tmm_offset(
+  combined,
+  reference_name = ref$sample_id,
+  method = "TMMwsp"
+)
+
+c(
+  n_genes = nrow(combined),
+  n_samples = ncol(combined),
+  reference_offset = unname(scaling$offset[[ref$sample_id]])
+)
+```
+
+### 2b. Wrapper `scale_to_hca_reference()`
+
+```{r align-wrapper, eval = can_run}
 aligned <- scale_to_hca_reference(savi_mono, cell_type)
 
 table(aligned$sample_role)
+aligned$hca_reference_name[1]
 ```
 
-## 3. Estimate cohort log(μ)
+```{r align-check, eval = can_run}
+all.equal(
+  unname(scaling$offset[colnames(user_mat)]),
+  unname(aligned$hca_offset[colnames(user_mat)]),
+  tolerance = 1e-10
+)
+```
 
-Primary model: group means with `~ 0 + Category` (includes atlas reference).
+## 3. Estimate cohort log(μ) - step 1
 
-```{r estimate, eval = can_run}
+Absolute log(μ) comes from QL coefficients with `prior.count = 0` on the
+TMM offset scale. Prefer a cell-means design such as `~ 0 + Category`.
+
+### 3a. Core `design_from_formula()` + `estimate_logmu_ql()`
+
+`estimate_logmu_ql()` fits **all genes** once and returns log(μ) + SE for
+every gene × design column. Filter afterwards if you only need a subset.
+
+```{r estimate-core, eval = can_run}
+meta_core <- data.frame(
+  Category = c(
+    as.character(savi_mono$Category[colnames(user_mat)]),
+    "reference"
+  ),
+  row.names = colnames(combined),
+  stringsAsFactors = FALSE
+)
+meta_core$Category <- factor(meta_core$Category)
+
+design <- design_from_formula(~ 0 + Category, meta_core)
+est_all <- estimate_logmu_ql(
+  counts = combined,
+  offset = scaling$offset,
+  design = design,
+  cell_type = cell_type
+)
+gene_ensg <- resolve_gene_one("ADRB2", cell_type = cell_type)
+est_core <- est_all[est_all$gene == gene_ensg, , drop = FALSE]
+est_core$gene_symbol <- "ADRB2"
+est_core
+```
+
+### 3b. Wrapper `estimate_cohort_logmu()`
+
+Same cores, plus container I/O and gene-id resolution. `genes` only filters
+the returned table (dispersion still uses the full matrix).
+
+```{r estimate-wrapper, eval = can_run}
 est <- estimate_cohort_logmu(
   aligned,
   formula = ~ 0 + Category,
@@ -143,15 +230,27 @@ est <- estimate_cohort_logmu(
 est
 ```
 
-Alternative: estimate each `Category` level separately with `~ 1` (as in the
-reference script):
+```{r estimate-check, eval = can_run}
+all.equal(
+  est_core$log_mu[match(est$group, est_core$group)],
+  est$log_mu,
+  tolerance = 1e-8
+)
+```
+
+### 3c. Demo: single-cohort `~ 1` (intercept = cohort log(μ))
+
+Alternative to `~ 0 + Category` on the full object. Subset to one `Category`,
+fit NB/QL with `formula = ~ 1`, and treat the intercept as that cohort's
+absolute log(μ). Useful when you want per-cohort fits without a multi-level
+design matrix.
 
 ```{r estimate-by-level, eval = can_run}
 est_by_level <- purrr::map_dfr(
-  aligned$Category %>% levels(),
+  levels(aligned$Category),
   .f = function(x) {
     estimate_cohort_logmu(
-      aligned %>% dplyr::filter(Category == x),
+      subset(aligned, Category == x),
       formula = ~ 1,
       genes = "ADRB2"
     ) %>%
@@ -163,10 +262,13 @@ est_by_level
 
 ## 4. Healthy HCA baseline draws
 
-Load the cached brms fit and draw from Normal / blood / 10x Genomics 3.
+Covariates fixed to healthy blood 10x Genomics 3 (matches SAVI tissue).
+`quantity = "linpred"` is log(μ) on the natural-log scale.
+
+### 4a. Manual coding
 
 ```{r hca-draws, eval = can_run}
-fit <- load_expr_fit(cell_type = cell_type, gene = "ADRB2")
+fit <- load_expr_fit(cell_type = cell_type, gene = "ADRB2") # step 2
 
 grid <- build_newdata_grid(
   fit,
@@ -175,7 +277,7 @@ grid <- build_newdata_grid(
   assay_groups = "10x Genomics 3"
 )
 
-hca_res <- expr_draws(
+hca_res <- expr_draws(  # step 3
   fit,
   newdata = grid,
   quantity = "linpred",
@@ -185,8 +287,7 @@ hca_res <- expr_draws(
 round(c(mean = mean(hca_res$draws), sd = sd(hca_res$draws)), 3)
 ```
 
-Same fit via `expr_predict()` (convenience wrapper used in the Welch wrapper
-below):
+### 4b. Wrapper `expr_predict()`
 
 ```{r hca-predict, eval = can_run}
 hca_pred <- expr_predict(
@@ -201,9 +302,9 @@ hca_pred <- expr_predict(
 
 ## 5. Test cohorts against the healthy baseline
 
-### Wrapper
+### 5a. Wrapper `welch_t_test_cohort_hca()`
 
-```{r welch, eval = can_run}
+```{r welch-wrapper, eval = can_run}
 test_results <- welch_t_test_cohort_hca(
   cohort_est = est,
   hca_draws = hca_pred
@@ -211,13 +312,13 @@ test_results <- welch_t_test_cohort_hca(
 test_results
 ```
 
-### Manual workflow (one cohort)
+### 5b. Manual helpers (one cohort)
 
 ```{r welch-manual, eval = can_run}
 cohort <- cohort_estimate_at(est, group = "SAVI")
-baseline <- summarize_posterior_draws(hca_res, value = cohort$mu)
+baseline <- summarize_posterior_draws(hca_res, value = cohort$mu) # step 4
 
-welch_test_means(
+welch_test_means( # step 5
   cohort$mu, cohort$se,
   baseline$mean, baseline$sd,
   n1 = cohort$n, n2 = baseline$n

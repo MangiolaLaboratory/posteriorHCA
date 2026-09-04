@@ -6,18 +6,20 @@
 #
 # Pipeline:
 #   1. Pseudobulk counts -> harmonise gene ids (ENSG)
-#   2. TMM-align to one HCA reference library (monocytic)
+#   2. Align to one HCA reference library (monocytic)
+#        - core: merge_with_reference_sample + calculate_tmm_offset
+#        - wrapper: scale_to_hca_reference
 #   3. edgeR QL cohort log(mu) for ADRB2
-#   4. Healthy HCA posterior (Normal, blood, 10x Genomics 3)
-#   5. Welch test vs HCA (wrapper + manual helpers)
+#        - core: design_from_formula + estimate_logmu_ql
+#        - wrapper: estimate_cohort_logmu (filter genes)#   4. Healthy HCA posterior (Normal, blood, 10x Genomics 3)
+#   5. Welch test vs HCA
 #   6. Plots
 # ==============================================================================
 
 suppressPackageStartupMessages({
   library(cli)
-  library(edgeR)
   library(Seurat)
-  library(tidyseurat)
+  library(dplyr)
   library(brms)
 })
 
@@ -27,11 +29,7 @@ devtools::load_all(pkg_dir)
 cli::cli_h1("posteriorHCA: SAVI ADRB2 Workflow")
 
 # ------------------------------------------------------------------------------
-# 1. Load SAVI pseudobulk Seurat object and harmonise gene ids to ENSG
-#
-# SAVI (GSE226598): PBMC scRNA-seq pseudobulked by sample x cell type.
-# We subset disease-associated monocytes (17 samples: CTRL / SAVI / SAVI_treated).
-# harmonise_gene_ids() maps symbols -> ENSG so cohort counts match HCA models.
+# 1. Load SAVI pseudobulk and harmonise gene ids to ENSG
 # ------------------------------------------------------------------------------
 cli::cli_h2("1. Preparing SAVI Disease-Associated Monocyte Counts")
 
@@ -53,30 +51,82 @@ cli::cli_alert_info(
 )
 
 # ------------------------------------------------------------------------------
-# 2. Retrieve atlas reference sample and align
-#
-# scale_to_hca_reference() merges one HCA library, runs TMMwsp, and stores
-# hca_offset / sample_role on each sample. Reference sits at offset 0.
+# 2. Align to HCA monocytic reference
 # ------------------------------------------------------------------------------
 cli::cli_h2("2. Aligning to HCA Monocytic Reference Sample")
 
 cell_type <- "monocytic"
-aligned <- scale_to_hca_reference(savi_mono, cell_type)
 
-cli::cli_alert_info("Reference sample ID: {aligned$hca_reference_name[1]}")
-cli::cli_alert_info("Cell type: {aligned$hca_cell_type[1]}")
-cli::cli_alert_info("Reference sample offset: {aligned$hca_offset[aligned$hca_reference_name[1]]}")
-cli::cli_alert_info("Sample role table:")
+cli::cli_h3("2a. Core functions (matrix)")
+
+ref <- load_reference_sample(cell_type)
+user_mat <- as.matrix(Seurat::GetAssayData(savi_mono, layer = "counts"))
+
+combined <- merge_with_reference_sample(
+  user_mat,
+  reference = ref$counts,
+  reference_name = ref$sample_id
+)
+scaling <- calculate_tmm_offset(
+  combined,
+  reference_name = ref$sample_id,
+  method = "TMMwsp"
+)
+
+cli::cli_alert_info(
+  "Merged matrix: {nrow(combined)} genes x {ncol(combined)} samples."
+)
+cli::cli_alert_info(
+  "Reference `{ref$sample_id}` offset = {scaling$offset[[ref$sample_id]]}."
+)
+
+cli::cli_h3("2b. Wrapper scale_to_hca_reference()")
+
+aligned <- scale_to_hca_reference(savi_mono, cell_type)
 print(table(aligned$sample_role))
+
+stopifnot(all.equal(
+  unname(scaling$offset[colnames(user_mat)]),
+  unname(aligned$hca_offset[colnames(user_mat)]),
+  tolerance = 1e-10
+))
+cli::cli_alert_success("Core and wrapper offsets match.")
 
 # ------------------------------------------------------------------------------
 # 3. Estimate cohort log(mu) for ADRB2
 #
-# Primary fit: one edgeR QL model with ~ 0 + Category (group means + reference).
-# Secondary loop: re-estimate each Category level alone (~ 1) for comparison.
-# Use formula = ~ 0 + Category for downstream testing (includes reference row).
+# Absolute log(μ) = QL coefficients with prior.count = 0 on the TMM offset scale.
+# Prefer cell-means designs: ~ 0 + Category.
+# Core: design_from_formula + estimate_logmu_ql (all genes)
+# Wrapper: estimate_cohort_logmu (filter genes)
 # ------------------------------------------------------------------------------
 cli::cli_h2("3. Estimating Cohort log(mu) for ADRB2")
+
+cli::cli_h3("3a. Core design_from_formula() + estimate_logmu_ql()")
+
+meta_core <- data.frame(
+  Category = c(
+    as.character(savi_mono$Category[colnames(user_mat)]),
+    "reference"
+  ),
+  row.names = colnames(combined),
+  stringsAsFactors = FALSE
+)
+meta_core$Category <- factor(meta_core$Category)
+
+design <- design_from_formula(~ 0 + Category, meta_core)
+est_all <- estimate_logmu_ql(
+  counts = combined,
+  offset = scaling$offset,
+  design = design,
+  cell_type = cell_type
+)
+gene_ensg <- resolve_gene_one("ADRB2", cell_type = cell_type)
+est_core <- est_all[est_all$gene == gene_ensg, , drop = FALSE]
+est_core$gene_symbol <- "ADRB2"
+print(est_core)
+
+cli::cli_h3("3b. Wrapper estimate_cohort_logmu()")
 
 est <- estimate_cohort_logmu(
   aligned,
@@ -85,25 +135,38 @@ est <- estimate_cohort_logmu(
 )
 print(est)
 
-est <-
-  map_dfr(
-    aligned$Category %>% levels(),
-    .f = function(x) {
-      estimate_cohort_logmu(aligned %>% filter(Category == x),
-                            formula = ~ 1,
-                            genes = "ADRB2") %>%
-        mutate(group = x)
-    }
-  )
-print(est)
+stopifnot(all.equal(
+  est_core$log_mu[match(est$group, est_core$group)],
+  est$log_mu,
+  tolerance = 1e-8
+))
+cli::cli_alert_success("Core and wrapper log(mu) estimates match.")
 
 # ------------------------------------------------------------------------------
-# 4. Generate healthy baseline draws from pre-trained HCA model
+# 3c. Demo: one cohort at a time with intercept-only design (~ 1)
 #
-# load_expr_fit() caches the brms model from Nectar (monocytic / ADRB2).
-# Covariates fixed to healthy blood 10x Genomics 3 (matches SAVI tissue).
-# hca_res: posterior linpred draws (log mu scale) via expr_draws().
-# hca_pred: same fit via expr_predict() convenience wrapper.
+# Alternative to ~ 0 + Category on the full object. Subset to a single
+# Category, fit NB/QL with formula = ~ 1, and treat the intercept as that
+# cohort's absolute log(mu). Useful when you want per-cohort fits without a
+# multi-level design matrix.
+# ------------------------------------------------------------------------------
+cli::cli_h3("3c. Demo: single-cohort ~ 1 (intercept = cohort log(mu))")
+
+est_by_level <- purrr::map_dfr(
+  levels(aligned$Category),
+  .f = function(x) {
+    estimate_cohort_logmu(
+      subset(aligned, Category == x),
+      formula = ~ 1,
+      genes = "ADRB2"
+    ) %>%
+      dplyr::mutate(group = x)
+  }
+)
+print(est_by_level)
+
+# ------------------------------------------------------------------------------
+# 4. Healthy HCA baseline draws
 # ------------------------------------------------------------------------------
 cli::cli_h2("4. Generating Healthy Baseline Draws (Normal, 10x Genomics 3)")
 
@@ -112,7 +175,7 @@ fit <- load_expr_fit(cell_type = cell_type, gene = "ADRB2")
 grid <- build_newdata_grid(
   fit,
   disease_groups = "Normal",
-  tissue_groups = 'blood',
+  tissue_groups = "blood",
   assay_groups = "10x Genomics 3"
 )
 
@@ -124,24 +187,20 @@ hca_res <- expr_draws(
 )
 
 cli::cli_alert_info(
-  "Healthy HCA baseline for {hca_res$gene_symbol} ({hca_res$gene_ensg}): mean log(mu) = {round(mean(hca_res$draws), 3)}, SD = {round(sd(hca_res$draws), 3)}."
+  "Healthy HCA baseline for {hca_res$gene_symbol}: mean log(mu) = {round(mean(hca_res$draws), 3)}, SD = {round(sd(hca_res$draws), 3)}."
 )
 
 hca_pred <- expr_predict(
-  fit            = fit,
+  fit = fit,
   disease_groups = "Normal",
-  tissue_groups  = 'blood',
-  assay_groups   = "10x Genomics 3",
-  quantity       = "linpred",
-  collapse       = "mean"
+  tissue_groups = "blood",
+  assay_groups = "10x Genomics 3",
+  quantity = "linpred",
+  collapse = "mean"
 )
 
 # ------------------------------------------------------------------------------
-# 5. Test cohorts against healthy baseline (QL point estimates)
-#
-# Wrapper: welch_t_test_cohort_hca() loops cohorts, skips reference by default.
-# Manual: extract mu/se with cohort_estimate_at(), summarise HCA draws, then call
-# welch_test_means() for the generic heteroscedastic comparison.
+# 5. Welch test vs healthy baseline
 # ------------------------------------------------------------------------------
 cli::cli_h2("5. Testing Cohorts Against Healthy Baseline (QL)")
 
@@ -151,36 +210,32 @@ test_results <- welch_t_test_cohort_hca(
 )
 print(test_results)
 
-# Manual workflow for a single cohort (SAVI vs HCA)
 cohort <- cohort_estimate_at(est, group = "SAVI")
 baseline <- summarize_posterior_draws(hca_res, value = cohort$mu)
-test <- welch_test_means(
+welch_test_means(
   cohort$mu, cohort$se,
   baseline$mean, baseline$sd,
   n1 = cohort$n, n2 = baseline$n
 )
 
 # ------------------------------------------------------------------------------
-# 6. Visualise healthy baseline and cohort comparisons
+# 6. Plots
 # ------------------------------------------------------------------------------
 cli::cli_h2("6. Plotting Healthy Baseline and Cohort Comparisons")
 
-hca_plot <- plot_hca_draws(
+print(plot_hca_draws(
   draws = hca_res,
   subtitle = "Normal, 10x Genomics 3 healthy baseline"
-)
-print(hca_plot)
+))
 
-cohort_plot <- plot_cohort_vs_hca(
+print(plot_cohort_vs_hca(
   hca_draws = hca_res,
   test_results = test_results,
   subtitle = "QL cohort estimates",
   annotate = c("group", "p_value", "direction")
-)
-print(cohort_plot)
+))
 
-hca_count_plot <- plot_hca_draws(
+print(plot_hca_draws(
   draws = hca_pred,
   title = "ADRB2 predicted count posterior (healthy HCA)"
-)
-print(hca_count_plot)
+))

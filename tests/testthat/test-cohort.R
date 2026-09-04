@@ -53,6 +53,45 @@ toy_counts <- function() {
   list(user = user, ref = ref)
 }
 
+test_that("merge_with_reference_sample appends the reference column", {
+  toy <- toy_counts()
+  combined <- merge_with_reference_sample(
+    toy$user,
+    toy$ref,
+    reference_name = "hca_ref"
+  )
+  expect_true(is.matrix(combined))
+  expect_equal(ncol(combined), 5L)
+  expect_equal(colnames(combined)[[5]], "hca_ref")
+  expect_equal(nrow(combined), 20L)
+  expect_equal(attr(combined, "reference_name"), "hca_ref")
+  expect_setequal(attr(combined, "shared_features"), paste0("g", 1:20))
+  expect_equal(unname(combined[, "hca_ref"]), unname(toy$ref[rownames(combined)]))
+})
+
+test_that("calculate_tmm_offset puts the reference at offset 0", {
+  toy <- toy_counts()
+  combined <- merge_with_reference_sample(toy$user, toy$ref, reference_name = "hca_ref")
+  scaling <- calculate_tmm_offset(combined, reference_name = "hca_ref")
+  expect_equal(unname(scaling$offset[["hca_ref"]]), 0)
+  expect_equal(unname(scaling$multiplier[["hca_ref"]]), 1)
+  expect_equal(names(scaling$offset), colnames(combined))
+  expect_true(all(is.finite(scaling$offset)))
+})
+
+test_that("scale_to_hca_reference matches the core helpers on a matrix", {
+  toy <- toy_counts()
+  combined <- merge_with_reference_sample(toy$user, toy$ref, reference_name = "hca_ref")
+  scaling <- calculate_tmm_offset(combined, reference_name = "hca_ref")
+  aligned <- suppressMessages(
+    scale_to_hca_reference(toy$user, toy$ref, reference_name = "hca_ref")
+  )
+  info <- aligned_fields(aligned)
+  expect_equal(as.matrix(aligned), combined, ignore_attr = TRUE)
+  expect_equal(unname(info$offset), unname(scaling$offset))
+  expect_equal(unname(info$multiplier), unname(scaling$multiplier))
+})
+
 test_that("scale_to_hca_reference puts the reference at offset 0", {
   toy <- toy_counts()
   aligned <- suppressMessages(scale_to_hca_reference(toy$user, toy$ref))
@@ -195,6 +234,43 @@ test_that("Seurat colnames are preserved after scale_to_hca_reference", {
     as.character(aligned$Category[colnames(aligned) %in% sample_names]),
     c("CTRL", "SAVI")
   )
+})
+
+test_that("design_from_formula builds cleaned cell-means columns", {
+  meta <- data.frame(
+    cohort = factor(c("A", "A", "B", "B", "reference")),
+    row.names = paste0("s", 1:5),
+    stringsAsFactors = FALSE
+  )
+  design <- design_from_formula(~ 0 + cohort, meta)
+  expect_equal(colnames(design), c("A", "B", "reference"))
+  expect_equal(nrow(design), 5L)
+  expect_equal(as.numeric(rowSums(design)), rep(1, 5))
+})
+
+test_that("estimate_logmu_ql returns all genes; wrapper filters", {
+  toy <- toy_counts()
+  aligned <- suppressMessages(scale_to_hca_reference(toy$user, toy$ref))
+  meta <- aligned_fields(aligned)$sample_metadata
+  meta$cohort <- c("A", "A", "B", "B", "reference")
+  counts <- as.matrix(aligned)
+  offset <- aligned_fields(aligned)$offset
+  design <- design_from_formula(~ 0 + cohort, meta)
+
+  est_all <- estimate_logmu_ql(counts, offset = offset, design = design)
+  expect_equal(nrow(est_all), nrow(counts) * ncol(design))
+  expect_setequal(est_all$group, c("A", "B", "reference"))
+
+  est_wrap <- estimate_cohort_logmu(
+    aligned,
+    metadata = meta,
+    formula = ~ 0 + cohort,
+    genes = "g1"
+  )
+  est_core <- est_all[est_all$gene == "g1", , drop = FALSE]
+  expect_equal(est_core$group, est_wrap$group)
+  expect_equal(est_core$log_mu, est_wrap$log_mu, tolerance = 1e-10)
+  expect_equal(est_core$se, est_wrap$se, tolerance = 1e-10)
 })
 
 test_that("estimate_cohort_logmu returns one row per gene x group", {

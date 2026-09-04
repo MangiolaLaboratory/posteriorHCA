@@ -521,3 +521,122 @@ plot_cohort_vs_hca <- function(
     caption = "Healthy HCA posterior with cohort estimates"
   )
 }
+
+#' Arcsine square-root transform for composition proportions
+#' @keywords internal
+#' @noRd
+arcsine_sqrt_trans <- function() {
+  scales::trans_new(
+    "arcsine_sqrt",
+    transform = function(x) asin(sqrt(pmax(pmin(x, 1), 0))),
+    inverse = function(x) (sin(x))^2
+  )
+}
+
+#' Density plot of healthy composition posterior draws
+#'
+#' @param draws Output of [composition_draws()], or its `$draws` data frame.
+#' @param cell_types Optional cell types to keep.
+#' @param fill Fill colour for the density curves.
+#' @param title,subtitle Optional plot labels.
+#' @return A `ggplot` object.
+#' @export
+#' @import ggplot2
+plot_composition_draws <- function(
+  draws,
+  cell_types = NULL,
+  fill = "#4C78A8",
+  title = NULL,
+  subtitle = NULL
+) {
+  draws <- composition_draws_df(draws)
+  if (!is.null(cell_types)) {
+    draws <- draws[draws$cell_type %in% cell_types, , drop = FALSE]
+  }
+
+  ggplot(draws, aes(x = .data$proportion)) +
+    geom_density(alpha = 0.35, fill = fill, colour = NA) +
+    facet_wrap(~cell_type) +
+    scale_x_continuous(trans = arcsine_sqrt_trans()) +
+    labs(
+      title = title,
+      subtitle = subtitle,
+      x = "Proportion (arcsine-sqrt)",
+      y = "Density",
+      caption = "Healthy HCA composition"
+    ) +
+    theme_minimal() +
+    theme(strip.text = element_text(face = "bold"))
+}
+
+#' Plot observed proportions against healthy composition draws
+#'
+#' Accepts [composition_draws()] output plus either [composition_test()]
+#' results or raw observed proportions.
+#'
+#' @param draws Output of [composition_draws()], or its `$draws` data frame.
+#' @param test_results Optional data frame from [composition_test()].
+#' @param proportions Optional observed proportions (used when `test_results`
+#'   is not supplied).
+#' @param annotate If `TRUE`, label observed values with empirical confidence.
+#' @param title,subtitle Optional plot labels.
+#' @return A `ggplot` object.
+#' @export
+#' @import ggplot2
+plot_composition_vs_hca <- function(
+  draws,
+  test_results = NULL,
+  proportions = NULL,
+  annotate = TRUE,
+  title = NULL,
+  subtitle = NULL
+) {
+  if (is.null(test_results) && is.null(proportions)) {
+    cli::cli_abort("Provide `test_results` and/or `proportions`.")
+  }
+
+  if (is.null(test_results)) {
+    test_results <- composition_test(proportions, draws)
+  }
+
+  cell_types <- unique(test_results$cell_type)
+  p <- plot_composition_draws(
+    draws,
+    cell_types = cell_types,
+    title = title,
+    subtitle = subtitle
+  )
+
+  p <- p +
+    geom_vline(
+      data = test_results,
+      aes(
+        xintercept = .data$proportion_observed,
+        colour = .data$sample_id
+      ),
+      linetype = "dashed",
+      linewidth = 0.6
+    ) +
+    labs(colour = "Sample") +
+    theme(legend.position = "bottom")
+
+  if (isTRUE(annotate) && "empirical_confidence" %in% names(test_results)) {
+    p <- p +
+      ggrepel::geom_text_repel(
+        data = test_results,
+        aes(
+          x = .data$proportion_observed,
+          y = Inf,
+          label = paste0("EC:", signif(.data$empirical_confidence, 2)),
+          colour = .data$sample_id
+        ),
+        size = 3.5,
+        direction = "y",
+        segment.color = NA,
+        inherit.aes = FALSE,
+        show.legend = FALSE
+      )
+  }
+
+  p
+}

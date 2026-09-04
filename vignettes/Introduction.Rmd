@@ -136,35 +136,37 @@ comp_draws <- composition_draws(
 head(comp_draws$draws)
 ```
 
-#### Compare observed proportions
-
-`composition_posterior_test()` keeps the legacy table + plot interface, but
-now uses [load_sccomp_fit()] and [composition_draws()] internally.
+#### Test and plot observed proportions
 
 ```{r eval = requireNamespace("sccomp", quietly = TRUE), fig.width= 12, fig.height= 10 }
-result <- composition_posterior_test(
-    proportions = example_proportions,
-    sex = "male",
-    age_decade = "4",
-    ethnicity_groups = "European",
-    assay_groups = "10x Genomics 3",
-    tissue_groups = "blood",
-    fit = sccomp_fit
+test_results <- composition_test(
+  proportions = example_proportions,
+  draws = comp_draws
+)
+test_results
+
+plot_composition_vs_hca(
+  draws = comp_draws,
+  test_results = test_results
 )
 ```
+
+`composition_posterior_test()` remains as a convenience wrapper around
+[load_sccomp_fit()], [composition_draws()], [composition_test()], and
+[plot_composition_vs_hca()].
 
 #### Inspect Composition Results
 
 **Posterior Distribution Table:**
 
 ```{r eval = requireNamespace("sccomp", quietly = TRUE)}
-print(result$result_table)
+print(test_results)
 ```
 
 **Density Plot of Posterior Predictions:**
 
 ```{r eval = requireNamespace("sccomp", quietly = TRUE), fig.width= 12, fig.height= 10 }
-print(result$plot)
+print(plot_composition_vs_hca(comp_draws, test_results = test_results))
 ```
 
 ### **2. Gene Expression Prediction**
@@ -207,7 +209,7 @@ head(expr_result$pred)
 
 ## **Input Arguments and Valid Values**
 
-Both `composition_posterior_test()` / [composition_draws()] and [expr_predict()]
+Both [composition_test()] / [composition_draws()] and [expr_predict()]
 accept metadata inputs corresponding to observed sample characteristics. For
 composition, the default healthy sccomp model uses **sex, age decade,
 ethnicity, assay, and tissue**. Unknown covariates can be set to `NA` and are

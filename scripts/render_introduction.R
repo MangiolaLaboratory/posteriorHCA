@@ -28,7 +28,7 @@ render_introduction <- function(
     requireNamespace("posteriorHCA", quietly = FALSE)
   }
 
-  rmarkdown::render(
+  html_path <- rmarkdown::render(
     input,
     output_format = "rmarkdown::html_vignette",
     knit_root_dir = proj_root,
@@ -46,7 +46,8 @@ render_introduction <- function(
     quiet = FALSE
   )
 
-  invisible(file.path(proj_root, "README.md"))
+  # Knit button opens the returned path; prefer the HTML vignette.
+  invisible(html_path)
 }
 
 find_posteriorhca_root <- function() {

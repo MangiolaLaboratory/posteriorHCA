@@ -19,28 +19,26 @@ composition_posterior_test(
 \arguments{
 \item{proportions}{A data frame of observed cell type proportions.}
 
-\item{sex}{A string indicating sex ("male", "female", or "unknown").}
+\item{sex, age_decade, ethnicity_groups, assay_groups, tissue_groups}{Metadata
+for the healthy query profile. Use `NULL`/`NA` to marginalise.}
 
-\item{age_decade}{A string for age decade category.}
-
-\item{ethnicity_groups}{A string indicating ethnicity group.}
-
-\item{assay_groups}{A string indicating assay group.}
-
-\item{tissue_groups}{A string indicating tissue group.}
-
-\item{disease_groups}{Deprecated and ignored. The default healthy sccomp
-model is trained on healthy samples only.}
+\item{disease_groups}{Deprecated and ignored.}
 
 \item{load_model_to_global_env}{Deprecated and ignored.}
 
-\item{fit}{Optional `posteriorHCA_sccomp_fit` object from [load_sccomp_fit()].
-When `NULL`, the default healthy model is loaded.}
+\item{fit}{Optional `posteriorHCA_sccomp_fit` from [load_sccomp_fit()].}
 }
 \value{
-A list with a result table and a density plot.
+A list with `result_table` and `plot`.
 }
 \description{
-This function performs posterior predictive sampling and returns
-a table and a density plot.
+Convenience wrapper that loads the healthy sccomp model (unless `fit` is
+supplied), draws posterior predictive proportions, tests observed
+proportions with [composition_test()], and plots with
+[plot_composition_vs_hca()].
+}
+\details{
+Prefer calling [load_sccomp_fit()], [composition_draws()],
+[composition_test()], and [plot_composition_vs_hca()] directly for
+modular workflows.
 }

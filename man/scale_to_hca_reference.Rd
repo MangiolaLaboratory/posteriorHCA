@@ -29,24 +29,26 @@ Default is the atlas sample id, or `"hca_reference"`.}
 \item{version}{Nectar version pin, used when `reference` is a cell type.}
 }
 \value{
-An object of the same class as `counts` (matrix, `Seurat`, or
-  `SummarizedExperiment`) with the atlas reference library appended.
-
-`reference` is usually a cell type (`"cd8 naive"`) or the list returned
-by [get_reference_sample_ready()]. A one-column `SummarizedExperiment`,
-named count vector, or matrix is also accepted (tests / local files).
+An object of the same class as `counts` with the atlas reference
+  library appended and alignment fields attached.
 }
 \description{
-The atlas reference is provided by this package: one sample per cell
-type, downloaded from Nectar by [get_reference_sample_ready()] and
-cached locally. That helper's return value records the file `path`.
-User libraries are then bound to that sample and TMMwsp-scaled
-together, with the atlas column as `refColumn`. The returned offset is
-`log(1 / multiplier)` so the reference sits at offset 0.
+Wrapper over [merge_with_reference_sample()] and
+[calculate_tmm_offset()]. Accepts a matrix,
+`SummarizedExperiment` / `SingleCellExperiment`, or `Seurat` object and
+returns the same class with the atlas library appended and alignment
+metadata attached (`hca_offset`, `hca_multiplier`, `sample_role`, …).
 }
 \details{
-`counts` may be a matrix, `SummarizedExperiment` / `SingleCellExperiment`,
-or `Seurat` object. The returned object matches the input class. Sample
-metadata columns `sample_role`, `hca_offset`, `hca_multiplier`,
-`hca_reference_name`, and `hca_cell_type` describe the atlas alignment.
+The atlas reference is usually a cell type string resolved via
+[load_reference_sample()] / Nectar. A named count vector, one-column
+matrix/SE, or [get_reference_sample_ready()] download list is also
+accepted. The reference sits at offset 0.
+
+For a matrix-only pipeline without container I/O, call the two core
+helpers directly (see examples in `examples/savi_adrb2_workflow.R`).
+}
+\seealso{
+[merge_with_reference_sample()], [calculate_tmm_offset()],
+  [estimate_cohort_logmu()]
 }

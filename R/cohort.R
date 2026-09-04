@@ -1,10 +1,17 @@
 # User counts on the atlas scale
 #
-# 1. Read a count matrix from a matrix, SummarizedExperiment/SCE, or Seurat object.
-# 2. Resolve the atlas reference from Nectar (get_reference_sample_ready) or
-#    from a count vector / one-column object.
-# 3. TMMwsp with that library as refColumn, offset = log(1 / multiplier).
-# 4. Estimate cohort log(mu) with mglmOneGroup (not glmQLFit coefficients).
+# Core (matrix):
+#   1. merge_with_reference_sample() — bind user matrix + one reference library
+#   2. calculate_tmm_offset() — TMMwsp; offset = log(1 / multiplier), ref at 0
+#   3. design_from_formula() — one-sided formula → design matrix
+#   4. estimate_logmu_ql() — estimateDisp + glmQLFit(prior.count = 0) →
+#      log(μ) + SE for every gene × design column
+#   5. bootstrap_logmu_mglm() — weighted mglmOneGroup (inference-cohort.R)
+# Wrappers:
+#   6. scale_to_hca_reference() — matrix/SE/Seurat → cores 1–2 → rebuild
+#   7. estimate_cohort_logmu() — resolve I/O → cores 3–4 → filter genes
+#   8. bootstrap_cohort_logmu() — matrix/SE/Seurat → core 5
+
 
 # ---------------------------------------------------------------------------
 # Input coercion
@@ -666,29 +673,161 @@ as_atlas_reference <- function(reference, version = "latest") {
 }
 
 # ---------------------------------------------------------------------------
-# Public methods
+# Public methods — core matrix API + container wrappers
 # ---------------------------------------------------------------------------
+
+#' Merge user counts with a one-library reference sample
+#'
+#' Core matrix helper: keeps genes shared with the reference and appends the
+#' reference as one column. Does not scale or compute offsets.
+#'
+#' @param counts Gene-by-sample numeric matrix (raw counts). Must have gene
+#'   rownames and sample colnames.
+#' @param reference Named numeric gene vector, or a one-column matrix / data
+#'   frame of counts.
+#' @param reference_name Column name for the appended reference library.
+#'   Default `"hca_reference"`.
+#' @return A gene-by-sample matrix of shared genes with the reference column
+#'   last. Attribute `shared_features` stores the gene ids used.
+#' @seealso [calculate_tmm_offset()], [scale_to_hca_reference()]
+#' @export
+#' @importFrom cli cli_abort
+merge_with_reference_sample <- function(
+  counts,
+  reference,
+  reference_name = "hca_reference"
+) {
+  if (is.null(counts) || !(is.matrix(counts) || is.data.frame(counts) ||
+      inherits(counts, "Matrix"))) {
+    cli_abort("`counts` must be a matrix (or coercible to one).")
+  }
+  counts <- as.matrix(counts)
+  storage.mode(counts) <- "double"
+  if (is.null(rownames(counts)) || is.null(colnames(counts))) {
+    cli_abort("`counts` must have gene rownames and sample colnames.")
+  }
+
+  if (is.null(reference_name) || is.na(reference_name) || !nzchar(reference_name)) {
+    reference_name <- "hca_reference"
+  }
+  reference_name <- as.character(reference_name[[1L]])
+  if (reference_name %in% colnames(counts)) {
+    cli_abort(
+      "Sample name `{reference_name}` is already in `counts`. Choose another `reference_name`."
+    )
+  }
+
+  ref_vec <- as_named_gene_counts(reference, "reference")
+  shared <- intersect(rownames(counts), names(ref_vec))
+  if (length(shared) < 2L) {
+    cli_abort(
+      "Need at least 2 shared genes between `counts` and the reference; found {length(shared)}."
+    )
+  }
+
+  combined <- cbind(
+    counts[shared, , drop = FALSE],
+    matrix(
+      ref_vec[shared],
+      ncol = 1L,
+      dimnames = list(shared, reference_name)
+    )
+  )
+  storage.mode(combined) <- "double"
+  attr(combined, "shared_features") <- shared
+  attr(combined, "reference_name") <- reference_name
+  combined
+}
+
+#' TMM normalisation factors, multipliers, and log offsets
+#'
+#' Core matrix helper. Runs [edgeR::calcNormFactors()] with
+#' `refColumn = reference_name`, then returns:
+#' \itemize{
+#'   \item `multiplier_j = effectiveSize_ref / effectiveSize_j`
+#'   \item `offset_j = log(1 / multiplier_j)` (natural log)
+#' }
+#' so the reference sample has multiplier 1 and offset 0. This is the same
+#' offset convention as `tidybulk::scale_abundance()` followed by
+#' `log(1 / multiplier)`, and what [edgeR::mglmOneGroup()] expects.
+#'
+#' @param counts Gene-by-sample count matrix that already includes the
+#'   reference column (e.g. from [merge_with_reference_sample()]).
+#' @param reference_name Name of the reference column used as
+#'   `refColumn` in [edgeR::calcNormFactors()].
+#' @param method Passed to [edgeR::calcNormFactors()]. Default `"TMMwsp"`.
+#' @return A list with named numeric vectors `norm_factors`, `library_size`,
+#'   `effective_size`, `multiplier`, `offset`, plus scalars `reference_name`
+#'   and `method`.
+#' @seealso [merge_with_reference_sample()], [scale_to_hca_reference()]
+#' @export
+#' @importFrom cli cli_abort
+calculate_tmm_offset <- function(
+  counts,
+  reference_name,
+  method = "TMMwsp"
+) {
+  if (is.null(counts) || !(is.matrix(counts) || is.data.frame(counts) ||
+      inherits(counts, "Matrix"))) {
+    cli_abort("`counts` must be a matrix (or coercible to one).")
+  }
+  counts <- as.matrix(counts)
+  storage.mode(counts) <- "double"
+  if (is.null(colnames(counts))) {
+    cli_abort("`counts` must have sample colnames.")
+  }
+  if (missing(reference_name) || is.null(reference_name) ||
+      length(reference_name) != 1L || is.na(reference_name) ||
+      !nzchar(reference_name)) {
+    cli_abort("`reference_name` must be a single non-empty sample name.")
+  }
+  reference_name <- as.character(reference_name)
+  ref_col <- match(reference_name, colnames(counts))
+  if (is.na(ref_col)) {
+    cli_abort("Reference column `{reference_name}` was not found in `counts`.")
+  }
+
+  norm_factors <- edgeR::calcNormFactors(
+    counts,
+    refColumn = ref_col,
+    method = method
+  )
+  library_size <- colSums(counts)
+  effective_size <- library_size * norm_factors
+  multiplier <- as.numeric(effective_size[[reference_name]] / effective_size)
+  offset <- log(1 / multiplier)
+  names(norm_factors) <- colnames(counts)
+  names(library_size) <- colnames(counts)
+  names(effective_size) <- colnames(counts)
+  names(multiplier) <- colnames(counts)
+  names(offset) <- colnames(counts)
+
+  list(
+    norm_factors = norm_factors,
+    library_size = library_size,
+    effective_size = effective_size,
+    multiplier = multiplier,
+    offset = offset,
+    reference_name = reference_name,
+    method = method
+  )
+}
 
 #' TMM-align user counts to an atlas reference sample
 #'
-#' The atlas reference is provided by this package: one sample per cell
-#' type, downloaded from Nectar by [get_reference_sample_ready()] and
-#' cached locally. That helper's return value records the file `path`.
-#' User libraries are then bound to that sample and TMMwsp-scaled
-#' together, with the atlas column as `refColumn`. The returned offset is
-#' `log(1 / multiplier)` so the reference sits at offset 0.
+#' Wrapper over [merge_with_reference_sample()] and
+#' [calculate_tmm_offset()]. Accepts a matrix,
+#' `SummarizedExperiment` / `SingleCellExperiment`, or `Seurat` object and
+#' returns the same class with the atlas library appended and alignment
+#' metadata attached (`hca_offset`, `hca_multiplier`, `sample_role`, …).
 #'
-#' `counts` may be a matrix, `SummarizedExperiment` / `SingleCellExperiment`,
-#' or `Seurat` object. The returned object matches the input class. Sample
-#' metadata columns `sample_role`, `hca_offset`, `hca_multiplier`,
-#' `hca_reference_name`, and `hca_cell_type` describe the atlas alignment.
+#' The atlas reference is usually a cell type string resolved via
+#' [load_reference_sample()] / Nectar. A named count vector, one-column
+#' matrix/SE, or [get_reference_sample_ready()] download list is also
+#' accepted. The reference sits at offset 0.
 #'
-#' @return An object of the same class as `counts` (matrix, `Seurat`, or
-#'   `SummarizedExperiment`) with the atlas reference library appended.
-#'
-#' `reference` is usually a cell type (`"cd8 naive"`) or the list returned
-#' by [get_reference_sample_ready()]. A one-column `SummarizedExperiment`,
-#' named count vector, or matrix is also accepted (tests / local files).
+#' For a matrix-only pipeline without container I/O, call the two core
+#' helpers directly (see examples in `examples/savi_adrb2_workflow.R`).
 #'
 #' @param counts User libraries (matrix, SE/SCE, or Seurat).
 #' @param reference Cell type, Nectar download list from
@@ -698,7 +837,10 @@ as_atlas_reference <- function(reference, version = "latest") {
 #' @param method Passed to [edgeR::calcNormFactors()]. Default `"TMMwsp"`.
 #' @param assay Assay name for SE / Seurat input. Default `"counts"` when present.
 #' @param version Nectar version pin, used when `reference` is a cell type.
-#' @inheritParams scale_to_hca_reference
+#' @return An object of the same class as `counts` with the atlas reference
+#'   library appended and alignment fields attached.
+#' @seealso [merge_with_reference_sample()], [calculate_tmm_offset()],
+#'   [estimate_cohort_logmu()]
 #' @export
 #' @importFrom cli cli_abort cli_alert_info
 scale_to_hca_reference <- function(
@@ -711,9 +853,6 @@ scale_to_hca_reference <- function(
 ) {
   source_container <- counts
   user <- extract_count_matrix(counts, assay = assay, arg_name = "counts")
-  if (is.null(rownames(user)) || is.null(colnames(user))) {
-    cli_abort("`counts` must have gene rownames and sample colnames.")
-  }
 
   ref <- as_atlas_reference(reference, version = version)
   if (is.null(ref$counts) || !length(ref$counts)) {
@@ -726,45 +865,18 @@ scale_to_hca_reference <- function(
   if (is.null(reference_name) || is.na(reference_name) || !nzchar(reference_name)) {
     reference_name <- "hca_reference"
   }
-  if (reference_name %in% colnames(user)) {
-    cli_abort(
-      "Sample name `{reference_name}` is already in `counts`. Choose another `reference_name`."
-    )
-  }
 
-  shared <- intersect(rownames(user), names(ref$counts))
-  if (length(shared) < 2L) {
-    cli_abort(
-      "Need at least 2 shared genes between `counts` and the reference; found {length(shared)}."
-    )
-  }
-
-  combined <- cbind(
-    user[shared, , drop = FALSE],
-    matrix(
-      ref$counts[shared],
-      ncol = 1L,
-      dimnames = list(shared, reference_name)
-    )
+  combined <- merge_with_reference_sample(
+    user,
+    reference = ref$counts,
+    reference_name = reference_name
   )
-  storage.mode(combined) <- "double"
-
-  ref_col <- match(reference_name, colnames(combined))
-  if (is.na(ref_col)) {
-    cli_abort("Reference column `{reference_name}` was not found after alignment.")
-  }
-
-  norm_factors <- edgeR::calcNormFactors(
+  shared <- attr(combined, "shared_features")
+  scaling <- calculate_tmm_offset(
     combined,
-    refColumn = ref_col,
+    reference_name = reference_name,
     method = method
   )
-  library_size <- colSums(combined)
-  effective_size <- library_size * norm_factors
-  multiplier <- as.numeric(effective_size[[reference_name]] / effective_size)
-  offset <- log(1 / multiplier)
-  names(multiplier) <- colnames(combined)
-  names(offset) <- colnames(combined)
 
   sample_role <- ifelse(
     colnames(combined) == reference_name,
@@ -787,21 +899,20 @@ scale_to_hca_reference <- function(
   sample_metadata <- data.frame(
     sample_id = colnames(combined),
     sample_role = unname(sample_role),
-    hca_offset = unname(offset),
-    hca_multiplier = unname(multiplier),
+    hca_offset = unname(scaling$offset),
+    hca_multiplier = unname(scaling$multiplier),
     hca_reference_name = reference_name,
     hca_cell_type = cell_type_val,
     row.names = colnames(combined),
     stringsAsFactors = FALSE
   )
-  extra <- setdiff(names(user_meta), names(sample_metadata))
-  if (length(extra) && NROW(user_meta)) {
+  if (NROW(user_meta)) {
     sample_metadata <- merge_user_sample_metadata(sample_metadata, user_meta)
   }
 
   alignment <- list(
-    offset = offset,
-    multiplier = multiplier,
+    offset = scaling$offset,
+    multiplier = scaling$multiplier,
     shared_features = shared,
     reference_name = reference_name,
     sample_role = sample_role,
@@ -914,6 +1025,175 @@ dispersion_from_dge <- function(dge) {
   }
   names(disp) <- rownames(dge)
   disp
+}
+
+#' Compress offset to a gene-by-sample matrix
+#' @keywords internal
+#' @noRd
+compress_offset_matrix <- function(offset, counts) {
+  n_gene <- nrow(counts)
+  n_lib <- ncol(counts)
+  if (is.matrix(offset)) {
+    storage.mode(offset) <- "double"
+    return(offset)
+  }
+  offset <- as.numeric(offset)
+  if (length(offset) == 1L) {
+    offset <- rep(offset, n_lib)
+  }
+  if (!is.null(names(offset)) && !is.null(colnames(counts))) {
+    offset <- offset[colnames(counts)]
+  }
+  matrix(offset, nrow = n_gene, ncol = n_lib, byrow = TRUE)
+}
+
+#' Fit edgeR QL with prior.count = 0 (absolute log(μ) on offset scale)
+#' @keywords internal
+#' @noRd
+fit_nb_ql <- function(counts, offset, design, robust = TRUE) {
+  counts <- as.matrix(counts)
+  storage.mode(counts) <- "double"
+  design <- as.matrix(design)
+  offset_mat <- compress_offset_matrix(offset, counts)
+
+  dge <- edgeR::DGEList(counts = counts)
+  dge$offset <- offset_mat
+  dge <- edgeR::estimateDisp(dge, design, robust = robust)
+  # prior.count = 0 keeps coefficients as absolute log(μ) on the offset scale
+  fit <- edgeR::glmQLFit(dge, design, robust = robust, prior.count = 0)
+
+  list(
+    fit = fit,
+    dispersion = dispersion_from_dge(dge),
+    design = design
+  )
+}
+
+#' Build a design matrix from a one-sided formula
+#'
+#' Core helper used by [estimate_cohort_logmu()]. Converts a formula such as
+#' `~ 0 + Category` into a numeric design matrix whose column names are the
+#' cohort / term labels used in the tidy output of [estimate_logmu_ql()].
+#'
+#' @param formula One-sided model formula, e.g. `~ 0 + Category` or `~ 1`.
+#' @param metadata A `data.frame` of sample covariates (one row per library).
+#'   Must contain every variable named in `formula`.
+#' @return A numeric design matrix with one row per sample and cleaned
+#'   column names (group labels).
+#' @seealso [estimate_logmu_ql()], [estimate_cohort_logmu()]
+#' @export
+#' @importFrom cli cli_abort
+design_from_formula <- function(formula, metadata) {
+  if (missing(metadata) || is.null(metadata)) {
+    cli_abort("`metadata` is missing.")
+  }
+  metadata <- as.data.frame(metadata, stringsAsFactors = FALSE)
+  info <- validate_cohort_formula(formula, metadata)
+  design <- info$design
+  labels <- cohort_groups_from_design(design, formula, metadata)$labels
+  colnames(design) <- labels
+  design
+}
+
+#' Cohort log(μ) and SE for all genes from one edgeR QL fit
+#'
+#' Core matrix helper. Fits [edgeR::estimateDisp()] and
+#' [edgeR::glmQLFit()] once with `prior.count = 0`, then returns absolute
+#' group means (QL coefficients on the atlas offset-zero scale) and QL Wald
+#' SEs for **every gene**. Prefer a cell-means design from
+#' [design_from_formula()] (`~ 0 + group`).
+#'
+#' Gene filtering belongs in the wrapper [estimate_cohort_logmu()], which
+#' still estimates dispersion from the full matrix via this function.
+#'
+#' @param counts Gene-by-sample numeric count matrix.
+#' @param offset Numeric vector (length `ncol(counts)`) or matrix. Typically
+#'   `log(1 / multiplier)` from [calculate_tmm_offset()].
+#' @param design Numeric design matrix (`nrow` = number of samples). Column
+#'   names become the `group` labels in the output.
+#' @param cell_type Optional cell-type label stored in every output row.
+#' @param robust Passed to [edgeR::estimateDisp()] and [edgeR::glmQLFit()].
+#' @return A data frame with one row per gene × design column: `gene`,
+#'   `gene_symbol` (NA), `cell_type`, `group`, `n`, `log_mu`, `mu`, `se`,
+#'   `df`, `dispersion`.
+#' @seealso [design_from_formula()], [estimate_cohort_logmu()]
+#' @export
+#' @importFrom cli cli_abort
+estimate_logmu_ql <- function(
+  counts,
+  offset,
+  design,
+  cell_type = NULL,
+  robust = TRUE
+) {
+  if (is.null(counts) || !(is.matrix(counts) || is.data.frame(counts) ||
+      inherits(counts, "Matrix"))) {
+    cli_abort("`counts` must be a matrix (or coercible to one).")
+  }
+  counts <- as.matrix(counts)
+  storage.mode(counts) <- "double"
+  if (is.null(rownames(counts)) || is.null(colnames(counts))) {
+    cli_abort("`counts` must have gene rownames and sample colnames.")
+  }
+  if (missing(design) || is.null(design)) {
+    cli_abort("`design` is missing.")
+  }
+  design <- as.matrix(design)
+  if (nrow(design) != ncol(counts)) {
+    cli_abort(
+      "`design` rows ({nrow(design)}) must match `ncol(counts)` ({ncol(counts)})."
+    )
+  }
+
+  ql <- fit_nb_ql(counts, offset = offset, design = design, robust = robust)
+  fit <- ql$fit
+  dispersion <- ql$dispersion
+
+  gene_ids <- rownames(counts)
+  group_labels <- colnames(design)
+  if (is.null(group_labels)) {
+    group_labels <- paste0("group", seq_len(ncol(design)))
+  }
+  group_labels[group_labels == "(Intercept)"] <- "all"
+
+  group_n <- vapply(seq_len(ncol(design)), function(j) {
+    sum(abs(design[, j]) > .Machine$double.eps)
+  }, integer(1))
+
+  cell_type_val <- if (!is.null(cell_type) && !is.na(cell_type) && nzchar(cell_type)) {
+    as.character(cell_type)
+  } else {
+    NA_character_
+  }
+
+  # QL Wald SE for cell-means columns: sqrt(s2.post / sum(w_j))
+  mu_hat <- fit$fitted.values
+  w <- mu_hat / (1 + as.numeric(dispersion) * mu_hat)
+  s2 <- fit$s2.post
+  coef_mat <- fit$coefficients
+  n_gene <- nrow(coef_mat)
+  n_group <- ncol(coef_mat)
+
+  se_mat <- matrix(NA_real_, nrow = n_gene, ncol = n_group)
+  for (j in seq_len(n_group)) {
+    idx <- which(abs(design[, j]) > .Machine$double.eps)
+    cohort_weight <- rowSums(w[, idx, drop = FALSE])
+    se_mat[, j] <- ifelse(cohort_weight > 0, sqrt(s2 / cohort_weight), Inf)
+  }
+
+  data.frame(
+    gene = rep(gene_ids, times = n_group),
+    gene_symbol = NA_character_,
+    cell_type = cell_type_val,
+    group = rep(group_labels, each = n_gene),
+    n = rep(as.integer(group_n), each = n_gene),
+    log_mu = as.numeric(coef_mat),
+    mu = exp(as.numeric(coef_mat)),
+    se = as.numeric(se_mat),
+    df = rep(as.numeric(fit$df.residual.adj), times = n_group),
+    dispersion = rep(as.numeric(dispersion), times = n_group),
+    stringsAsFactors = FALSE
+  )
 }
 
 #' Resolve a group vector from metadata, names, or values
@@ -1078,39 +1358,24 @@ validate_cohort_offset <- function(
       "i" = "Run [scale_to_hca_reference()] first, or supply offsets in `metadata`."
     ))
   }
-  offset <- metadata[[offset_col]]
-  if (length(offset) != length(sample_ids)) {
-    cli_abort(
-      "`{offset_col}` length ({length(offset)}) must match the number of samples ({length(sample_ids)})."
-    )
-  }
-  if (!is.numeric(offset)) {
-    cli_abort("`{offset_col}` must be numeric.")
-  }
-  if (any(is.na(offset))) {
-    na_samples <- sample_ids[is.na(offset)]
-    cli_abort("`{offset_col}` has NA for sample{?s}: {na_samples}.")
-  }
-  if (!all(is.finite(offset))) {
-    cli_abort("`{offset_col}` must contain finite numeric values.")
-  }
-  stats::setNames(as.numeric(offset), sample_ids)
+  stats::setNames(as.numeric(metadata[[offset_col]]), sample_ids)
 }
 
-#' Build and validate an edgeR design matrix from a formula
+#' Build an edgeR design matrix from a formula
 #' @keywords internal
 #' @noRd
 validate_cohort_formula <- function(formula, metadata) {
   if (!inherits(formula, "formula")) {
     cli_abort("`formula` must be a formula, e.g. `~ 0 + Category`.")
   }
-
-  rhs <- formula[[2L]]
   if (length(formula) == 3L) {
     cli_abort(c(
       "Response variables in `formula` are not supported.",
-      "i" = "Pass genes via the `genes` argument and use a one-sided formula, e.g. `~ 0 + Category`."
+      "i" = "Use a one-sided formula, e.g. `~ 0 + Category`."
     ))
+  }
+  if (length(formula) != 2L) {
+    cli_abort("`formula` must be one-sided, e.g. `~ 0 + Category`.")
   }
 
   formula_vars <- all.vars(formula)
@@ -1128,14 +1393,15 @@ validate_cohort_formula <- function(formula, metadata) {
         cli_abort("Metadata column `{var}` is all NA.")
       }
       if (any(is.na(x))) {
-        na_samples <- metadata$sample_id[is.na(x)]
+        na_samples <- if ("sample_id" %in% names(metadata)) {
+          metadata$sample_id[is.na(x)]
+        } else {
+          rownames(metadata)[is.na(x)]
+        }
         cli_abort(c(
           "Metadata column `{var}` has NA for sample{?s}: {na_samples}.",
           "i" = "Assign a level to every sample, e.g. `\"reference\"` for the atlas library."
         ))
-      }
-      if (is.factor(x) && nlevels(x) == 0L) {
-        cli_abort("Metadata column `{var}` has no factor levels.")
       }
     }
   }
@@ -1149,14 +1415,12 @@ validate_cohort_formula <- function(formula, metadata) {
       ))
     }
   )
-
   if (ncol(design) == 0L) {
     cli_abort("Design matrix has no columns.")
   }
   if (nrow(design) != nrow(metadata)) {
     cli_abort("Design matrix row count does not match sample metadata.")
   }
-
   qr_rank <- qr(design)$rank
   if (qr_rank < ncol(design)) {
     cli_abort(c(
@@ -1172,23 +1436,15 @@ validate_cohort_formula <- function(formula, metadata) {
 #' @keywords internal
 #' @noRd
 cohort_groups_from_design <- function(design, formula, metadata) {
-  term_names <- colnames(design)
-  labels <- term_names
+  labels <- colnames(design)
   labels[labels == "(Intercept)"] <- "all"
-
   vars <- all.vars(formula)
   if (length(vars) == 1L) {
-    var <- vars[[1]]
-    labels <- sub(paste0("^", var), "", labels)
+    labels <- sub(paste0("^", vars[[1]]), "", labels)
   }
-
   groups <- lapply(seq_len(ncol(design)), function(j) {
     which(abs(design[, j]) > .Machine$double.eps)
   })
-  if (any(vapply(groups, length, integer(1)) == 0L)) {
-    cli_abort("Each design column must correspond to at least one sample.")
-  }
-
   list(labels = labels, groups = groups)
 }
 
@@ -1227,33 +1483,28 @@ fill_reference_formula_levels <- function(metadata, formula) {
 
 #' Cohort log(mu) at the atlas offset-zero scale
 #'
-#' Point estimates come from [edgeR::mglmOneGroup()] with the TMM offset
-#' applied directly. [edgeR::glmQLFit()] is used only for the QL Wald SE.
+#' Wrapper over [design_from_formula()] and [estimate_logmu_ql()]. Resolves
+#' counts / offsets / gene ids from a matrix, SummarizedExperiment, Seurat,
+#' or [scale_to_hca_reference()] object, fits **all genes**, then optionally
+#' filters to `genes`.
 #'
-#' `data` may be a matrix, `SummarizedExperiment` / `SingleCellExperiment`,
-#' `Seurat` object, or the output of [scale_to_hca_reference()]. Sample
-#' metadata (including `hca_offset`) is taken from `metadata`, from
-#' `colData` / `meta.data`, or from alignment attributes on scaled objects.
-#' A plain matrix with no attached metadata requires an explicit `metadata`
-#' argument.
-#'
-#' `formula` defines the edgeR design matrix, e.g. `~ 0 + Category` for
-#' group means. All variables in the formula must appear as columns in the
-#' resolved metadata.
+#' For a matrix-only pipeline:
+#' \preformatted{
+#'   design <- design_from_formula(~ 0 + Category, metadata)
+#'   est <- estimate_logmu_ql(counts, offset, design)
+#' }
 #'
 #' @param data Gene-by-sample counts, or a scaled matrix / SE / Seurat object
 #'   from [scale_to_hca_reference()].
 #' @param metadata Optional sample metadata `data.frame`. Required for a plain
 #'   matrix without alignment attributes. Must include `hca_offset` and any
-#'   columns referenced in `formula`. Row names (or a `sample_id` column) must
-#'   match `colnames(data)`.
-#' @param formula One-sided model formula passed to [stats::model.matrix()] for
-#'   the edgeR design. Default `~ 1` estimates one pooled cohort.
+#'   columns referenced in `formula`.
+#' @param formula One-sided model formula for the edgeR design. Default `~ 1`
+#'   estimates one pooled cohort. Prefer `~ 0 + group` for group means.
 #' @param genes Optional gene identifiers (symbols or ENSG). Default is all
-#'   rows. Values are resolved to canonical ENSG ids. Dispersion is still
-#'   estimated from the full count matrix.
-#' @param cell_type Optional cell type label stored in the output. Taken from
-#'   metadata (`hca_cell_type`) or alignment attributes when available.
+#'   rows. Dispersion is always estimated from the full count matrix; this
+#'   argument only filters the returned table.
+#' @param cell_type Optional cell type label stored in the output.
 #' @param version Nectar version pin used when validating genes against the
 #'   cell-type universe.
 #' @param robust Passed to [edgeR::estimateDisp()] and [edgeR::glmQLFit()].
@@ -1261,6 +1512,8 @@ fill_reference_formula_levels <- function(metadata, formula) {
 #' @return A data frame with one row per gene x design term: `gene` (ENSG),
 #'   `gene_symbol`, `cell_type`, `group`, `n`, `log_mu`, `mu`, `se`, `df`,
 #'   `dispersion`.
+#' @seealso [design_from_formula()], [estimate_logmu_ql()],
+#'   [scale_to_hca_reference()]
 #' @export
 #' @importFrom cli cli_abort
 estimate_cohort_logmu <- function(
@@ -1284,36 +1537,36 @@ estimate_cohort_logmu <- function(
     counts <- extract_count_matrix(source_obj, assay = assay, arg_name = "data")
   }
 
-  if (is.null(rownames(counts)) || is.null(colnames(counts))) {
-    cli_abort("`data` must have gene rownames and sample colnames.")
-  }
-
   sample_ids <- colnames(counts)
   meta <- resolve_cohort_metadata(source_obj, metadata = metadata, assay = assay)
   meta <- fill_reference_formula_levels(meta, formula)
   offset <- validate_cohort_offset(meta, sample_ids)
 
   if (is.null(cell_type) && "hca_cell_type" %in% names(meta)) {
-    ct_vals <- unique(as.character(meta$hca_cell_type))
-    ct_vals <- ct_vals[!is.na(ct_vals) & nzchar(ct_vals)]
-    if (length(ct_vals) == 1L) {
-      cell_type <- ct_vals[[1]]
-    }
+    ct_vals <- unique(stats::na.omit(as.character(meta$hca_cell_type)))
+    if (length(ct_vals) == 1L) cell_type <- ct_vals[[1]]
   }
 
-  design_info <- validate_cohort_formula(formula, meta)
-  design <- design_info$design
-  cohort_info <- cohort_groups_from_design(design, formula, meta)
-  group_labels <- cohort_info$labels
-  group_indices <- cohort_info$groups
+  design <- design_from_formula(formula, meta)
+
+  est <- estimate_logmu_ql(
+    counts = counts,
+    offset = offset,
+    design = design,
+    cell_type = cell_type,
+    robust = robust
+  )
 
   if (is.null(genes)) {
-    gene_ids <- rownames(counts)
-    gene_symbols <- rep(NA_character_, length(gene_ids))
-    names(gene_symbols) <- gene_ids
-  } else if (all(genes %in% rownames(counts))) {
+    return(est)
+  }
+
+  if (all(genes %in% rownames(counts))) {
     gene_ids <- as.character(genes)
-    gene_symbols <- ifelse(is_ensembl_gene_id(gene_ids), NA_character_, gene_ids)
+    gene_symbols <- stats::setNames(
+      ifelse(is_ensembl_gene_id(gene_ids), NA_character_, gene_ids),
+      gene_ids
+    )
   } else {
     resolved <- resolve_gene(
       genes,
@@ -1322,10 +1575,9 @@ estimate_cohort_logmu <- function(
       strict = TRUE
     )
     gene_ids <- unname(resolved)
-    gene_symbols <- ifelse(
-      is_ensembl_gene_id(names(resolved)),
-      NA_character_,
-      names(resolved)
+    gene_symbols <- stats::setNames(
+      ifelse(is_ensembl_gene_id(names(resolved)), NA_character_, names(resolved)),
+      gene_ids
     )
     missing <- setdiff(gene_ids, rownames(counts))
     if (length(missing) > 0L) {
@@ -1333,62 +1585,11 @@ estimate_cohort_logmu <- function(
     }
   }
 
-  samples <- data.frame(
-    sample_id = sample_ids,
-    meta,
-    stringsAsFactors = FALSE,
-    check.names = FALSE
-  )
-  rownames(samples) <- sample_ids
-
-  dge <- edgeR::DGEList(counts = counts, samples = samples)
-  dge$offset <- matrix(
-    as.numeric(offset),
-    nrow = nrow(dge),
-    ncol = ncol(dge),
-    byrow = TRUE
-  )
-
-  dge <- edgeR::estimateDisp(dge, design, robust = robust)
-  fit <- edgeR::glmQLFit(dge, design, robust = robust)
-  dispersion <- dispersion_from_dge(dge)
-
-  out <- lapply(seq_along(gene_ids), function(i) {
-    gene <- gene_ids[[i]]
-    gi <- match(gene, rownames(fit))
-    disp <- dispersion[[gene]]
-    mu_all <- fit$fitted.values[gi, ]
-    w <- mu_all / (1 + disp * mu_all)
-
-    lapply(seq_along(group_labels), function(k) {
-      g <- group_labels[[k]]
-      j <- group_indices[[k]]
-      log_mu <- edgeR::mglmOneGroup(
-        matrix(counts[gi, j, drop = FALSE], nrow = 1L),
-        dispersion = disp,
-        offset = offset[j]
-      )
-      cohort_weight <- sum(w[j])
-      se <- if (is.finite(cohort_weight) && cohort_weight > 0) {
-        sqrt(fit$s2.post[gi] / cohort_weight)
-      } else {
-        Inf
-      }
-      data.frame(
-        gene = gene,
-        gene_symbol = gene_symbols[[i]],
-        cell_type = if (!is.null(cell_type) && !is.na(cell_type)) cell_type else NA_character_,
-        group = g,
-        n = length(j),
-        log_mu = unname(as.numeric(log_mu)),
-        mu = unname(exp(as.numeric(log_mu))),
-        se = unname(as.numeric(se)),
-        df = unname(fit$df.residual.adj[gi]),
-        dispersion = unname(disp),
-        stringsAsFactors = FALSE
-      )
-    })
-  })
-
-  do.call(rbind, unlist(out, recursive = FALSE))
+  est <- est[est$gene %in% gene_ids, , drop = FALSE]
+  if (!nrow(est)) {
+    cli_abort("No rows left after filtering to `genes`.")
+  }
+  est$gene_symbol <- unname(gene_symbols[est$gene])
+  rownames(est) <- NULL
+  est
 }

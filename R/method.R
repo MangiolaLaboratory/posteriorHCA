@@ -1,198 +1,78 @@
 #' composition_posterior_test: Perform posterior predictive analysis
 #'
-#' This function performs posterior predictive sampling and returns
-#' a table and a density plot.
+#' Convenience wrapper that loads the healthy sccomp model (unless `fit` is
+#' supplied), draws posterior predictive proportions, tests observed
+#' proportions with [composition_test()], and plots with
+#' [plot_composition_vs_hca()].
+#'
+#' Prefer calling [load_sccomp_fit()], [composition_draws()],
+#' [composition_test()], and [plot_composition_vs_hca()] directly for
+#' modular workflows.
 #'
 #' @param proportions A data frame of observed cell type proportions.
-#' @param sex A string indicating sex ("male", "female", or "unknown").
-#' @param age_decade A string for age decade category.
-#' @param ethnicity_groups A string indicating ethnicity group.
-#' @param assay_groups A string indicating assay group.
-#' @param tissue_groups A string indicating tissue group.
-#' @param disease_groups Deprecated and ignored. The default healthy sccomp
-#'   model is trained on healthy samples only.
+#' @param sex,age_decade,ethnicity_groups,assay_groups,tissue_groups Metadata
+#'   for the healthy query profile. Use `NULL`/`NA` to marginalise.
+#' @param disease_groups Deprecated and ignored.
 #' @param load_model_to_global_env Deprecated and ignored.
-#' @param fit Optional `posteriorHCA_sccomp_fit` object from [load_sccomp_fit()].
-#'   When `NULL`, the default healthy model is loaded.
-#' @return A list with a result table and a density plot.
+#' @param fit Optional `posteriorHCA_sccomp_fit` from [load_sccomp_fit()].
+#' @return A list with `result_table` and `plot`.
 #' @export
-#'
-#' @import dplyr tidyr purrr ggplot2 sccomp dittoSeq ggrepel
-#' @importFrom scales trans_new
-composition_posterior_test <-
-  function(
-    proportions = NULL,
-    sex = NULL,
-    age_decade = NULL,
-    ethnicity_groups = NULL,
-    assay_groups = NULL,
-    tissue_groups = NULL,
-    disease_groups = NULL,
-    load_model_to_global_env = NULL,
-    fit = NULL
-  ) {
-    if (!is.null(disease_groups)) {
-      cli::cli_warn(c(
-        "`disease_groups` is deprecated and ignored for composition testing.",
-        "i" = "The default sccomp model is trained on healthy samples only."
-      ))
-    }
-    if (!is.null(load_model_to_global_env)) {
-      .Deprecated(msg = "`load_model_to_global_env` is deprecated and ignored.")
-    }
-
-    if (is.null(fit)) {
-      fit <- load_sccomp_fit()
-    }
-
-    fit_obj <- fit$fit
-    count_data <- sccomp_count_data(fit_obj)
-    valid_cell_types <- unique(as.character(count_data$L3))
-
-    if (!is.null(proportions)) {
-      if (!is.data.frame(proportions) || !ncol(proportions) %in% c(2, 3)) {
-        stop("Error: 'proportions' must be a data frame with either two (single sample) or three (multiple samples) columns.")
-      }
-      if (ncol(proportions) == 2) {
-        colnames(proportions) <- c("cell_type", "proportion")
-        proportions$sample_id <- "sample_1"
-        proportions <- proportions[, c("sample_id", "cell_type", "proportion")]
-      } else {
-        colnames(proportions) <- c("sample_id", "cell_type", "proportion")
-      }
-
-      if (!all(proportions$cell_type %in% valid_cell_types)) {
-        stop("Error: The 'cell_type' column must contain valid cell types.")
-      }
-      if (proportions %>% group_by(sample_id) %>% reframe(d = duplicated(cell_type)) %>% pull(d) %>% any()) {
-        stop("Error: The 'cell_type' column must not contain duplicate values.")
-      }
-      if (!is.numeric(proportions$proportion) || any(proportions$proportion < 0) || any(proportions$proportion >= 1)) {
-        stop("Error: The 'proportion' column must be numeric and within the range [0,1).")
-      }
-    }
-
-    sample_ids <- if (!is.null(proportions)) {
-      unique(as.character(proportions$sample_id))
-    } else {
-      "query_sample"
-    }
-
-    newdata <- do.call(
-      rbind,
-      lapply(sample_ids, function(sid) {
-        build_sccomp_newdata(
-          fit_obj,
-          sample_id = sid,
-          age_decade = age_decade,
-          sex = sex,
-          ethnicity_groups = ethnicity_groups,
-          assay_groups = assay_groups,
-          tissue_groups = tissue_groups
-        )
-      })
-    )
-
-    predict_res <- composition_draws(
-      fit,
-      newdata = newdata,
-      summary_instead_of_draws = FALSE
-    )$draws
-
-    dist_by_cell_type <- predict_res %>%
-      group_by(cell_type) %>%
-      reframe(
-        mean = mean(proportion),
-        lower = quantile(proportion, probs = 0.025),
-        upper = quantile(proportion, probs = 0.975)
-      )
-
-    arcsine_sqrt_trans <- scales::trans_new(
-      "arcsine_sqrt",
-      transform = function(x) asin(sqrt(x)),
-      inverse = function(x) (sin(x))^2
-    )
-
-    if (!is.null(proportions)) {
-      predict_res <- predict_res %>%
-        filter(cell_type %in% unique(proportions$cell_type))
-    }
-
-    dist_plot <- ggplot(predict_res, aes(x = proportion)) +
-      geom_density(alpha = 0.3) +
-      facet_wrap(~cell_type) +
-      scale_x_continuous(
-        trans = arcsine_sqrt_trans,
-        name = "Proportion (Arcsine-Sqrt Scaled)"
-      ) +
-      labs(
-        x = "Proportion",
-        y = "Density"
-      ) +
-      theme_minimal() +
-      theme(strip.text = element_text(size = 12, face = "bold"))
-
-    if (!is.null(proportions)) {
-      dist_by_cell_type <- proportions %>%
-        right_join(
-          x = predict_res,
-          by = "cell_type",
-          suffix = c("_sampled", "_observed"),
-          relationship = "many-to-many"
-        ) %>%
-        group_by(sample_id_observed, cell_type) %>%
-        reframe(
-          proportion_observed = unique(proportion_observed),
-          Empirical_Confidence = 2 * pmin(
-            mean(proportion_observed > proportion_sampled),
-            1 - mean(proportion_observed > proportion_sampled)
-          )
-        ) %>%
-        left_join(
-          y = dist_by_cell_type,
-          by = "cell_type",
-          relationship = "many-to-many"
-        )
-
-      dist_plot <- dist_plot +
-        geom_vline(
-          data = dist_by_cell_type,
-          aes(xintercept = proportion_observed, color = sample_id_observed),
-          linetype = "dashed",
-          linewidth = 0.5,
-          show.legend = TRUE
-        ) +
-        scale_color_manual(values = dittoSeq::dittoColors()) +
-        labs(color = "EC: Empirical Confidence, Sample ID:") +
-        theme(
-          legend.position = "bottom",
-          legend.title = element_text(size = 12, face = "bold"),
-          legend.text = element_text(size = 10)
-        ) +
-        ggrepel::geom_text_repel(
-          data = dist_by_cell_type,
-          aes(
-            x = proportion_observed,
-            y = Inf,
-            label = paste0("EC:", signif(Empirical_Confidence, 2)),
-            color = sample_id_observed
-          ),
-          size = 4,
-          direction = "y",
-          segment.color = NA,
-          inherit.aes = FALSE,
-          show.legend = FALSE
-        )
-    }
-
-    print(dist_by_cell_type)
-    print(dist_plot)
-
-    list(
-      result_table = dist_by_cell_type,
-      plot = dist_plot
-    )
+#' @import ggplot2
+composition_posterior_test <- function(
+  proportions = NULL,
+  sex = NULL,
+  age_decade = NULL,
+  ethnicity_groups = NULL,
+  assay_groups = NULL,
+  tissue_groups = NULL,
+  disease_groups = NULL,
+  load_model_to_global_env = NULL,
+  fit = NULL
+) {
+  if (!is.null(disease_groups)) {
+    cli::cli_warn("`disease_groups` is deprecated and ignored (healthy-only model).")
   }
+  if (!is.null(load_model_to_global_env)) {
+    .Deprecated(msg = "`load_model_to_global_env` is deprecated and ignored.")
+  }
+
+  if (is.null(fit)) {
+    fit <- load_sccomp_fit()
+  }
+
+  sample_ids <- if (is.null(proportions)) {
+    "query_sample"
+  } else {
+    unique(normalize_proportions(proportions)$sample_id)
+  }
+
+  newdata <- do.call(
+    rbind,
+    lapply(sample_ids, function(sid) {
+      build_sccomp_newdata(
+        fit,
+        sample_id = sid,
+        age_decade = age_decade,
+        sex = sex,
+        ethnicity_groups = ethnicity_groups,
+        assay_groups = assay_groups,
+        tissue_groups = tissue_groups
+      )
+    })
+  )
+
+  draws <- composition_draws(fit, newdata = newdata)
+
+  if (is.null(proportions)) {
+    result_table <- summarize_composition_draws(draws)
+    plot <- plot_composition_draws(draws)
+  } else {
+    result_table <- composition_test(proportions, draws)
+    plot <- plot_composition_vs_hca(draws, test_results = result_table)
+  }
+
+  list(result_table = result_table, plot = plot)
+}
 
 #' Query a stored gene-level brms model
 #'

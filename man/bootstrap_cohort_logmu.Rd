@@ -19,10 +19,11 @@ bootstrap_cohort_logmu(
 \item{counts}{Count container or matrix.}
 
 \item{offset}{Numeric vector of sample offsets, or `NULL` if provided in
-an aligned `counts` list.}
+an aligned `counts` object.}
 
 \item{dispersion}{Numeric scalar or named vector of negative-binomial
-dispersion values. If `NULL`, dispersion is estimated across `counts`.}
+dispersion values. If `NULL`, dispersion is estimated across `counts`
+with [estimate_dispersion_nb()].}
 
 \item{group}{Optional group vector or column name to subset samples. If
 `NULL`, all non-reference samples (or all samples) are used.}
@@ -39,10 +40,15 @@ dispersion values. If `NULL`, dispersion is estimated across `counts`.}
 A numeric vector of length `n_boot` containing posterior log(mu) draws.
 }
 \description{
-Computes posterior draws of cohort latent log(mu) by repeatedly fitting
-[edgeR::mglmOneGroup()] with Dirichlet weights.
+Wrapper over [bootstrap_logmu_mglm()]. Extracts counts and offsets from a
+matrix / SE / Seurat / aligned object, resolves the gene id, optionally
+subsets to a cohort, estimates dispersion via [estimate_dispersion_nb()]
+when needed, then bootstraps log(μ).
 }
 \details{
 `counts` may be a matrix, `SummarizedExperiment`, `SingleCellExperiment`,
-`Seurat` object, or an aligned list from [scale_to_hca_reference()].
+`Seurat` object, or an aligned object from [scale_to_hca_reference()].
+}
+\seealso{
+[bootstrap_logmu_mglm()], [estimate_dispersion_nb()]
 }

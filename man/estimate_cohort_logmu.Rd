@@ -21,18 +21,16 @@ from [scale_to_hca_reference()].}
 
 \item{metadata}{Optional sample metadata `data.frame`. Required for a plain
 matrix without alignment attributes. Must include `hca_offset` and any
-columns referenced in `formula`. Row names (or a `sample_id` column) must
-match `colnames(data)`.}
+columns referenced in `formula`.}
 
-\item{formula}{One-sided model formula passed to [stats::model.matrix()] for
-the edgeR design. Default `~ 1` estimates one pooled cohort.}
+\item{formula}{One-sided model formula for the edgeR design. Default `~ 1`
+estimates one pooled cohort. Prefer `~ 0 + group` for group means.}
 
 \item{genes}{Optional gene identifiers (symbols or ENSG). Default is all
-rows. Values are resolved to canonical ENSG ids. Dispersion is still
-estimated from the full count matrix.}
+rows. Dispersion is always estimated from the full count matrix; this
+argument only filters the returned table.}
 
-\item{cell_type}{Optional cell type label stored in the output. Taken from
-metadata (`hca_cell_type`) or alignment attributes when available.}
+\item{cell_type}{Optional cell type label stored in the output.}
 
 \item{version}{Nectar version pin used when validating genes against the
 cell-type universe.}
@@ -47,18 +45,19 @@ A data frame with one row per gene x design term: `gene` (ENSG),
   `dispersion`.
 }
 \description{
-Point estimates come from [edgeR::mglmOneGroup()] with the TMM offset
-applied directly. [edgeR::glmQLFit()] is used only for the QL Wald SE.
+Wrapper over [design_from_formula()] and [estimate_logmu_ql()]. Resolves
+counts / offsets / gene ids from a matrix, SummarizedExperiment, Seurat,
+or [scale_to_hca_reference()] object, fits **all genes**, then optionally
+filters to `genes`.
 }
 \details{
-`data` may be a matrix, `SummarizedExperiment` / `SingleCellExperiment`,
-`Seurat` object, or the output of [scale_to_hca_reference()]. Sample
-metadata (including `hca_offset`) is taken from `metadata`, from
-`colData` / `meta.data`, or from alignment attributes on scaled objects.
-A plain matrix with no attached metadata requires an explicit `metadata`
-argument.
-
-`formula` defines the edgeR design matrix, e.g. `~ 0 + Category` for
-group means. All variables in the formula must appear as columns in the
-resolved metadata.
+For a matrix-only pipeline:
+\preformatted{
+  design <- design_from_formula(~ 0 + Category, metadata)
+  est <- estimate_logmu_ql(counts, offset, design)
+}
+}
+\seealso{
+[design_from_formula()], [estimate_logmu_ql()],
+  [scale_to_hca_reference()]
 }

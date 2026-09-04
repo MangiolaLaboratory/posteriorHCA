@@ -76,23 +76,11 @@ validate_sccomp_metadata_value <- function(fit, column, value, arg_name) {
   if (is_missing_sccomp_choice(value)) {
     return(invisible(NULL))
   }
-  if (length(value) != 1L) {
-    cli_abort("`{arg_name}` must be a single value or `NA`.")
-  }
   cd <- sccomp_count_data(fit)
-  if (!column %in% names(cd)) {
-    cli_abort("Metadata column `{column}` is not available in the sccomp fit.")
-  }
   valid <- unique(as.character(cd[[column]]))
-  valid <- valid[!is.na(valid) & nzchar(valid)]
-  value <- as.character(value)
+  value <- as.character(value[[1]])
   if (!value %in% valid) {
-    cli_abort(
-      c(
-        "`{arg_name}` must be one of the values seen in the sccomp training data.",
-        "i" = "Got `{value}`; available values: {paste(valid, collapse = ', ')}"
-      )
-    )
+    cli_abort("`{arg_name}` = `{value}` is not in the sccomp training data.")
   }
   invisible(NULL)
 }
@@ -114,9 +102,6 @@ build_sccomp_newdata <- function(
   tissue_groups = NA
 ) {
   fit <- sccomp_fit_object(fit)
-  if (missing(sample_id) || is.null(sample_id) || length(sample_id) != 1L) {
-    cli_abort("`sample_id` must be a single identifier.")
-  }
 
   validate_sccomp_metadata_value(fit, "age_decade", age_decade, "age_decade")
   validate_sccomp_metadata_value(fit, "sex", sex, "sex")
@@ -134,22 +119,18 @@ build_sccomp_newdata <- function(
   )
   validate_sccomp_metadata_value(fit, "tissue_groups", tissue_groups, "tissue_groups")
 
+  as_chr_or_na <- function(x) {
+    if (is_missing_sccomp_choice(x)) NA_character_ else as.character(x[[1]])
+  }
+
   data.frame(
-    sample_id = as.character(sample_id),
-    age_decade = if (is_missing_sccomp_choice(age_decade)) NA else as.character(age_decade),
-    sex = if (is_missing_sccomp_choice(sex)) NA else as.character(sex),
-    ethnicity_groups_imputed = if (is_missing_sccomp_choice(ethnicity_groups)) {
-      NA
-    } else {
-      as.character(ethnicity_groups)
-    },
-    assay_groups___altered = if (is_missing_sccomp_choice(assay_groups)) {
-      NA
-    } else {
-      as.character(assay_groups)
-    },
-    dataset_id___altered = NA,
-    tissue_groups = if (is_missing_sccomp_choice(tissue_groups)) NA else as.character(tissue_groups),
+    sample_id = as.character(sample_id[[1]]),
+    age_decade = as_chr_or_na(age_decade),
+    sex = as_chr_or_na(sex),
+    ethnicity_groups_imputed = as_chr_or_na(ethnicity_groups),
+    assay_groups___altered = as_chr_or_na(assay_groups),
+    dataset_id___altered = NA_character_,
+    tissue_groups = as_chr_or_na(tissue_groups),
     stringsAsFactors = FALSE
   )
 }

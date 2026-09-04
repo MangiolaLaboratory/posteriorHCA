@@ -1,0 +1,139 @@
+---
+title: "Composition workflow"
+author: "Chen Zhan"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Composition workflow}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.width = 8,
+  fig.height = 5,
+  message = FALSE,
+  warning = FALSE
+)
+
+can_run <- requireNamespace("sccomp", quietly = TRUE) &&
+  requireNamespace("ggplot2", quietly = TRUE)
+
+if (requireNamespace("devtools", quietly = TRUE)) {
+  pkg_root <- if (file.exists("DESCRIPTION") && dir.exists("R")) {
+    normalizePath(".")
+  } else if (file.exists("../DESCRIPTION") && dir.exists("../R")) {
+    normalizePath("..")
+  } else {
+    NULL
+  }
+  if (!is.null(pkg_root)) {
+    devtools::load_all(pkg_root, quiet = TRUE)
+  }
+}
+```
+
+This vignette walks through the **composition vs healthy HCA baseline**
+workflow, mirroring the modular gene-expression design:
+
+1. Load the healthy sccomp model
+2. Draw posterior predictive proportions
+3. Test observed proportions (empirical confidence)
+4. Plot healthy draws and observed overlays
+
+## Setup
+
+```{r libraries, eval = can_run}
+library(posteriorHCA)
+library(ggplot2)
+
+data(example_proportions)
+example_proportions
+```
+
+## Load the healthy sccomp reference
+
+```{r load-fit, eval = can_run}
+fit <- load_sccomp_fit()
+```
+
+## Draw healthy reference proportions
+
+Unknown covariates can be left as `NA`; sccomp marginalises over them.
+
+```{r draws, eval = can_run}
+comp <- composition_draws(
+  fit,
+  sex = "male",
+  age_decade = "4",
+  ethnicity_groups = "European",
+  assay_groups = "10x Genomics 3",
+  tissue_groups = "blood"
+)
+head(comp$draws)
+```
+
+## Test observed proportions
+
+```{r test, eval = can_run}
+test_results <- composition_test(
+  proportions = example_proportions,
+  draws = comp
+)
+test_results
+```
+
+For a single sample:
+
+```{r test-sample, eval = can_run}
+composition_test_sample(
+  proportions = example_proportions,
+  draws = comp,
+  sample_id = "ID1"
+)
+```
+
+## Plot
+
+```{r plot-draws, eval = can_run, fig.asp = 0.7}
+plot_composition_draws(
+  comp,
+  cell_types = unique(example_proportions$cell_type),
+  subtitle = "Healthy HCA baseline"
+)
+```
+
+```{r plot-vs-hca, eval = can_run, fig.asp = 0.7}
+plot_composition_vs_hca(
+  draws = comp,
+  test_results = test_results,
+  subtitle = "Observed proportions vs healthy baseline"
+)
+```
+
+## Convenience wrapper
+
+`composition_posterior_test()` still bundles load → draws → test → plot:
+
+```{r wrapper, eval = can_run, fig.asp = 0.7}
+result <- composition_posterior_test(
+  proportions = example_proportions,
+  sex = "male",
+  age_decade = "4",
+  ethnicity_groups = "European",
+  assay_groups = "10x Genomics 3",
+  tissue_groups = "blood",
+  fit = fit
+)
+result$result_table
+result$plot
+```
+
+## Session info
+
+```{r session-info}
+sessionInfo()
+```

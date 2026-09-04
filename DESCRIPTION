@@ -14,7 +14,6 @@ Imports:
     scales,
     ggplot2,
     sccomp,
-    dittoSeq,
     tools,
     httr,
     cli,
@@ -33,6 +32,7 @@ Collate:
     'composition-query.R'
     'inference-welch.R'
     'inference-cohort.R'
+    'inference-composition.R'
     'inference-sample.R'
     'plots.R'
     'method.R'
@@ -48,7 +48,8 @@ Suggests:
     SingleCellExperiment,
     Seurat,
     SeuratObject,
-    S4Vectors
+    S4Vectors,
+    dittoSeq
 Config/testthat/edition: 3
 VignetteBuilder: knitr
 Config/roxygen2/version: 8.0.0

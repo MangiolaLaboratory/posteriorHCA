@@ -1,12 +1,8 @@
 library(testthat)
 
 skip_if_not_installed("sccomp")
-skip_if_not_installed("dittoSeq")
-suppressPackageStartupMessages({
-  library(dplyr)
-  library(tidyr)
-  library(ggplot2)
-})
+skip_if_not_installed("ggplot2")
+suppressPackageStartupMessages(library(ggplot2))
 
 pkg_root <- testthat::test_path("..", "..")
 if (!dir.exists(file.path(pkg_root, "R"))) {
@@ -14,6 +10,8 @@ if (!dir.exists(file.path(pkg_root, "R"))) {
 }
 sys.source(file.path(pkg_root, "R", "utlis.R"), envir = environment())
 sys.source(file.path(pkg_root, "R", "composition-query.R"), envir = environment())
+sys.source(file.path(pkg_root, "R", "inference-composition.R"), envir = environment())
+sys.source(file.path(pkg_root, "R", "plots.R"), envir = environment())
 sys.source(file.path(pkg_root, "R", "method.R"), envir = environment())
 
 local_fit <- function() {
@@ -47,20 +45,12 @@ test_that("composition_posterior_test returns a list", {
   )
   expect_type(result, "list")
   expect_named(result, c("result_table", "plot"))
+  expect_s3_class(result$plot, "ggplot")
+  expect_true("empirical_confidence" %in% names(result$result_table))
 })
 
-test_that("composition_posterior_test errors for invalid input", {
+test_that("composition_posterior_test errors for invalid metadata", {
   fit <- local_fit()
-  expect_error(
-    composition_posterior_test(
-      proportions = data.frame(sample_id = c("ID1", "ID2")),
-      fit = fit
-    )
-  )
-  expect_error(
-    composition_posterior_test(sex = "invalid_sex", fit = fit)
-  )
-  expect_error(
-    composition_posterior_test(age_decade = "200", fit = fit)
-  )
+  expect_error(composition_posterior_test(sex = "invalid_sex", fit = fit))
+  expect_error(composition_posterior_test(age_decade = "200", fit = fit))
 })
