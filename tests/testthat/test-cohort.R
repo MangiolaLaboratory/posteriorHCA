@@ -197,9 +197,6 @@ test_that("SummarizedExperiment input returns SummarizedExperiment", {
   expect_s4_class(aligned, "SummarizedExperiment")
   expect_equal(ncol(aligned), 5L)
   expect_equal(unname(aligned_fields(aligned)$offset[["hca_reference"]]), 0)
-
-  est <- estimate_cohort_logmu(aligned, formula = ~ 0 + condition)
-  expect_setequal(est$group, c("A", "B", "reference"))
 })
 
 test_that("Seurat input returns Seurat", {
@@ -236,148 +233,40 @@ test_that("Seurat colnames are preserved after scale_to_hca_reference", {
   )
 })
 
-test_that("design_from_formula builds cleaned cell-means columns", {
-  meta <- data.frame(
-    cohort = factor(c("A", "A", "B", "B", "reference")),
-    row.names = paste0("s", 1:5),
-    stringsAsFactors = FALSE
-  )
-  design <- design_from_formula(~ 0 + cohort, meta)
-  expect_equal(colnames(design), c("A", "B", "reference"))
-  expect_equal(nrow(design), 5L)
-  expect_equal(as.numeric(rowSums(design)), rep(1, 5))
-})
-
-test_that("estimate_logmu_ql returns all genes; wrapper filters", {
+test_that("estimate_logmu_ql returns one row per gene x group on user libraries", {
   toy <- toy_counts()
-  aligned <- suppressMessages(scale_to_hca_reference(toy$user, toy$ref))
-  meta <- aligned_fields(aligned)$sample_metadata
-  meta$cohort <- c("A", "A", "B", "B", "reference")
-  counts <- as.matrix(aligned)
-  offset <- aligned_fields(aligned)$offset
-  design <- design_from_formula(~ 0 + cohort, meta)
+  combined <- merge_with_reference_sample(toy$user, toy$ref, reference_name = "hca_ref")
+  scaling <- calculate_tmm_offset(combined, reference_name = "hca_ref")
+  user_offset <- scaling$offset[colnames(toy$user)]
 
-  est_all <- estimate_logmu_ql(counts, offset = offset, design = design)
-  expect_equal(nrow(est_all), nrow(counts) * ncol(design))
-  expect_setequal(est_all$group, c("A", "B", "reference"))
-
-  est_wrap <- estimate_cohort_logmu(
-    aligned,
-    metadata = meta,
-    formula = ~ 0 + cohort,
-    genes = "g1"
-  )
-  est_core <- est_all[est_all$gene == "g1", , drop = FALSE]
-  expect_equal(est_core$group, est_wrap$group)
-  expect_equal(est_core$log_mu, est_wrap$log_mu, tolerance = 1e-10)
-  expect_equal(est_core$se, est_wrap$se, tolerance = 1e-10)
-})
-
-test_that("estimate_cohort_logmu returns one row per gene x group", {
-  toy <- toy_counts()
-  aligned <- suppressMessages(scale_to_hca_reference(toy$user, toy$ref))
-  meta <- aligned_fields(aligned)$sample_metadata
-  meta$cohort <- c("A", "A", "B", "B", "reference")
-  est <- estimate_cohort_logmu(
-    aligned,
-    metadata = meta,
-    formula = ~ 0 + cohort
-  )
-  expect_equal(nrow(est), 20L * 3L)
-  expect_setequal(est$group, c("A", "B", "reference"))
-  expect_true(all(c("log_mu", "mu", "se", "df", "dispersion", "n") %in% names(est)))
-  expect_true(all(is.finite(est$log_mu)))
-  expect_true(all(est$se > 0))
-})
-
-test_that("estimate_cohort_logmu accepts metadata with user-only cohort labels", {
-  toy <- toy_counts()
-  aligned <- suppressMessages(scale_to_hca_reference(toy$user, toy$ref))
-  meta <- aligned_fields(aligned)$sample_metadata
-  meta$cohort <- c("A", "A", "B", "B", NA_character_)
-  est <- estimate_cohort_logmu(
-    aligned,
-    metadata = meta,
-    formula = ~ 0 + cohort
-  )
-  expect_setequal(est$group, c("A", "B", "reference"))
-})
-
-test_that("estimate_cohort_logmu accepts metadata for matrix input", {
-  toy <- toy_counts()
-  aligned <- suppressMessages(scale_to_hca_reference(toy$user, toy$ref))
-  meta <- aligned_fields(aligned)$sample_metadata
-  meta$cohort <- c("A", "A", "B", "B", "reference")
-  est <- estimate_cohort_logmu(
-    aligned,
-    metadata = meta,
-    formula = ~ 0 + cohort,
-    genes = "g1"
-  )
-  expect_setequal(est$group, c("A", "B", "reference"))
-})
-
-test_that("plain matrix input requires metadata", {
-  toy <- toy_counts()
-  expect_error(
-    estimate_cohort_logmu(toy$user, formula = ~ 1),
-    "Plain matrix input requires `metadata`"
-  )
-})
-
-test_that("metadata must contain hca_offset", {
-  toy <- toy_counts()
-  meta <- data.frame(
-    cohort = rep("A", ncol(toy$user)),
+  sample_metadata <- data.frame(
+    cohort = factor(c("A", "A", "B", "B")),
     row.names = colnames(toy$user),
     stringsAsFactors = FALSE
   )
+  design_matrix <- model.matrix(~ 0 + cohort, data = sample_metadata)
+  colnames(design_matrix) <- sub("^cohort", "", colnames(design_matrix))
+
+  expression_estimates <- estimate_logmu_ql(
+    toy$user,
+    user_offset,
+    design_matrix
+  )
+  expect_equal(nrow(expression_estimates), nrow(toy$user) * ncol(design_matrix))
+  expect_setequal(expression_estimates$group, c("A", "B"))
+  expect_true(all(c("gene", "group", "n", "log_mu", "mu", "se", "df", "dispersion") %in% names(expression_estimates)))
+  expect_false("cell_type" %in% names(expression_estimates))
+  expect_true(all(is.finite(expression_estimates$log_mu)))
+  expect_true(all(expression_estimates$se > 0))
+})
+
+test_that("estimate_logmu_ql errors when design rows do not match samples", {
+  toy <- toy_counts()
+  design_matrix <- model.matrix(~ 0 + factor(c("A", "B")))
   expect_error(
-    estimate_cohort_logmu(toy$user, metadata = meta, formula = ~ 1),
-    "Metadata must contain `hca_offset`"
+    estimate_logmu_ql(toy$user, rep(0, 4), design_matrix),
+    "must match"
   )
-})
-
-test_that("formula variables must exist in metadata", {
-  toy <- toy_counts()
-  aligned <- suppressMessages(scale_to_hca_reference(toy$user, toy$ref))
-  expect_error(
-    estimate_cohort_logmu(aligned, formula = ~ 0 + missing_column),
-    "Formula variables not found in metadata"
-  )
-})
-
-test_that("estimate_cohort_logmu accepts metadata column names for SummarizedExperiment", {
-  skip_if_not_installed("SummarizedExperiment")
-  toy <- toy_counts()
-  mat <- toy$user
-  coldata <- data.frame(
-    group = c("A", "A", "B", "B"),
-    row.names = colnames(mat),
-    stringsAsFactors = FALSE
-  )
-  se <- SummarizedExperiment::SummarizedExperiment(
-    assays = list(counts = mat),
-    colData = coldata
-  )
-  aligned <- suppressMessages(scale_to_hca_reference(se, toy$ref))
-  est <- estimate_cohort_logmu(aligned, formula = ~ 0 + group, genes = "g1")
-  expect_setequal(est$group, c("A", "B", "reference"))
-})
-
-test_that("estimate_cohort_logmu can report a gene subset", {
-  toy <- toy_counts()
-  aligned <- suppressMessages(scale_to_hca_reference(toy$user, toy$ref))
-  meta <- aligned_fields(aligned)$sample_metadata
-  meta$cohort <- c("A", "A", "B", "B", "reference")
-  est <- estimate_cohort_logmu(
-    aligned,
-    metadata = meta,
-    formula = ~ 0 + cohort,
-    genes = c("g1", "g2")
-  )
-  expect_equal(nrow(est), 6L)
-  expect_setequal(est$gene, c("g1", "g2"))
 })
 
 test_that("a gene-specific count increase raises log_mu", {
@@ -391,17 +280,27 @@ test_that("a gene-specific count increase raises log_mu", {
   counts["g1", 1:3] <- rnbinom(3, mu = 8, size = 8)
   counts["g1", 4:6] <- rnbinom(3, mu = 120, size = 8)
   ref <- setNames(as.numeric(rnbinom(30, mu = 40, size = 8)), genes)
-  aligned <- suppressMessages(scale_to_hca_reference(counts, ref))
-  meta <- aligned_fields(aligned)$sample_metadata
-  meta$cohort <- c(rep("low", 3), rep("high", 3), "reference")
-  est <- estimate_cohort_logmu(
-    aligned,
-    metadata = meta,
-    formula = ~ 0 + cohort,
-    genes = "g1"
+
+  combined <- merge_with_reference_sample(counts, ref, reference_name = "hca_ref")
+  scaling <- calculate_tmm_offset(combined, reference_name = "hca_ref")
+  user_offset <- scaling$offset[colnames(counts)]
+
+  sample_metadata <- data.frame(
+    cohort = factor(c(rep("low", 3), rep("high", 3))),
+    row.names = colnames(counts),
+    stringsAsFactors = FALSE
   )
-  log_low <- est$log_mu[est$group == "low"]
-  log_high <- est$log_mu[est$group == "high"]
+  design_matrix <- model.matrix(~ 0 + cohort, data = sample_metadata)
+  colnames(design_matrix) <- sub("^cohort", "", colnames(design_matrix))
+
+  expression_estimates <- estimate_logmu_ql(counts, user_offset, design_matrix)
+  expression_estimates <- expression_estimates[
+    expression_estimates$gene == "g1",
+    ,
+    drop = FALSE
+  ]
+  log_low <- expression_estimates$log_mu[expression_estimates$group == "low"]
+  log_high <- expression_estimates$log_mu[expression_estimates$group == "high"]
   expect_gt(log_high, log_low)
 })
 

@@ -21,10 +21,10 @@ bootstrap_logmu_mglm(y, offset, dispersion, n_boot = 2000L, seed = NULL)
 Numeric vector of length `n_boot`.
 }
 \description{
-Core matrix helper. Repeatedly draws Dirichlet(1,…,1) weights and fits
+Repeatedly draws Dirichlet(1,…,1) weights and fits
 [edgeR::mglmOneGroup()] for a single gene (one row of counts). Returns
 posterior draws of latent log(μ) on the supplied offset scale.
 }
 \seealso{
-[bootstrap_cohort_logmu()], [estimate_logmu_ql()]
+[estimate_dispersion_nb()], [estimate_logmu_ql()]
 }

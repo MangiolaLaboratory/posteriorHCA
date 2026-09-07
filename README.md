@@ -213,14 +213,16 @@ print(result$plot)
 
 ### **2. Gene Expression Prediction**
 
-The `expr_predict()` function allows predicting gene expression levels
-for specific cell types and genes based on sample metadata:
+Load a stored expression model and draw healthy posteriors with
+`load_expression_fit()`, `build_newdata_grid()`, and `expression_draws()`:
 
 ``` r
-# Predict gene expression for a specific cell type and gene
-expr_result <- expr_predict(
+expression_fit <- load_expression_fit(
   cell_type = "cd4 naive",
-  gene = "ENSG00000000419",
+  gene_ensg = "ENSG00000000419"
+)
+newdata <- build_newdata_grid(
+  expression_fit,
   age_decade = "7",
   sex = "female",
   disease_groups = "Normal",
@@ -228,11 +230,12 @@ expr_result <- expr_predict(
   assay_groups = "10x Genomics 3",
   tissue_groups = "blood"
 )
-#> ℹ Using cached file: /home/a1237163/.cache/R/posteriorHCA/meta/latest.csv
-#> ℹ Using cached file: /home/a1237163/.cache/R/posteriorHCA/V1/cd4.naive/genes.csv
-#> ℹ Using cached file: /home/a1237163/.cache/R/posteriorHCA/meta/latest.csv
-#> ℹ Using cached file: /home/a1237163/.cache/R/posteriorHCA/V1/cd4.naive/ENSG00000000419
-#> ℹ Covariate grid has 1 profile (all metadata fixed).
+posterior_draws <- expression_draws(
+  expression_fit,
+  newdata = newdata,
+  quantity = "linpred",
+  collapse = "mean"
+)
 ```
 
 #### Inspect Gene Expression Results
@@ -240,42 +243,21 @@ expr_result <- expr_predict(
 **Summary Statistics:**
 
 ``` r
-print(expr_result$summary)
-#> $mean
-#> [1] 4.420162
-#> 
-#> $median
-#> [1] 4.440863
-#> 
-#> $peak_location
-#> [1] 4.567612
+summarize_posterior_draws(posterior_draws)
 ```
 
 **Density Plot of Predicted Expression:**
 
 ``` r
-print(expr_result$plot)
+print(plot_hca_draws(posterior_draws))
 ```
 
 ![](README_files/figure-gfm/unnamed-chunk-12-1.png)<!-- -->
 
-**Predicted Values:**
-
-``` r
-head(expr_result$pred)
-#>      value
-#> 1 4.958353
-#> 2 4.829741
-#> 3 4.772091
-#> 4 4.446765
-#> 5 5.235605
-#> 6 3.406768
-```
-
 ## **Input Arguments and Valid Values**
 
-Both `composition_posterior_test()` / \[composition_draws()\] and
-\[expr_predict()\] accept metadata inputs corresponding to observed
+Both `composition_posterior_test()` / [composition_draws()] and
+[expression_draws()] accept metadata inputs corresponding to observed
 sample characteristics. For composition, the default healthy sccomp
 model uses **sex, age decade, ethnicity, assay, and tissue**. Unknown
 covariates can be set to `NA` and are marginalised automatically by

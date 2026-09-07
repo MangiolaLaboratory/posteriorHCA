@@ -50,5 +50,5 @@ helpers directly (see examples in `examples/savi_adrb2_workflow.R`).
 }
 \seealso{
 [merge_with_reference_sample()], [calculate_tmm_offset()],
-  [estimate_cohort_logmu()]
+  [estimate_logmu_ql()]
 }

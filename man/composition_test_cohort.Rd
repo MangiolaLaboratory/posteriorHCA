@@ -15,6 +15,5 @@ composition_test_cohort(proportions, draws)
 Same columns as [composition_test()].
 }
 \description{
-Thin wrapper around [composition_test()] kept for symmetry with
-[welch_t_test_cohort_hca()].
+Thin wrapper around [composition_test()].
 }

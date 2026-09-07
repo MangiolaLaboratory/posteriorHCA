@@ -14,8 +14,8 @@ plot_hca_draws(
 )
 }
 \arguments{
-\item{draws}{Posterior draws: numeric vector, or list from [expr_draws()] /
-[expr_predict()].}
+\item{draws}{Posterior draws: numeric vector, or list from
+[expression_draws()].}
 
 \item{quantity}{Quantity for bare numeric `draws`. Otherwise inferred from
 `draws$quantity`.}
@@ -32,6 +32,6 @@ plot_hca_draws(
 A `ggplot` object.
 }
 \description{
-Visualises posterior draws from [expr_draws()] or [expr_predict()]. For
-cohort comparisons against a healthy baseline, use [plot_cohort_vs_hca()].
+Visualises posterior draws from [expression_draws()]. For cohort
+comparisons against a healthy baseline, use [plot_cohort_vs_hca()].
 }

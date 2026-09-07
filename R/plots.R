@@ -1,7 +1,7 @@
 # Plotting utilities for posteriorHCA expression outputs
 
 #' Extract posterior draws and metadata from common result objects
-#' @param x Output from [expr_draws()], [expr_predict()], or a numeric vector.
+#' @param x Output from [expression_draws()], or a numeric vector.
 #' @param quantity Override quantity when `x` is a bare numeric vector.
 #' @keywords internal
 #' @noRd
@@ -16,26 +16,22 @@ normalize_draws_input <- function(x, quantity = NULL) {
       draws = as.numeric(x),
       quantity = match.arg(quantity, c("linpred", "predict", "epred")),
       gene_ensg = NA_character_,
-      gene_symbol = NA_character_,
       cell_type = NA_character_
     ))
   }
 
   if (!is.list(x) || is.data.frame(x)) {
     cli::cli_abort(
-      "`draws` must be a numeric vector or a list from [expr_draws()] / [expr_predict()]."
+      "`draws` must be a numeric vector or a list from [expression_draws()]."
     )
   }
 
-  draws_vec <- if ("draws" %in% names(x)) {
-    x$draws
-  } else if ("pred" %in% names(x) && is.data.frame(x$pred) && "value" %in% names(x$pred)) {
-    x$pred$value
-  } else {
+  if (!"draws" %in% names(x)) {
     cli::cli_abort(
-      "Could not find posterior draws in `draws` (expected `$draws` or `$pred$value`)."
+      "Could not find posterior draws in `draws` (expected `$draws`)."
     )
   }
+  draws_vec <- x$draws
 
   if (!is.numeric(draws_vec) || length(draws_vec) < 2L) {
     cli::cli_abort("`draws` must contain at least 2 numeric posterior draws.")
@@ -49,12 +45,11 @@ normalize_draws_input <- function(x, quantity = NULL) {
     "linpred"
   }
 
-  meta <- expr_metadata(x)
+  meta <- expression_metadata(x)
   list(
     draws = as.numeric(draws_vec),
     quantity = qty,
     gene_ensg = meta$gene_ensg,
-    gene_symbol = meta$gene_symbol,
     cell_type = meta$cell_type
   )
 }
@@ -73,73 +68,42 @@ normalize_cohort_plot_df <- function(
     cli::cli_abort("`cohort_results` must be a non-empty data frame.")
   }
 
-  if (all(c("cohort", "cohort_log_mu") %in% names(cohort_results))) {
-    out <- data.frame(
-      group = as.character(cohort_results$cohort),
-      log_mu = as.numeric(cohort_results$cohort_log_mu),
-      se = if ("cohort_se" %in% names(cohort_results)) {
-        as.numeric(cohort_results$cohort_se)
-      } else {
-        NA_real_
-      },
-      method = if ("method" %in% names(cohort_results)) {
-        as.character(cohort_results$method)
-      } else {
-        "welch"
-      },
-      direction = if ("direction" %in% names(cohort_results)) {
-        as.character(cohort_results$direction)
-      } else {
-        NA_character_
-      },
-      p_value = if ("p_value" %in% names(cohort_results)) {
-        as.numeric(cohort_results$p_value)
-      } else {
-        NA_real_
-      },
-      empirical_rank = if ("empirical_rank" %in% names(cohort_results)) {
-        as.numeric(cohort_results$empirical_rank)
-      } else {
-        NA_real_
-      },
-      stringsAsFactors = FALSE
-    )
-  } else if (all(c("group", "log_mu") %in% names(cohort_results))) {
-    out <- data.frame(
-      group = as.character(cohort_results$group),
-      log_mu = as.numeric(cohort_results$log_mu),
-      se = if ("se" %in% names(cohort_results)) {
-        as.numeric(cohort_results$se)
-      } else {
-        NA_real_
-      },
-      method = if ("method" %in% names(cohort_results)) {
-        as.character(cohort_results$method)
-      } else {
-        "ql"
-      },
-      direction = if ("direction" %in% names(cohort_results)) {
-        as.character(cohort_results$direction)
-      } else {
-        NA_character_
-      },
-      p_value = if ("p_value" %in% names(cohort_results)) {
-        as.numeric(cohort_results$p_value)
-      } else {
-        NA_real_
-      },
-      empirical_rank = if ("empirical_rank" %in% names(cohort_results)) {
-        as.numeric(cohort_results$empirical_rank)
-      } else {
-        NA_real_
-      },
-      stringsAsFactors = FALSE
-    )
-  } else {
+  if (!all(c("group", "log_mu") %in% names(cohort_results))) {
     cli::cli_abort(
-      "`cohort_results` must be from [welch_t_test_cohort_hca()], [estimate_cohort_logmu()], or [bootstrap_cohort_logmu_batch()]."
+      "`cohort_results` must contain `group` and `log_mu` columns."
     )
   }
+
+  out <- data.frame(
+    group = as.character(cohort_results$group),
+    log_mu = as.numeric(cohort_results$log_mu),
+    se = if ("se" %in% names(cohort_results)) {
+      as.numeric(cohort_results$se)
+    } else {
+      NA_real_
+    },
+    method = if ("method" %in% names(cohort_results)) {
+      as.character(cohort_results$method)
+    } else {
+      "ql"
+    },
+    direction = if ("direction" %in% names(cohort_results)) {
+      as.character(cohort_results$direction)
+    } else {
+      NA_character_
+    },
+    p_value = if ("p_value" %in% names(cohort_results)) {
+      as.numeric(cohort_results$p_value)
+    } else {
+      NA_real_
+    },
+    empirical_rank = if ("empirical_rank" %in% names(cohort_results)) {
+      as.numeric(cohort_results$empirical_rank)
+    } else {
+      NA_real_
+    },
+    stringsAsFactors = FALSE
+  )
 
   if (!is.null(exclude_groups) && length(exclude_groups)) {
     out <- out[!out$group %in% exclude_groups, , drop = FALSE]
@@ -160,7 +124,7 @@ normalize_test_results_plot_df <- normalize_cohort_plot_df
 #' X-axis label for an expression-model quantity
 #' @keywords internal
 #' @noRd
-expr_quantity_xlab <- function(quantity) {
+expression_quantity_xlab <- function(quantity) {
   switch(
     quantity,
     linpred = "log(mu)",
@@ -188,9 +152,7 @@ apply_quantity_x_scale <- function(plot, quantity, xlab) {
 #' @keywords internal
 #' @noRd
 default_hca_draws_title <- function(meta, quantity, comparison = FALSE) {
-  gene_lab <- if (!is.na(meta$gene_symbol) && nzchar(meta$gene_symbol)) {
-    meta$gene_symbol
-  } else if (!is.na(meta$gene_ensg) && nzchar(meta$gene_ensg)) {
+  gene_lab <- if (!is.na(meta$gene_ensg) && nzchar(meta$gene_ensg)) {
     meta$gene_ensg
   } else {
     "Gene"
@@ -225,7 +187,7 @@ build_hca_density_plot <- function(
   quantity,
   fill = "#4C78A8"
 ) {
-  xlab <- expr_quantity_xlab(quantity)
+  xlab <- expression_quantity_xlab(quantity)
   plot_df <- data.frame(value = draws_vec)
 
   p <- ggplot(plot_df, aes(x = .data$value)) +
@@ -399,11 +361,11 @@ add_cohort_overlay <- function(
 
 #' Density plot of healthy HCA posterior draws
 #'
-#' Visualises posterior draws from [expr_draws()] or [expr_predict()]. For
-#' cohort comparisons against a healthy baseline, use [plot_cohort_vs_hca()].
+#' Visualises posterior draws from [expression_draws()]. For cohort
+#' comparisons against a healthy baseline, use [plot_cohort_vs_hca()].
 #'
-#' @param draws Posterior draws: numeric vector, or list from [expr_draws()] /
-#'   [expr_predict()].
+#' @param draws Posterior draws: numeric vector, or list from
+#'   [expression_draws()].
 #' @param quantity Quantity for bare numeric `draws`. Otherwise inferred from
 #'   `draws$quantity`.
 #' @param baseline_label Caption label for the HCA density curve.
@@ -440,17 +402,14 @@ plot_hca_draws <- function(
 #' Plot cohort log(mu) estimates against healthy HCA posterior draws
 #'
 #' Visualises cohort log(mu) estimates against healthy HCA posterior draws.
-#' Accepts outputs from [welch_t_test_cohort_hca()], [estimate_cohort_logmu()],
-#' or [bootstrap_cohort_logmu_batch()].
+#' Pass a data frame with at least `group` and `log_mu` (and optionally `se`,
+#' `p_value`, `direction`).
 #'
-#' @param hca_draws Posterior draws from [expr_draws()] or [expr_predict()].
+#' @param hca_draws Posterior draws from [expression_draws()].
 #'   Must use `quantity = "linpred"` because cohort tests are on log(mu).
-#' @param test_results Optional data frame from [welch_t_test_cohort_hca()].
-#' @param cohort_est Optional data frame from [estimate_cohort_logmu()] or
-#'   [bootstrap_cohort_logmu_batch()]. Used when `test_results` is not supplied.
+#' @param cohort_est Data frame with cohort estimates (`group`, `log_mu`, ...).
 #' @param exclude_groups Character vector of cohort labels to omit.
-#' @param show_se If `TRUE`, draw horizontal error bars for cohort `log_mu +/- se`
-#'   (or `cohort_log_mu +/- cohort_se` for Welch output).
+#' @param show_se If `TRUE`, draw horizontal error bars for cohort `log_mu +/- se`.
 #' @param stagger_heights If `TRUE`, place each cohort marker at a different
 #'   height above the density to reduce overlap.
 #' @param colour_by Colour cohort markers by `"cohort"` or `"direction"`.
@@ -466,8 +425,7 @@ plot_hca_draws <- function(
 #' @importFrom cli cli_abort
 plot_cohort_vs_hca <- function(
   hca_draws,
-  test_results = NULL,
-  cohort_est = NULL,
+  cohort_est,
   exclude_groups = character(0),
   show_se = TRUE,
   stagger_heights = TRUE,
@@ -478,20 +436,15 @@ plot_cohort_vs_hca <- function(
   title = NULL,
   subtitle = NULL
 ) {
-  if (is.null(test_results) && is.null(cohort_est)) {
-    cli::cli_abort("Provide `test_results` and/or `cohort_est`.")
-  }
-
   norm <- normalize_draws_input(hca_draws)
   if (!identical(norm$quantity, "linpred")) {
     cli::cli_abort(
-      "`plot_cohort_vs_hca()` requires `quantity = \"linpred\"` draws from [expr_draws()]."
+      "`plot_cohort_vs_hca()` requires `quantity = \"linpred\"` draws from [expression_draws()]."
     )
   }
 
-  cohort_input <- if (!is.null(test_results)) test_results else cohort_est
   cohort_df <- normalize_cohort_plot_df(
-    cohort_input,
+    cohort_est,
     exclude_groups = exclude_groups
   )
 

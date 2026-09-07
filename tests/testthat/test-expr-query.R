@@ -55,9 +55,9 @@ test_that("levels_from_coef_names strips the column prefix", {
   )
 })
 
-test_that("expr_model_levels includes the reference category from data", {
+test_that("expression_model_levels includes the reference category from data", {
   fit <- fake_expr_fit()
-  assay_lv <- expr_model_levels(fit, "assay_groups")
+  assay_lv <- expression_model_levels(fit, "assay_groups")
   expect_true("10x Genomics 3" %in% assay_lv)
   expect_true("10x Genomics 5" %in% assay_lv)
 })
@@ -115,7 +115,7 @@ test_that("NA assay expands every assay in the model", {
   expect_equal(nrow(grid), 2L)
   expect_setequal(
     as.character(unique(grid$assay_groups_altered)),
-    expr_model_levels(fit, "assay_groups")
+    expression_model_levels(fit, "assay_groups")
   )
 })
 
@@ -212,7 +212,7 @@ test_that("marginalize_draw_matrix is a no-op for a single profile", {
   expect_equal(marginalize_draw_matrix(y, "pool"), 1:4)
 })
 
-test_that("expr_draws rejects a bad quantity before calling brms", {
+test_that("expression_draws rejects a bad quantity before calling brms", {
   fit <- fake_expr_fit()
   grid <- suppressMessages(build_newdata_grid(
     fit,
@@ -224,38 +224,10 @@ test_that("expr_draws rejects a bad quantity before calling brms", {
     tissue_groups = "blood"
   ))
   expect_error(
-    expr_draws(fit, grid, quantity = "log_mu"),
+    expression_draws(fit, grid, quantity = "log_mu"),
     "arg"
   )
 })
 
-test_that("resolve_expr_fit accepts a posteriorHCA_expr_fit", {
-  fit <- new_expr_fit(
-    fit = fake_expr_fit(),
-    cell_type = "monocytic",
-    gene_ensg = "ENSG00000169252",
-    gene_symbol = "ADRB2"
-  )
-  out <- resolve_expr_fit(fit = fit)
-  expect_identical(out, fit)
-})
 
-test_that("resolve_expr_fit requires cell_type and gene when fit is missing", {
-  expect_error(
-    resolve_expr_fit(),
-    "Supply `fit`"
-  )
-})
 
-test_that("resolve_expr_fit errors when fit and gene disagree", {
-  fit <- new_expr_fit(
-    fit = fake_expr_fit(),
-    cell_type = "monocytic",
-    gene_ensg = "ENSG00000169252",
-    gene_symbol = "ADRB2"
-  )
-  expect_error(
-    resolve_expr_fit(fit = fit, gene = "ENSG00000073756"),
-    "does not match `fit`"
-  )
-})

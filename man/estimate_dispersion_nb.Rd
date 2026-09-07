@@ -18,9 +18,9 @@ from [calculate_tmm_offset()].}
 Named numeric vector of dispersions (names = gene ids).
 }
 \description{
-Core matrix helper. Fits an intercept-only edgeR QL model and returns the
-gene-wise dispersion vector. Prefer this over fitting a one-gene matrix
-alone: dispersion shrinks better with many genes.
+Fits an intercept-only edgeR QL model and returns the gene-wise dispersion
+vector. Prefer this over fitting a one-gene matrix alone: dispersion
+shrinks better with many genes.
 }
 \seealso{
 [estimate_logmu_ql()], [bootstrap_logmu_mglm()]

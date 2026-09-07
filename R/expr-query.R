@@ -8,7 +8,7 @@
 # dataset_id is different: it is a random intercept for the training studies,
 # so NA means "new unseen study", not "average every training dataset".
 
-.expr_meta_map <- list(
+.expression_meta_map <- list(
   age_decade = c("age_decade"),
   sex = c("sex"),
   disease_groups = c(
@@ -90,14 +90,14 @@ is_missing_choice <- function(x) {
 #'   actual column name in `fit$data`.
 #' @return Character vector of allowed levels.
 #' @export
-expr_model_levels <- function(fit, variable) {
+expression_model_levels <- function(fit, variable) {
   fit <- as_brms_fit(fit)
   if (is.null(fit$data)) {
     cli::cli_abort("`fit` must have a `$data` element.")
   }
 
-  if (variable %in% names(.expr_meta_map)) {
-    column <- find_fit_column(fit, .expr_meta_map[[variable]])
+  if (variable %in% names(.expression_meta_map)) {
+    column <- find_fit_column(fit, .expression_meta_map[[variable]])
   } else if (variable %in% names(fit$data)) {
     column <- variable
   } else {
@@ -198,7 +198,7 @@ build_newdata_grid <- function(
   marginalised_vars <- character(0)
 
   for (var in names(user_choices)) {
-    column <- find_fit_column(fit, .expr_meta_map[[var]])
+    column <- find_fit_column(fit, .expression_meta_map[[var]])
     choice <- user_choices[[var]]
 
     if (is.na(column)) {
@@ -210,7 +210,7 @@ build_newdata_grid <- function(
       next
     }
 
-    available <- expr_model_levels(fit, var)
+    available <- expression_model_levels(fit, var)
     if (length(available) == 0L) {
       cli_abort("Model column `{column}` has no usable levels.")
     }
@@ -279,37 +279,37 @@ build_newdata_grid <- function(
 
 #' Collapse a draws-by-profile matrix over the covariate grid
 #'
-#' @param y_mat Matrix: rows = posterior draws, columns = grid rows.
+#' @param draw_matrix Matrix: rows = posterior draws, columns = grid rows.
 #' @param method `"mean"` averages profiles within each draw (grand mean).
 #'   `"pool"` stacks every draw x profile (mixture / density). `"sample"`
 #'   picks one profile at random for each draw.
 #' @return A numeric vector.
 #' @export
-marginalize_draw_matrix <- function(y_mat, method = c("mean", "pool", "sample")) {
+marginalize_draw_matrix <- function(draw_matrix, method = c("mean", "pool", "sample")) {
   method <- match.arg(method)
 
-  if (is.null(dim(y_mat))) {
-    return(as.numeric(y_mat))
+  if (is.null(dim(draw_matrix))) {
+    return(as.numeric(draw_matrix))
   }
-  if (ncol(y_mat) <= 1L) {
-    return(as.numeric(y_mat))
+  if (ncol(draw_matrix) <= 1L) {
+    return(as.numeric(draw_matrix))
   }
 
   switch(
     method,
-    mean = as.numeric(rowMeans(y_mat)),
-    pool = as.numeric(y_mat),
+    mean = as.numeric(rowMeans(draw_matrix)),
+    pool = as.numeric(draw_matrix),
     sample = {
-      n <- nrow(y_mat)
-      idx <- sample.int(ncol(y_mat), n, replace = TRUE)
-      as.numeric(y_mat[cbind(seq_len(n), idx)])
+      n <- nrow(draw_matrix)
+      idx <- sample.int(ncol(draw_matrix), n, replace = TRUE)
+      as.numeric(draw_matrix[cbind(seq_len(n), idx)])
     }
   )
 }
 
 #' Posterior draws of gene expression from a fitted brms model
 #'
-#' @param fit A `brmsfit`.
+#' @param fit A `brmsfit` or [load_expression_fit()] object.
 #' @param newdata Covariate grid from [build_newdata_grid()].
 #' @param quantity `"linpred"` is log(μ) (`posterior_linpred`,
 #'   `transform = FALSE`). `"predict"` is posterior predicted counts.
@@ -322,10 +322,10 @@ marginalize_draw_matrix <- function(y_mat, method = c("mean", "pool", "sample"))
 #' @param re_formula,allow_new_levels,sample_new_levels Passed to brms.
 #' @param seed Optional RNG seed.
 #' @return A list with `draws`, `grid`, `quantity`, `collapse`, `n_grid`,
-#'   `cell_type`, `gene_ensg`, and `gene_symbol` (when available on `fit`).
+#'   `cell_type`, and `gene_ensg` (when available on `fit`).
 #' @export
 #' @importFrom cli cli_abort
-expr_draws <- function(
+expression_draws <- function(
   fit,
   newdata,
   quantity = c("linpred", "predict", "epred"),
@@ -339,7 +339,7 @@ expr_draws <- function(
 ) {
   quantity <- match.arg(quantity)
   collapse <- match.arg(collapse)
-  meta <- expr_metadata(fit)
+  meta <- expression_metadata(fit)
   brms_fit <- as_brms_fit(fit)
 
   if (is.null(newdata) || nrow(newdata) < 1L) {
@@ -361,7 +361,7 @@ expr_draws <- function(
     ndraws = ndraws
   )
 
-  y_mat <- switch(
+  draw_matrix <- switch(
     quantity,
     linpred = do.call(
       brms::posterior_linpred,
@@ -371,7 +371,7 @@ expr_draws <- function(
     epred = do.call(brms::posterior_epred, pred_args)
   )
 
-  draws <- marginalize_draw_matrix(y_mat, method = collapse)
+  draws <- marginalize_draw_matrix(draw_matrix, method = collapse)
 
   list(
     draws = draws,
@@ -380,120 +380,31 @@ expr_draws <- function(
     collapse = collapse,
     n_grid = nrow(newdata),
     cell_type = meta$cell_type,
-    gene_ensg = meta$gene_ensg,
-    gene_symbol = meta$gene_symbol
-  )
-}
-
-#' Resolve an expression-model fit for querying
-#'
-#' Accepts a `posteriorHCA_expr_fit` from [load_expr_fit()], or loads one when
-#' `cell_type` and `gene` are supplied. Supports legacy positional calls
-#' `expr_predict(cell_type, gene, ...)`.
-#'
-#' @param fit Optional `posteriorHCA_expr_fit` object.
-#' @param cell_type Cell type name when `fit` is not supplied.
-#' @param gene Gene symbol or Ensembl id when `fit` is not supplied.
-#' @inheritParams get_brms_ready
-#' @return A `posteriorHCA_expr_fit` object.
-#' @keywords internal
-#' @noRd
-resolve_expr_fit <- function(
-  fit = NULL,
-  cell_type = NULL,
-  gene = NULL,
-  version = "latest",
-  cache_directory = get_default_cache_dir(),
-  use_cache = TRUE,
-  orgdb = NULL
-) {
-  if (is_expr_fit(fit)) {
-    if (!is.null(cell_type) || !is.null(gene)) {
-      meta <- expr_metadata(fit)
-      if (!is.null(cell_type) && !is.na(meta$cell_type) && nzchar(meta$cell_type) &&
-          !identical(as.character(cell_type), meta$cell_type)) {
-        cli_abort(c(
-          "`cell_type` does not match `fit`.",
-          "i" = "Fit cell type: `{meta$cell_type}`; supplied: `{cell_type}`."
-        ))
-      }
-      if (!is.null(gene)) {
-        resolved_gene <- tryCatch(
-          resolve_gene_one(
-            gene,
-            cell_type = meta$cell_type,
-            version = version,
-            orgdb = orgdb,
-            cache_directory = cache_directory,
-            use_cache = use_cache,
-            strict = FALSE
-          ),
-          error = function(e) as.character(gene)
-        )
-        if (!is.na(meta$gene_ensg) && nzchar(meta$gene_ensg) &&
-            !identical(resolved_gene, meta$gene_ensg)) {
-          cli_abort(c(
-            "`gene` does not match `fit`.",
-            "i" = "Fit gene: `{meta$gene_ensg}`; supplied: `{resolved_gene}`."
-          ))
-        }
-      }
-    }
-    return(fit)
-  }
-
-  if (!is.null(fit) && is.character(fit) && length(fit) == 1L) {
-    if (!is.null(gene)) {
-      cell_type <- fit
-      fit <- NULL
-    } else if (!is.null(cell_type)) {
-      gene <- cell_type
-      cell_type <- fit
-      fit <- NULL
-    }
-  }
-
-  if (is.null(cell_type) || is.null(gene)) {
-    cli_abort(c(
-      "Supply `fit` from [load_expr_fit()], or both `cell_type` and `gene`.",
-      "i" = "Example: `expr_predict(fit, disease_groups = \"Normal\")`."
-    ))
-  }
-
-  load_expr_fit(
-    cell_type = cell_type,
-    gene = gene,
-    version = version,
-    cache_directory = cache_directory,
-    use_cache = use_cache,
-    orgdb = orgdb
+    gene_ensg = meta$gene_ensg
   )
 }
 
 #' Load a stored gene-level brms fit
 #'
+#' @param cell_type Cell type name.
+#' @param gene_ensg Ensembl gene id (for example `"ENSG00000169252"`).
 #' @inheritParams get_brms_ready
 #' @return A `posteriorHCA_expr_fit` object: a list with `fit` (`brmsfit`),
-#'   `cell_type`, `gene_ensg`, and `gene_symbol`.
+#'   `cell_type`, and `gene_ensg`.
 #' @export
 #' @importFrom qs2 qs_read
 #' @importFrom cli cli_abort
-load_expr_fit <- function(
+load_expression_fit <- function(
   cell_type,
-  gene,
+  gene_ensg,
   version = "latest",
   cache_directory = get_default_cache_dir(),
-  use_cache = TRUE,
-  orgdb = NULL
+  use_cache = TRUE
 ) {
-  gene_ensg <- resolve_gene_one(
-    gene,
-    cell_type = cell_type,
-    version = version,
-    orgdb = orgdb,
-    cache_directory = cache_directory,
-    use_cache = use_cache
-  )
+  gene_ensg <- strip_ensembl_version(as.character(gene_ensg[[1]]))
+  if (!is_ensembl_gene_id(gene_ensg)) {
+    cli_abort("`gene_ensg` must be an Ensembl gene id (ENSG...).")
+  }
 
   res <- get_brms_ready(
     cell_type = cell_type,
@@ -513,15 +424,9 @@ load_expr_fit <- function(
     cli_abort("Cached file does not contain a `brms_fit` column: {res$path}")
   }
 
-  gene_symbol <- NA_character_
-  if (!is_ensembl_gene_id(gene)) {
-    gene_symbol <- as.character(gene)
-  }
-
-  new_expr_fit(
+  new_expression_fit(
     fit = obj$brms_fit[[1]],
     cell_type = res$cell_type,
-    gene_ensg = gene_ensg,
-    gene_symbol = gene_symbol
+    gene_ensg = gene_ensg
   )
 }

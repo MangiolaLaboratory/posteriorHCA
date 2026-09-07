@@ -150,8 +150,7 @@ composition_test_sample <- function(proportions, draws, sample_id = NULL) {
 
 #' Test multiple samples against healthy composition draws
 #'
-#' Thin wrapper around [composition_test()] kept for symmetry with
-#' [welch_t_test_cohort_hca()].
+#' Thin wrapper around [composition_test()].
 #'
 #' @inheritParams composition_test
 #' @return Same columns as [composition_test()].

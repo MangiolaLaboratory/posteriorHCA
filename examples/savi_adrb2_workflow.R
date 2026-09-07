@@ -1,38 +1,35 @@
 #!/usr/bin/env Rscript
-# ==============================================================================
-# SAVI case study: ADRB2 in disease-associated monocytes (PBMC / blood)
+# SAVI case study: ADRB2 (ENSG00000169252) in disease-associated monocytes
 #
-# Reference script for vignettes/cohort-expression-core.Rmd and
-# vignettes/cohort-expression-wrappers.Rmd
-#
-# Pipeline:
-#   1. Pseudobulk counts -> harmonise gene ids (ENSG)
-#   2. Align to one HCA reference library (monocytic)
-#        - core: merge_with_reference_sample + calculate_tmm_offset
-#        - wrapper: scale_to_hca_reference
-#   3. edgeR QL cohort log(mu) for ADRB2
-#        - core: design_from_formula + estimate_logmu_ql
-#        - wrapper: estimate_cohort_logmu (filter genes)#   4. Healthy HCA posterior (Normal, blood, 10x Genomics 3)
-#   5. Welch test vs HCA
-#   6. Plots
-# ==============================================================================
+# user data -> TMM offsets -> model.matrix -> estimate_logmu_ql
+#   -> load_expression_fit -> expression_draws
+#   -> summarize_posterior_draws -> welch_test_means
 
 suppressPackageStartupMessages({
   library(cli)
   library(Seurat)
-  library(dplyr)
+  library(AnnotationDbi)
+  library(org.Hs.eg.db)
   library(brms)
+  library(purrr)
 })
 
-pkg_dir <- "/home/a1237163/lab/chen/posteriorHCA"
+pkg_dir <- if (file.exists("DESCRIPTION")) {
+  normalizePath(".")
+} else {
+  "/home/a1237163/lab/chen/posteriorHCA"
+}
 devtools::load_all(pkg_dir)
 
 cli::cli_h1("posteriorHCA: SAVI ADRB2 Workflow")
 
+cell_type <- "monocytic"
+gene_ensg <- "ENSG00000169252"
+
 # ------------------------------------------------------------------------------
-# 1. Load SAVI pseudobulk and harmonise gene ids to ENSG
+# 1. Load counts and map symbols to ENSG (outside posteriorHCA)
 # ------------------------------------------------------------------------------
-cli::cli_h2("1. Preparing SAVI Disease-Associated Monocyte Counts")
+cli::cli_h2("1. Preparing counts")
 
 savi_path <- Sys.getenv(
   "SAVI_PSEUDOBULK_RDS",
@@ -46,197 +43,184 @@ if (file.exists(savi_path)) {
   data(savi_mono, package = "posteriorHCA", envir = environment())
 }
 
-savi_mono <- harmonise_gene_ids(savi_mono, id_type = "auto")
-cli::cli_alert_info(
-  "Harmonised Seurat object: {nrow(savi_mono)} genes x {ncol(savi_mono)} samples."
+user_counts <- as.matrix(Seurat::GetAssayData(savi_mono, layer = "counts"))
+mapped <- AnnotationDbi::mapIds(
+  org.Hs.eg.db,
+  keys = rownames(user_counts),
+  column = "ENSEMBL",
+  keytype = "SYMBOL",
+  multiVals = "first"
 )
+keep <- !is.na(mapped) & !duplicated(mapped)
+user_counts <- user_counts[keep, , drop = FALSE]
+rownames(user_counts) <- unname(mapped[keep])
 
-# ------------------------------------------------------------------------------
-# 2. Align to HCA monocytic reference
-# ------------------------------------------------------------------------------
-cli::cli_h2("2. Aligning to HCA Monocytic Reference Sample")
-
-cell_type <- "monocytic"
-
-cli::cli_h3("2a. Core functions (matrix)")
-
-ref <- load_reference_sample(cell_type)
-user_mat <- as.matrix(Seurat::GetAssayData(savi_mono, layer = "counts"))
-
-combined <- merge_with_reference_sample(
-  user_mat,
-  reference = ref$counts,
-  reference_name = ref$sample_id
-)
-scaling <- calculate_tmm_offset(
-  combined,
-  reference_name = ref$sample_id,
-  method = "TMMwsp"
-)
-
-cli::cli_alert_info(
-  "Merged matrix: {nrow(combined)} genes x {ncol(combined)} samples."
-)
-cli::cli_alert_info(
-  "Reference `{ref$sample_id}` offset = {scaling$offset[[ref$sample_id]]}."
-)
-
-cli::cli_h3("2b. Wrapper scale_to_hca_reference()")
-
-aligned <- scale_to_hca_reference(savi_mono, cell_type)
-print(table(aligned$sample_role))
-
-stopifnot(all.equal(
-  unname(scaling$offset[colnames(user_mat)]),
-  unname(aligned$hca_offset[colnames(user_mat)]),
-  tolerance = 1e-10
-))
-cli::cli_alert_success("Core and wrapper offsets match.")
-
-# ------------------------------------------------------------------------------
-# 3. Estimate cohort log(mu) for ADRB2
-#
-# Absolute log(μ) = QL coefficients with prior.count = 0 on the TMM offset scale.
-# Prefer cell-means designs: ~ 0 + Category.
-# Core: design_from_formula + estimate_logmu_ql (all genes)
-# Wrapper: estimate_cohort_logmu (filter genes)
-# ------------------------------------------------------------------------------
-cli::cli_h2("3. Estimating Cohort log(mu) for ADRB2")
-
-cli::cli_h3("3a. Core design_from_formula() + estimate_logmu_ql()")
-
-meta_core <- data.frame(
-  Category = c(
-    as.character(savi_mono$Category[colnames(user_mat)]),
-    "reference"
-  ),
-  row.names = colnames(combined),
+sample_metadata <- data.frame(
+  Category = factor(savi_mono$Category[colnames(user_counts)]),
+  row.names = colnames(user_counts),
   stringsAsFactors = FALSE
 )
-meta_core$Category <- factor(meta_core$Category)
 
-design <- design_from_formula(~ 0 + Category, meta_core)
-est_all <- estimate_logmu_ql(
-  counts = combined,
-  offset = scaling$offset,
-  design = design,
-  cell_type = cell_type
+cli::cli_alert_info(
+  "User matrix: {nrow(user_counts)} genes x {ncol(user_counts)} samples."
 )
-gene_ensg <- resolve_gene_one("ADRB2", cell_type = cell_type)
-est_core <- est_all[est_all$gene == gene_ensg, , drop = FALSE]
-est_core$gene_symbol <- "ADRB2"
-print(est_core)
-
-cli::cli_h3("3b. Wrapper estimate_cohort_logmu()")
-
-est <- estimate_cohort_logmu(
-  aligned,
-  formula = ~ 0 + Category,
-  genes = "ADRB2"
-)
-print(est)
-
-stopifnot(all.equal(
-  est_core$log_mu[match(est$group, est_core$group)],
-  est$log_mu,
-  tolerance = 1e-8
-))
-cli::cli_alert_success("Core and wrapper log(mu) estimates match.")
 
 # ------------------------------------------------------------------------------
-# 3c. Demo: one cohort at a time with intercept-only design (~ 1)
-#
-# Alternative to ~ 0 + Category on the full object. Subset to a single
-# Category, fit NB/QL with formula = ~ 1, and treat the intercept as that
-# cohort's absolute log(mu). Useful when you want per-cohort fits without a
-# multi-level design matrix.
+# 2. Scale to HCA reference (offsets only; estimation uses user libraries)
 # ------------------------------------------------------------------------------
-cli::cli_h3("3c. Demo: single-cohort ~ 1 (intercept = cohort log(mu))")
+cli::cli_h2("2. Aligning to HCA monocytic reference")
 
-est_by_level <- purrr::map_dfr(
-  levels(aligned$Category),
-  .f = function(x) {
-    estimate_cohort_logmu(
-      subset(aligned, Category == x),
-      formula = ~ 1,
-      genes = "ADRB2"
-    ) %>%
-      dplyr::mutate(group = x)
+reference <- load_reference_sample(cell_type)
+combined_counts <- merge_with_reference_sample(
+  user_counts,
+  reference = reference$counts,
+  reference_name = reference$sample_id
+)
+scaling <- calculate_tmm_offset(
+  combined_counts,
+  reference_name = reference$sample_id
+)
+user_offset <- scaling$offset[colnames(user_counts)]
+
+cli::cli_alert_info(
+  "Reference `{reference$sample_id}` offset = {scaling$offset[[reference$sample_id]]}."
+)
+
+# ------------------------------------------------------------------------------
+# 3. Estimate cohort log(mu)
+# ------------------------------------------------------------------------------
+cli::cli_h2("3. Estimating cohort log(mu)")
+
+design_matrix <- model.matrix(~ 0 + Category, data = sample_metadata)
+colnames(design_matrix) <- sub("^Category", "", colnames(design_matrix))
+
+expression_estimates <- estimate_logmu_ql(
+  user_counts,
+  user_offset,
+  design_matrix
+)
+expression_estimates <- expression_estimates[
+  expression_estimates$gene == gene_ensg,
+  ,
+  drop = FALSE
+]
+print(expression_estimates)
+
+# Optional: intercept-only design (~ 1) per Category
+cli::cli_h3("Intercept-only design (~ 1)")
+
+expression_estimates_by_level <- map_dfr(
+  levels(sample_metadata$Category),
+  function(category) {
+    sample_ids <- rownames(sample_metadata)[sample_metadata$Category == category]
+    design_one <- model.matrix(
+      ~ 1,
+      data = sample_metadata[sample_ids, , drop = FALSE]
+    )
+    out <- estimate_logmu_ql(
+      user_counts[, sample_ids, drop = FALSE],
+      user_offset[sample_ids],
+      design_one
+    )
+    out <- out[out$gene == gene_ensg, , drop = FALSE]
+    out$group <- category
+    out
   }
 )
-print(est_by_level)
+print(expression_estimates_by_level)
 
 # ------------------------------------------------------------------------------
 # 4. Healthy HCA baseline draws
 # ------------------------------------------------------------------------------
-cli::cli_h2("4. Generating Healthy Baseline Draws (Normal, 10x Genomics 3)")
+cli::cli_h2("4. Healthy HCA baseline draws")
 
-fit <- load_expr_fit(cell_type = cell_type, gene = "ADRB2")
-
-grid <- build_newdata_grid(
-  fit,
+expression_fit <- load_expression_fit(
+  cell_type = cell_type,
+  gene_ensg = gene_ensg
+)
+newdata <- build_newdata_grid(
+  expression_fit,
   disease_groups = "Normal",
   tissue_groups = "blood",
   assay_groups = "10x Genomics 3"
 )
-
-hca_res <- expr_draws(
-  fit,
-  newdata = grid,
+posterior_draws <- expression_draws(
+  expression_fit,
+  newdata = newdata,
   quantity = "linpred",
   collapse = "mean"
 )
 
 cli::cli_alert_info(
-  "Healthy HCA baseline for {hca_res$gene_symbol}: mean log(mu) = {round(mean(hca_res$draws), 3)}, SD = {round(sd(hca_res$draws), 3)}."
-)
-
-hca_pred <- expr_predict(
-  fit = fit,
-  disease_groups = "Normal",
-  tissue_groups = "blood",
-  assay_groups = "10x Genomics 3",
-  quantity = "linpred",
-  collapse = "mean"
+  "HCA mean log(mu) = {round(mean(posterior_draws$draws), 3)}, SD = {round(sd(posterior_draws$draws), 3)}."
 )
 
 # ------------------------------------------------------------------------------
-# 5. Welch test vs healthy baseline
+# 5. Welch test
 # ------------------------------------------------------------------------------
-cli::cli_h2("5. Testing Cohorts Against Healthy Baseline (QL)")
+cli::cli_h2("5. Welch test vs healthy baseline")
 
-test_results <- welch_t_test_cohort_hca(
-  cohort_est = est,
-  hca_draws = hca_pred
+cohort_estimate <- expression_estimates[
+  expression_estimates$group == "SAVI",
+  ,
+  drop = FALSE
+]
+posterior_summary <- summarize_posterior_draws(
+  posterior_draws,
+  value = cohort_estimate$log_mu
+)
+print(welch_test_means(
+  cohort_estimate$log_mu,
+  cohort_estimate$se,
+  posterior_summary$mean,
+  posterior_summary$sd,
+  n1 = cohort_estimate$n,
+  n2 = posterior_summary$n
+))
+
+test_results <- map_dfr(
+  expression_estimates$group,
+  function(group) {
+    cohort_estimate <- expression_estimates[
+      expression_estimates$group == group,
+      ,
+      drop = FALSE
+    ]
+    posterior_summary <- summarize_posterior_draws(
+      posterior_draws,
+      value = cohort_estimate$log_mu
+    )
+    test <- welch_test_means(
+      cohort_estimate$log_mu,
+      cohort_estimate$se,
+      posterior_summary$mean,
+      posterior_summary$sd,
+      n1 = cohort_estimate$n,
+      n2 = posterior_summary$n
+    )
+    data.frame(
+      group = group,
+      log_mu = test$mu1,
+      se = test$se1,
+      p_value = test$p_value,
+      stringsAsFactors = FALSE
+    )
+  }
 )
 print(test_results)
-
-cohort <- cohort_estimate_at(est, group = "SAVI")
-baseline <- summarize_posterior_draws(hca_res, value = cohort$mu)
-welch_test_means(
-  cohort$mu, cohort$se,
-  baseline$mean, baseline$sd,
-  n1 = cohort$n, n2 = baseline$n
-)
 
 # ------------------------------------------------------------------------------
 # 6. Plots
 # ------------------------------------------------------------------------------
-cli::cli_h2("6. Plotting Healthy Baseline and Cohort Comparisons")
+cli::cli_h2("6. Plots")
 
 print(plot_hca_draws(
-  draws = hca_res,
+  draws = posterior_draws,
   subtitle = "Normal, 10x Genomics 3 healthy baseline"
 ))
-
 print(plot_cohort_vs_hca(
-  hca_draws = hca_res,
-  test_results = test_results,
+  hca_draws = posterior_draws,
+  cohort_est = test_results,
   subtitle = "QL cohort estimates",
-  annotate = c("group", "p_value", "direction")
-))
-
-print(plot_hca_draws(
-  draws = hca_pred,
-  title = "ADRB2 predicted count posterior (healthy HCA)"
+  annotate = c("group", "p_value")
 ))

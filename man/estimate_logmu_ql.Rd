@@ -4,37 +4,36 @@
 \alias{estimate_logmu_ql}
 \title{Cohort log(μ) and SE for all genes from one edgeR QL fit}
 \usage{
-estimate_logmu_ql(counts, offset, design, cell_type = NULL, robust = TRUE)
+estimate_logmu_ql(counts, offset, design, robust = TRUE)
 }
 \arguments{
 \item{counts}{Gene-by-sample numeric count matrix.}
 
 \item{offset}{Numeric vector (length `ncol(counts)`) or matrix. Typically
-`log(1 / multiplier)` from [calculate_tmm_offset()].}
+`log(1 / multiplier)` from [calculate_tmm_offset()] for the user samples.}
 
 \item{design}{Numeric design matrix (`nrow` = number of samples). Column
 names become the `group` labels in the output.}
-
-\item{cell_type}{Optional cell-type label stored in every output row.}
 
 \item{robust}{Passed to [edgeR::estimateDisp()] and [edgeR::glmQLFit()].}
 }
 \value{
 A data frame with one row per gene × design column: `gene`,
-  `gene_symbol` (NA), `cell_type`, `group`, `n`, `log_mu`, `mu`, `se`,
-  `df`, `dispersion`.
+  `group`, `n`, `log_mu`, `mu`, `se`, `df`, `dispersion`.
 }
 \description{
-Core matrix helper. Fits [edgeR::estimateDisp()] and
-[edgeR::glmQLFit()] once with `prior.count = 0`, then returns absolute
-group means (QL coefficients on the atlas offset-zero scale) and QL Wald
-SEs for **every gene**. Prefer a cell-means design from
-[design_from_formula()] (`~ 0 + group`).
+Fits [edgeR::estimateDisp()] and [edgeR::glmQLFit()] once with
+`prior.count = 0`, then returns absolute group means (QL coefficients on
+the supplied offset scale) and QL Wald SEs for every gene.
 }
 \details{
-Gene filtering belongs in the wrapper [estimate_cohort_logmu()], which
-still estimates dispersion from the full matrix via this function.
+Pass the **user** count matrix and the corresponding offsets. The HCA
+reference library is used when computing TMM offsets, but should not be
+included here as an artificial design group.
+
+Build the design with ordinary [stats::model.matrix()], for example
+`model.matrix(~ 0 + Category, sample_metadata)`.
 }
 \seealso{
-[design_from_formula()], [estimate_cohort_logmu()]
+[calculate_tmm_offset()], [welch_test_means()]
 }

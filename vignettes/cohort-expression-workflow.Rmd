@@ -1,10 +1,10 @@
 ---
-title: "Cohort expression workflow"
+title: "Cohort expression workflow (overview)"
 author: "Chen Zhan"
 date: "`r Sys.Date()`"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{Cohort expression workflow}
+  %\VignetteIndexEntry{Cohort expression workflow (overview)}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
@@ -13,20 +13,18 @@ vignette: >
 knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
 ```
 
-SAVI case study (*ADRB2* in disease-associated monocytes, PBMC / blood).
-The former combined vignette is split into two reports that share the same
-marked steps:
+SAVI case study (*ADRB2* / `ENSG00000169252` in disease-associated monocytes).
 
-| Step | Core | Wrappers |
-|-----:|------|----------|
-| 0 | `merge_with_reference_sample()` + `calculate_tmm_offset()` | `scale_to_hca_reference()` |
-| 1 | `design_from_formula()` + `estimate_logmu_ql()` | `estimate_cohort_logmu()` |
-| 2 | `load_expr_fit()` | `load_expr_fit()` |
-| 3 | `build_newdata_grid()` + `expr_draws()` | `expr_predict()` |
-| 4 | `summarize_posterior_draws()` | (inside Welch wrapper) |
-| 5 | `welch_test_means()` | `welch_t_test_cohort_hca()` |
+The full worked example is:
 
-- Core (matrix API): `vignette("cohort-expression-core", package = "posteriorHCA")`
-- Wrappers (Seurat / formula): `vignette("cohort-expression-wrappers", package = "posteriorHCA")`
+`vignette("cohort-expression-core", package = "posteriorHCA")`
 
-Reference script: `examples/savi_adrb2_workflow.R`.
+and the matching script `examples/savi_adrb2_workflow.R`.
+
+Intended sequence:
+
+1. Scale user libraries to one HCA reference (`merge_with_reference_sample` + `calculate_tmm_offset`, or `scale_to_hca_reference` for Seurat / SummarizedExperiment)
+2. Build a design with `model.matrix()`
+3. Estimate user means with `estimate_logmu_ql()`
+4. Load the HCA model with `load_expression_fit()` and draw with `expression_draws()`
+5. Summarise with `summarize_posterior_draws()` and test with `welch_test_means()`

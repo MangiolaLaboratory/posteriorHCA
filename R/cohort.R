@@ -1,16 +1,10 @@
 # User counts on the atlas scale
 #
-# Core (matrix):
-#   1. merge_with_reference_sample() — bind user matrix + one reference library
-#   2. calculate_tmm_offset() — TMMwsp; offset = log(1 / multiplier), ref at 0
-#   3. design_from_formula() — one-sided formula → design matrix
-#   4. estimate_logmu_ql() — estimateDisp + glmQLFit(prior.count = 0) →
-#      log(μ) + SE for every gene × design column
-#   5. bootstrap_logmu_mglm() — weighted mglmOneGroup (inference-cohort.R)
-# Wrappers:
-#   6. scale_to_hca_reference() — matrix/SE/Seurat → cores 1–2 → rebuild
-#   7. estimate_cohort_logmu() — resolve I/O → cores 3–4 → filter genes
-#   8. bootstrap_cohort_logmu() — matrix/SE/Seurat → core 5
+#   merge_with_reference_sample() — bind user matrix + one reference library
+#   calculate_tmm_offset() — TMMwsp; offset = log(1 / multiplier), ref at 0
+#   estimate_logmu_ql() — estimateDisp + glmQLFit(prior.count = 0)
+#   scale_to_hca_reference() — Seurat / SummarizedExperiment convenience
+#   bootstrap_logmu_mglm() — weighted mglmOneGroup (inference-cohort.R)
 
 
 # ---------------------------------------------------------------------------
@@ -840,7 +834,7 @@ calculate_tmm_offset <- function(
 #' @return An object of the same class as `counts` with the atlas reference
 #'   library appended and alignment fields attached.
 #' @seealso [merge_with_reference_sample()], [calculate_tmm_offset()],
-#'   [estimate_cohort_logmu()]
+#'   [estimate_logmu_ql()]
 #' @export
 #' @importFrom cli cli_abort cli_alert_info
 scale_to_hca_reference <- function(
@@ -929,89 +923,6 @@ scale_to_hca_reference <- function(
   attach_aligned_metadata(out, c(alignment, list(counts = combined)))
 }
 
-#' Subset an aligned count container to one cohort plus the reference sample
-#' @keywords internal
-#' @noRd
-subset_aligned_by_group <- function(counts, resolved_group, cohort_label, assay = NULL) {
-  meta <- extract_sample_metadata(counts)
-  if (!nrow(meta)) {
-    cli::cli_abort("Could not extract sample metadata from `counts`.")
-  }
-
-  sample_ids <- sample_ids_from_counts(counts, assay = assay)
-  if (length(resolved_group) != length(sample_ids)) {
-    cli::cli_abort(
-      "`resolved_group` length ({length(resolved_group)}) must match sample count ({length(sample_ids)})."
-    )
-  }
-
-  keep <- as.character(resolved_group) == cohort_label
-  if ("sample_role" %in% names(meta)) {
-    role <- as.character(meta$sample_role)
-    if (!is.null(rownames(meta))) {
-      role <- role[match(sample_ids, rownames(meta))]
-    }
-    keep <- keep | role == "reference"
-  }
-  cells <- sample_ids[keep]
-  if (!length(cells)) {
-    cli::cli_abort("No samples selected for cohort `{cohort_label}`.")
-  }
-
-  if (inherits(counts, "Seurat")) {
-    return(counts[, cells])
-  }
-  if (inherits(counts, "SummarizedExperiment")) {
-    return(counts[, cells])
-  }
-
-  mat <- extract_count_matrix(counts, assay = assay)
-  mat <- mat[, cells, drop = FALSE]
-  sample_metadata <- meta[cells, , drop = FALSE]
-
-  if (is_aligned_result(counts)) {
-    out <- rebuild_scaled_container(counts, mat, sample_metadata)
-    fields <- aligned_fields(counts)
-    if (!is.null(fields)) {
-      fields$counts <- mat
-      fields$sample_metadata <- sample_metadata
-      if (!is.null(fields$offset)) {
-        fields$offset <- fields$offset[cells]
-      }
-      if (!is.null(fields$multiplier)) {
-        fields$multiplier <- fields$multiplier[cells]
-      }
-      if (!is.null(fields$sample_role)) {
-        fields$sample_role <- fields$sample_role[cells]
-      }
-      out <- attach_aligned_metadata(out, fields)
-    }
-    return(out)
-  }
-
-  mat
-}
-
-subset_aligned_cohort <- function(counts, group_col, cohort_label) {
-  meta <- extract_sample_metadata(counts)
-  if (!nrow(meta)) {
-    cli::cli_abort("Could not extract sample metadata from `counts`.")
-  }
-  if (!group_col %in% names(meta)) {
-    cli::cli_abort("Metadata column `{group_col}` not found in `counts`.")
-  }
-
-  sample_ids <- rownames(meta)
-  if (is.null(sample_ids) || !length(sample_ids)) {
-    sample_ids <- sample_ids_from_counts(counts)
-  }
-  resolved_group <- as.character(meta[[group_col]])
-  if (!is.null(rownames(meta))) {
-    resolved_group <- resolved_group[match(sample_ids, rownames(meta))]
-  }
-  subset_aligned_by_group(counts, resolved_group, cohort_label)
-}
-
 #' Negative-binomial dispersion vector from an edgeR DGEList
 #' @keywords internal
 #' @noRd
@@ -1069,75 +980,33 @@ fit_nb_ql <- function(counts, offset, design, robust = TRUE) {
   )
 }
 
-#' Build a design matrix from a one-sided formula
-#'
-#' Core helper used by [estimate_cohort_logmu()]. Converts a formula such as
-#' `~ 0 + Category` into a numeric design matrix whose column names are the
-#' cohort / term labels used in the tidy output of [estimate_logmu_ql()].
-#'
-#' @param formula One-sided model formula, e.g. `~ 0 + Category` or `~ 1`.
-#' @param metadata A `data.frame` of sample covariates (one row per library).
-#'   Must contain every variable named in `formula`.
-#' @return A numeric design matrix with one row per sample and cleaned
-#'   column names (group labels).
-#' @seealso [estimate_logmu_ql()], [estimate_cohort_logmu()]
-#' @export
-#' @importFrom cli cli_abort
-design_from_formula <- function(formula, metadata) {
-  if (missing(metadata) || is.null(metadata)) {
-    cli_abort("`metadata` is missing.")
-  }
-  metadata <- as.data.frame(metadata, stringsAsFactors = FALSE)
-  info <- validate_cohort_formula(formula, metadata)
-  design <- info$design
-  labels <- cohort_groups_from_design(design, formula, metadata)$labels
-  colnames(design) <- labels
-  design
-}
-
 #' Cohort log(μ) and SE for all genes from one edgeR QL fit
 #'
-#' Core matrix helper. Fits [edgeR::estimateDisp()] and
-#' [edgeR::glmQLFit()] once with `prior.count = 0`, then returns absolute
-#' group means (QL coefficients on the atlas offset-zero scale) and QL Wald
-#' SEs for **every gene**. Prefer a cell-means design from
-#' [design_from_formula()] (`~ 0 + group`).
+#' Fits [edgeR::estimateDisp()] and [edgeR::glmQLFit()] once with
+#' `prior.count = 0`, then returns absolute group means (QL coefficients on
+#' the supplied offset scale) and QL Wald SEs for every gene.
 #'
-#' Gene filtering belongs in the wrapper [estimate_cohort_logmu()], which
-#' still estimates dispersion from the full matrix via this function.
+#' Pass the **user** count matrix and the corresponding offsets. The HCA
+#' reference library is used when computing TMM offsets, but should not be
+#' included here as an artificial design group.
+#'
+#' Build the design with ordinary [stats::model.matrix()], for example
+#' `model.matrix(~ 0 + Category, sample_metadata)`.
 #'
 #' @param counts Gene-by-sample numeric count matrix.
 #' @param offset Numeric vector (length `ncol(counts)`) or matrix. Typically
-#'   `log(1 / multiplier)` from [calculate_tmm_offset()].
+#'   `log(1 / multiplier)` from [calculate_tmm_offset()] for the user samples.
 #' @param design Numeric design matrix (`nrow` = number of samples). Column
 #'   names become the `group` labels in the output.
-#' @param cell_type Optional cell-type label stored in every output row.
 #' @param robust Passed to [edgeR::estimateDisp()] and [edgeR::glmQLFit()].
 #' @return A data frame with one row per gene × design column: `gene`,
-#'   `gene_symbol` (NA), `cell_type`, `group`, `n`, `log_mu`, `mu`, `se`,
-#'   `df`, `dispersion`.
-#' @seealso [design_from_formula()], [estimate_cohort_logmu()]
+#'   `group`, `n`, `log_mu`, `mu`, `se`, `df`, `dispersion`.
+#' @seealso [calculate_tmm_offset()], [welch_test_means()]
 #' @export
 #' @importFrom cli cli_abort
-estimate_logmu_ql <- function(
-  counts,
-  offset,
-  design,
-  cell_type = NULL,
-  robust = TRUE
-) {
-  if (is.null(counts) || !(is.matrix(counts) || is.data.frame(counts) ||
-      inherits(counts, "Matrix"))) {
-    cli_abort("`counts` must be a matrix (or coercible to one).")
-  }
+estimate_logmu_ql <- function(counts, offset, design, robust = TRUE) {
   counts <- as.matrix(counts)
   storage.mode(counts) <- "double"
-  if (is.null(rownames(counts)) || is.null(colnames(counts))) {
-    cli_abort("`counts` must have gene rownames and sample colnames.")
-  }
-  if (missing(design) || is.null(design)) {
-    cli_abort("`design` is missing.")
-  }
   design <- as.matrix(design)
   if (nrow(design) != ncol(counts)) {
     cli_abort(
@@ -1160,12 +1029,6 @@ estimate_logmu_ql <- function(
     sum(abs(design[, j]) > .Machine$double.eps)
   }, integer(1))
 
-  cell_type_val <- if (!is.null(cell_type) && !is.na(cell_type) && nzchar(cell_type)) {
-    as.character(cell_type)
-  } else {
-    NA_character_
-  }
-
   # QL Wald SE for cell-means columns: sqrt(s2.post / sum(w_j))
   mu_hat <- fit$fitted.values
   w <- mu_hat / (1 + as.numeric(dispersion) * mu_hat)
@@ -1183,8 +1046,6 @@ estimate_logmu_ql <- function(
 
   data.frame(
     gene = rep(gene_ids, times = n_group),
-    gene_symbol = NA_character_,
-    cell_type = cell_type_val,
     group = rep(group_labels, each = n_gene),
     n = rep(as.integer(group_n), each = n_gene),
     log_mu = as.numeric(coef_mat),
@@ -1194,402 +1055,4 @@ estimate_logmu_ql <- function(
     dispersion = rep(as.numeric(dispersion), times = n_group),
     stringsAsFactors = FALSE
   )
-}
-
-#' Resolve a group vector from metadata, names, or values
-#'
-#' For `Seurat` / `SummarizedExperiment` inputs, `group` may be a metadata
-#' column name. For matrix inputs, pass a named vector or list keyed by sample
-#' id (column name).
-#' @keywords internal
-#' @noRd
-resolve_group <- function(group, counts, n_lib, sample_role = NULL, assay = NULL) {
-  if (missing(group) || is.null(group)) {
-    cli::cli_abort("`group` is missing.")
-  }
-
-  sample_ids <- sample_ids_from_counts(counts, assay = assay)
-  if (is.null(sample_ids) || !length(sample_ids)) {
-    sample_ids <- seq_len(n_lib)
-  }
-
-  if (is.list(group) && !is.data.frame(group)) {
-    group <- unlist(group, use.names = TRUE)
-  }
-
-  if (is.vector(group) && !is.null(names(group)) && any(nzchar(names(group)))) {
-    mapped <- as.character(group)[match(sample_ids, names(group))]
-    if (any(is.na(mapped))) {
-      missing_ids <- sample_ids[is.na(mapped)]
-      cli::cli_abort(
-        "Named `group` is missing sample{?s}: {missing_ids}."
-      )
-    }
-    group <- mapped
-  } else if (length(group) == 1L && is.character(group)) {
-    col_name <- group[[1]]
-    meta <- extract_sample_metadata(counts)
-    if (NROW(meta) && col_name %in% names(meta)) {
-      col_vals <- as.character(meta[[col_name]])
-      if (!is.null(rownames(meta))) {
-        group <- col_vals[match(sample_ids, rownames(meta))]
-      } else {
-        group <- col_vals
-      }
-      if (!is.null(sample_role)) {
-        group[is.na(group) & sample_role == "reference"] <- "reference"
-      }
-      if (any(is.na(group))) {
-        cli::cli_abort(
-          "Metadata column `{col_name}` could not be matched to all samples."
-        )
-      }
-    }
-  }
-
-  if (!is.null(sample_role) && length(group) == sum(sample_role == "user") &&
-      length(group) + 1L == n_lib) {
-    full <- character(n_lib)
-    full[sample_role == "user"] <- as.character(group)
-    full[sample_role == "reference"] <- "reference"
-    group <- full
-  }
-
-  if (length(group) != n_lib) {
-    cli::cli_abort(
-      c(
-        "`group` length ({length(group)}) must match the number of libraries ({n_lib}).",
-        "i" = "Pass a metadata column name, a named vector keyed by sample id, or a vector in sample order."
-      )
-    )
-  }
-  as.character(group)
-}
-
-#' Resolve sample metadata for cohort estimation
-#' @keywords internal
-#' @noRd
-resolve_cohort_metadata <- function(data, metadata = NULL, assay = NULL) {
-  source_obj <- data
-  if (is_aligned_result(data)) {
-    counts <- aligned_fields(data)$counts
-  } else {
-    counts <- extract_count_matrix(data, assay = assay, arg_name = "data")
-  }
-
-  if (is.null(colnames(counts))) {
-    cli_abort("`data` must have sample colnames.")
-  }
-  sample_ids <- colnames(counts)
-
-  if (count_input_class(source_obj) == "matrix" &&
-      !is_aligned_result(source_obj) &&
-      is.null(metadata)) {
-    cli_abort(c(
-      "Plain matrix input requires `metadata`.",
-      "i" = "Supply a data.frame with rownames matching sample ids and an `hca_offset` column."
-    ))
-  }
-
-  container_meta <- extract_sample_metadata(source_obj)
-  if (nrow(container_meta) && (is.null(rownames(container_meta)) || !any(nzchar(rownames(container_meta))))) {
-    if ("sample_id" %in% names(container_meta)) {
-      rownames(container_meta) <- container_meta$sample_id
-    }
-  }
-
-  if (is.null(metadata)) {
-    if (!nrow(container_meta)) {
-      cli_abort(c(
-        "Could not extract sample metadata from `data`.",
-        "i" = "Supply `metadata` or use a SummarizedExperiment / Seurat object."
-      ))
-    }
-    meta <- container_meta
-  } else {
-    meta <- as.data.frame(metadata, stringsAsFactors = FALSE)
-    if ("sample_id" %in% names(meta) &&
-        (is.null(rownames(meta)) || !any(nzchar(rownames(meta))))) {
-      rownames(meta) <- meta$sample_id
-    }
-    if (is.null(rownames(meta)) || !any(nzchar(rownames(meta)))) {
-      cli_abort(c(
-        "`metadata` must have rownames matching sample ids.",
-        "i" = "Alternatively, include a `sample_id` column."
-      ))
-    }
-    missing <- setdiff(sample_ids, rownames(meta))
-    if (length(missing)) {
-      cli_abort("Metadata missing sample{?s}: {missing}.")
-    }
-    meta <- meta[sample_ids, , drop = FALSE]
-    if (nrow(container_meta)) {
-      if (is.null(rownames(container_meta)) && "sample_id" %in% names(container_meta)) {
-        rownames(container_meta) <- container_meta$sample_id
-      }
-      merge_cols <- setdiff(names(container_meta), names(meta))
-      if (length(merge_cols)) {
-        idx <- match(sample_ids, rownames(container_meta))
-        for (col in merge_cols) {
-          meta[[col]] <- container_meta[[col]][idx]
-        }
-      }
-    }
-  }
-
-  if (!"sample_id" %in% names(meta)) {
-    meta$sample_id <- rownames(meta)
-  }
-  rownames(meta) <- sample_ids
-  meta
-}
-
-#' Validate atlas offsets in cohort metadata
-#' @keywords internal
-#' @noRd
-validate_cohort_offset <- function(
-  metadata,
-  sample_ids,
-  offset_col = "hca_offset"
-) {
-  if (!offset_col %in% names(metadata)) {
-    cli_abort(c(
-      "Metadata must contain `{offset_col}`.",
-      "i" = "Run [scale_to_hca_reference()] first, or supply offsets in `metadata`."
-    ))
-  }
-  stats::setNames(as.numeric(metadata[[offset_col]]), sample_ids)
-}
-
-#' Build an edgeR design matrix from a formula
-#' @keywords internal
-#' @noRd
-validate_cohort_formula <- function(formula, metadata) {
-  if (!inherits(formula, "formula")) {
-    cli_abort("`formula` must be a formula, e.g. `~ 0 + Category`.")
-  }
-  if (length(formula) == 3L) {
-    cli_abort(c(
-      "Response variables in `formula` are not supported.",
-      "i" = "Use a one-sided formula, e.g. `~ 0 + Category`."
-    ))
-  }
-  if (length(formula) != 2L) {
-    cli_abort("`formula` must be one-sided, e.g. `~ 0 + Category`.")
-  }
-
-  formula_vars <- all.vars(formula)
-  if (length(formula_vars)) {
-    missing <- setdiff(formula_vars, names(metadata))
-    if (length(missing)) {
-      cli_abort(c(
-        "Formula variables not found in metadata: {missing}.",
-        "i" = "Available columns: {names(metadata)}."
-      ))
-    }
-    for (var in formula_vars) {
-      x <- metadata[[var]]
-      if (all(is.na(x))) {
-        cli_abort("Metadata column `{var}` is all NA.")
-      }
-      if (any(is.na(x))) {
-        na_samples <- if ("sample_id" %in% names(metadata)) {
-          metadata$sample_id[is.na(x)]
-        } else {
-          rownames(metadata)[is.na(x)]
-        }
-        cli_abort(c(
-          "Metadata column `{var}` has NA for sample{?s}: {na_samples}.",
-          "i" = "Assign a level to every sample, e.g. `\"reference\"` for the atlas library."
-        ))
-      }
-    }
-  }
-
-  design <- tryCatch(
-    stats::model.matrix(formula, data = metadata),
-    error = function(e) {
-      cli_abort(c(
-        "Could not build design matrix from `formula`.",
-        "x" = conditionMessage(e)
-      ))
-    }
-  )
-  if (ncol(design) == 0L) {
-    cli_abort("Design matrix has no columns.")
-  }
-  if (nrow(design) != nrow(metadata)) {
-    cli_abort("Design matrix row count does not match sample metadata.")
-  }
-  qr_rank <- qr(design)$rank
-  if (qr_rank < ncol(design)) {
-    cli_abort(c(
-      "Design matrix is rank deficient (rank {qr_rank} < {ncol(design)} columns).",
-      "i" = "Check for empty factor levels or collinear predictors."
-    ))
-  }
-
-  list(design = design, term_names = colnames(design))
-}
-
-#' Sample indices and labels for each design column
-#' @keywords internal
-#' @noRd
-cohort_groups_from_design <- function(design, formula, metadata) {
-  labels <- colnames(design)
-  labels[labels == "(Intercept)"] <- "all"
-  vars <- all.vars(formula)
-  if (length(vars) == 1L) {
-    labels <- sub(paste0("^", vars[[1]]), "", labels)
-  }
-  groups <- lapply(seq_len(ncol(design)), function(j) {
-    which(abs(design[, j]) > .Machine$double.eps)
-  })
-  list(labels = labels, groups = groups)
-}
-
-#' Fill missing formula levels for atlas reference samples
-#' @keywords internal
-#' @noRd
-fill_reference_formula_levels <- function(metadata, formula) {
-  if (!"sample_role" %in% names(metadata)) {
-    return(metadata)
-  }
-  ref_idx <- metadata$sample_role == "reference"
-  if (!any(ref_idx)) {
-    return(metadata)
-  }
-  for (var in all.vars(formula)) {
-    if (!var %in% names(metadata)) {
-      next
-    }
-    x <- metadata[[var]]
-    na_ref <- ref_idx & (is.na(x) | !nzchar(as.character(x)))
-    if (!any(na_ref)) {
-      next
-    }
-    if (is.factor(x)) {
-      if (!("reference" %in% levels(x))) {
-        x <- factor(x, levels = c(levels(x), "reference"))
-      }
-      x[na_ref] <- "reference"
-    } else {
-      x[na_ref] <- "reference"
-    }
-    metadata[[var]] <- x
-  }
-  metadata
-}
-
-#' Cohort log(mu) at the atlas offset-zero scale
-#'
-#' Wrapper over [design_from_formula()] and [estimate_logmu_ql()]. Resolves
-#' counts / offsets / gene ids from a matrix, SummarizedExperiment, Seurat,
-#' or [scale_to_hca_reference()] object, fits **all genes**, then optionally
-#' filters to `genes`.
-#'
-#' For a matrix-only pipeline:
-#' \preformatted{
-#'   design <- design_from_formula(~ 0 + Category, metadata)
-#'   est <- estimate_logmu_ql(counts, offset, design)
-#' }
-#'
-#' @param data Gene-by-sample counts, or a scaled matrix / SE / Seurat object
-#'   from [scale_to_hca_reference()].
-#' @param metadata Optional sample metadata `data.frame`. Required for a plain
-#'   matrix without alignment attributes. Must include `hca_offset` and any
-#'   columns referenced in `formula`.
-#' @param formula One-sided model formula for the edgeR design. Default `~ 1`
-#'   estimates one pooled cohort. Prefer `~ 0 + group` for group means.
-#' @param genes Optional gene identifiers (symbols or ENSG). Default is all
-#'   rows. Dispersion is always estimated from the full count matrix; this
-#'   argument only filters the returned table.
-#' @param cell_type Optional cell type label stored in the output.
-#' @param version Nectar version pin used when validating genes against the
-#'   cell-type universe.
-#' @param robust Passed to [edgeR::estimateDisp()] and [edgeR::glmQLFit()].
-#' @param assay Assay name for SE / Seurat input.
-#' @return A data frame with one row per gene x design term: `gene` (ENSG),
-#'   `gene_symbol`, `cell_type`, `group`, `n`, `log_mu`, `mu`, `se`, `df`,
-#'   `dispersion`.
-#' @seealso [design_from_formula()], [estimate_logmu_ql()],
-#'   [scale_to_hca_reference()]
-#' @export
-#' @importFrom cli cli_abort
-estimate_cohort_logmu <- function(
-  data,
-  metadata = NULL,
-  formula = ~1,
-  genes = NULL,
-  cell_type = NULL,
-  version = "latest",
-  robust = TRUE,
-  assay = NULL
-) {
-  source_obj <- data
-  if (is_aligned_result(data)) {
-    aligned <- aligned_fields(data)
-    if (is.null(cell_type) && !is.null(aligned$cell_type)) {
-      cell_type <- aligned$cell_type
-    }
-    counts <- aligned$counts
-  } else {
-    counts <- extract_count_matrix(source_obj, assay = assay, arg_name = "data")
-  }
-
-  sample_ids <- colnames(counts)
-  meta <- resolve_cohort_metadata(source_obj, metadata = metadata, assay = assay)
-  meta <- fill_reference_formula_levels(meta, formula)
-  offset <- validate_cohort_offset(meta, sample_ids)
-
-  if (is.null(cell_type) && "hca_cell_type" %in% names(meta)) {
-    ct_vals <- unique(stats::na.omit(as.character(meta$hca_cell_type)))
-    if (length(ct_vals) == 1L) cell_type <- ct_vals[[1]]
-  }
-
-  design <- design_from_formula(formula, meta)
-
-  est <- estimate_logmu_ql(
-    counts = counts,
-    offset = offset,
-    design = design,
-    cell_type = cell_type,
-    robust = robust
-  )
-
-  if (is.null(genes)) {
-    return(est)
-  }
-
-  if (all(genes %in% rownames(counts))) {
-    gene_ids <- as.character(genes)
-    gene_symbols <- stats::setNames(
-      ifelse(is_ensembl_gene_id(gene_ids), NA_character_, gene_ids),
-      gene_ids
-    )
-  } else {
-    resolved <- resolve_gene(
-      genes,
-      cell_type = cell_type,
-      version = version,
-      strict = TRUE
-    )
-    gene_ids <- unname(resolved)
-    gene_symbols <- stats::setNames(
-      ifelse(is_ensembl_gene_id(names(resolved)), NA_character_, names(resolved)),
-      gene_ids
-    )
-    missing <- setdiff(gene_ids, rownames(counts))
-    if (length(missing) > 0L) {
-      cli_abort("Gene{?s} not in `data`: {missing}.")
-    }
-  }
-
-  est <- est[est$gene %in% gene_ids, , drop = FALSE]
-  if (!nrow(est)) {
-    cli_abort("No rows left after filtering to `genes`.")
-  }
-  est$gene_symbol <- unname(gene_symbols[est$gene])
-  rownames(est) <- NULL
-  est
 }

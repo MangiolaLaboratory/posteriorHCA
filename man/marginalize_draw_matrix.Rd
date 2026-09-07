@@ -4,10 +4,10 @@
 \alias{marginalize_draw_matrix}
 \title{Collapse a draws-by-profile matrix over the covariate grid}
 \usage{
-marginalize_draw_matrix(y_mat, method = c("mean", "pool", "sample"))
+marginalize_draw_matrix(draw_matrix, method = c("mean", "pool", "sample"))
 }
 \arguments{
-\item{y_mat}{Matrix: rows = posterior draws, columns = grid rows.}
+\item{draw_matrix}{Matrix: rows = posterior draws, columns = grid rows.}
 
 \item{method}{`"mean"` averages profiles within each draw (grand mean).
 `"pool"` stacks every draw x profile (mixture / density). `"sample"`

@@ -6,8 +6,7 @@
 \usage{
 plot_cohort_vs_hca(
   hca_draws,
-  test_results = NULL,
-  cohort_est = NULL,
+  cohort_est,
   exclude_groups = character(0),
   show_se = TRUE,
   stagger_heights = TRUE,
@@ -20,18 +19,14 @@ plot_cohort_vs_hca(
 )
 }
 \arguments{
-\item{hca_draws}{Posterior draws from [expr_draws()] or [expr_predict()].
+\item{hca_draws}{Posterior draws from [expression_draws()].
 Must use `quantity = "linpred"` because cohort tests are on log(mu).}
 
-\item{test_results}{Optional data frame from [welch_t_test_cohort_hca()].}
-
-\item{cohort_est}{Optional data frame from [estimate_cohort_logmu()] or
-[bootstrap_cohort_logmu_batch()]. Used when `test_results` is not supplied.}
+\item{cohort_est}{Data frame with cohort estimates (`group`, `log_mu`, ...).}
 
 \item{exclude_groups}{Character vector of cohort labels to omit.}
 
-\item{show_se}{If `TRUE`, draw horizontal error bars for cohort `log_mu +/- se`
-(or `cohort_log_mu +/- cohort_se` for Welch output).}
+\item{show_se}{If `TRUE`, draw horizontal error bars for cohort `log_mu +/- se`.}
 
 \item{stagger_heights}{If `TRUE`, place each cohort marker at a different
 height above the density to reduce overlap.}
@@ -54,6 +49,6 @@ A `ggplot` object.
 }
 \description{
 Visualises cohort log(mu) estimates against healthy HCA posterior draws.
-Accepts outputs from [welch_t_test_cohort_hca()], [estimate_cohort_logmu()],
-or [bootstrap_cohort_logmu_batch()].
+Pass a data frame with at least `group` and `log_mu` (and optionally `se`,
+`p_value`, `direction`).
 }

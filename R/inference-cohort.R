@@ -1,3 +1,8 @@
+# Cohort bootstrap helpers for gene-expression workflow
+#
+#   estimate_dispersion_nb()  — gene-wise NB dispersion from a count matrix
+#   bootstrap_logmu_mglm()    — Dirichlet-weighted mglmOneGroup draws
+
 #' Dirichlet weights for Bayesian bootstrap
 #'
 #' Draws Dirichlet(1, ..., 1) weights scaled so they sum to `n`.
@@ -17,97 +22,11 @@ draw_dirichlet_weights <- function(n) {
   n * weights / sum(weights)
 }
 
-#' Resolve a single finite gene dispersion value
-#' @keywords internal
-#' @noRd
-scalar_gene_dispersion <- function(dispersion, gene_ensg) {
-  if (is.null(dispersion)) {
-    return(NA_real_)
-  }
-  if (length(dispersion) == 1L && is.numeric(dispersion)) {
-    return(as.numeric(dispersion))
-  }
-  if (!is.null(names(dispersion)) && gene_ensg %in% names(dispersion)) {
-    return(as.numeric(dispersion[[gene_ensg]]))
-  }
-  as.numeric(dispersion[[1]])
-}
-
-#' Extract count matrix, offset, and sample_role from a container
-#' @keywords internal
-#' @noRd
-extract_counts_offset <- function(source_obj, offset = NULL, assay = NULL) {
-  sample_role <- NULL
-  if (is_aligned_result(source_obj)) {
-    aligned <- aligned_fields(source_obj)
-    counts <- aligned$counts
-    if (is.null(offset)) {
-      offset <- aligned$offset
-    }
-    sample_role <- aligned$sample_role
-  } else {
-    counts <- extract_count_matrix(source_obj, assay = assay, arg_name = "counts")
-    fields <- aligned_fields(source_obj)
-    if (!is.null(fields) && !is.null(fields$sample_role)) {
-      sample_role <- fields$sample_role
-    } else if (inherits(source_obj, "Seurat")) {
-      meta <- tryCatch(source_obj[[]], error = function(e) NULL)
-      if (!is.null(meta) && "sample_role" %in% names(meta)) {
-        sample_role <- stats::setNames(meta$sample_role, rownames(meta))
-      }
-    } else if (inherits(source_obj, "SummarizedExperiment")) {
-      cd <- as.data.frame(SummarizedExperiment::colData(source_obj))
-      if ("sample_role" %in% names(cd)) {
-        sample_role <- stats::setNames(cd$sample_role, rownames(cd))
-      }
-    }
-  }
-
-  if (is.null(offset)) {
-    fields <- aligned_fields(source_obj)
-    if (!is.null(fields) && !is.null(fields$offset)) {
-      offset <- fields$offset
-    }
-  }
-  if (is.null(offset) && inherits(source_obj, "SummarizedExperiment")) {
-    cd <- as.data.frame(SummarizedExperiment::colData(source_obj))
-    if ("hca_offset" %in% names(cd)) {
-      offset <- cd$hca_offset
-      names(offset) <- rownames(cd)
-    }
-  }
-  if (is.null(offset) && inherits(source_obj, "Seurat")) {
-    meta <- tryCatch(source_obj[[]], error = function(e) NULL)
-    if (!is.null(meta) && "hca_offset" %in% names(meta)) {
-      offset <- meta$hca_offset
-      names(offset) <- rownames(meta)
-    }
-  }
-  if (is.null(offset)) {
-    cli_abort("`offset` is missing.")
-  }
-  if (length(offset) != ncol(counts)) {
-    cli_abort(
-      "`offset` length ({length(offset)}) must match `ncol(counts)` ({ncol(counts)})."
-    )
-  }
-  if (!is.null(names(offset)) && all(names(offset) %in% colnames(counts))) {
-    offset <- offset[colnames(counts)]
-  }
-  offset <- stats::setNames(as.numeric(offset), colnames(counts))
-
-  list(
-    counts = counts,
-    offset = offset,
-    sample_role = sample_role
-  )
-}
-
 #' Estimate NB dispersions from a count matrix with explicit offset
 #'
-#' Core matrix helper. Fits an intercept-only edgeR QL model and returns the
-#' gene-wise dispersion vector. Prefer this over fitting a one-gene matrix
-#' alone: dispersion shrinks better with many genes.
+#' Fits an intercept-only edgeR QL model and returns the gene-wise dispersion
+#' vector. Prefer this over fitting a one-gene matrix alone: dispersion
+#' shrinks better with many genes.
 #'
 #' @param counts Gene-by-sample numeric count matrix.
 #' @param offset Numeric vector (length `ncol(counts)`) or matrix. Typically
@@ -116,7 +35,6 @@ extract_counts_offset <- function(source_obj, offset = NULL, assay = NULL) {
 #' @return Named numeric vector of dispersions (names = gene ids).
 #' @seealso [estimate_logmu_ql()], [bootstrap_logmu_mglm()]
 #' @export
-#' @importFrom cli cli_abort
 estimate_dispersion_nb <- function(counts, offset, robust = TRUE) {
   counts <- as.matrix(counts)
   design <- matrix(1, nrow = ncol(counts), ncol = 1L)
@@ -130,25 +48,9 @@ estimate_dispersion_nb <- function(counts, offset, robust = TRUE) {
   )$dispersion
 }
 
-#' Estimate negative-binomial dispersion for one gene (container wrapper)
-#'
-#' Extracts counts and offset from a matrix / SE / Seurat / aligned object,
-#' then calls [estimate_dispersion_nb()].
-#'
-#' @keywords internal
-#' @noRd
-estimate_gene_dispersion <- function(source_obj, gene_ensg, offset = NULL, assay = NULL) {
-  resolved <- extract_counts_offset(source_obj, offset = offset, assay = assay)
-  if (!gene_ensg %in% rownames(resolved$counts)) {
-    cli_abort("Gene `{gene_ensg}` not found in `counts`.")
-  }
-  disp <- estimate_dispersion_nb(resolved$counts, resolved$offset)
-  as.numeric(disp[[gene_ensg]])
-}
-
 #' Bayesian bootstrap of log(μ) via weighted mglmOneGroup
 #'
-#' Core matrix helper. Repeatedly draws Dirichlet(1,…,1) weights and fits
+#' Repeatedly draws Dirichlet(1,…,1) weights and fits
 #' [edgeR::mglmOneGroup()] for a single gene (one row of counts). Returns
 #' posterior draws of latent log(μ) on the supplied offset scale.
 #'
@@ -158,7 +60,7 @@ estimate_gene_dispersion <- function(source_obj, gene_ensg, offset = NULL, assay
 #' @param n_boot Integer number of bootstrap iterations (default `2000L`).
 #' @param seed Optional RNG seed.
 #' @return Numeric vector of length `n_boot`.
-#' @seealso [bootstrap_cohort_logmu()], [estimate_logmu_ql()]
+#' @seealso [estimate_dispersion_nb()], [estimate_logmu_ql()]
 #' @export
 #' @importFrom cli cli_abort
 bootstrap_logmu_mglm <- function(
@@ -185,17 +87,11 @@ bootstrap_logmu_mglm <- function(
     }
   }
   storage.mode(y) <- "double"
-  if (anyNA(y)) {
-    cli_abort("`y` must not contain NA counts.")
-  }
   offset <- as.numeric(offset)
   if (length(offset) != ncol(y)) {
     cli_abort(
       "`offset` length ({length(offset)}) must match the number of samples ({ncol(y)})."
     )
-  }
-  if (anyNA(offset) || !all(is.finite(offset))) {
-    cli_abort("`offset` must contain finite numeric values.")
   }
 
   n_samples <- ncol(y)
@@ -212,430 +108,4 @@ bootstrap_logmu_mglm <- function(
       weights = w
     )[[1]]
   }, numeric(1))
-}
-
-#' Bayesian bootstrap of cohort log(mu)
-#'
-#' Wrapper over [bootstrap_logmu_mglm()]. Extracts counts and offsets from a
-#' matrix / SE / Seurat / aligned object, resolves the gene id, optionally
-#' subsets to a cohort, estimates dispersion via [estimate_dispersion_nb()]
-#' when needed, then bootstraps log(μ).
-#'
-#' `counts` may be a matrix, `SummarizedExperiment`, `SingleCellExperiment`,
-#' `Seurat` object, or an aligned object from [scale_to_hca_reference()].
-#'
-#' @param counts Count container or matrix.
-#' @param offset Numeric vector of sample offsets, or `NULL` if provided in
-#'   an aligned `counts` object.
-#' @param dispersion Numeric scalar or named vector of negative-binomial
-#'   dispersion values. If `NULL`, dispersion is estimated across `counts`
-#'   with [estimate_dispersion_nb()].
-#' @param group Optional group vector or column name to subset samples. If
-#'   `NULL`, all non-reference samples (or all samples) are used.
-#' @param gene Character scalar; gene id resolved to ENSG (must be in `rownames(counts)`).
-#' @param n_boot Integer; number of bootstrap iterations (default 2000L).
-#' @param seed Optional RNG seed for reproducibility.
-#' @param assay Assay name for SE / Seurat input.
-#' @return A numeric vector of length `n_boot` containing posterior log(mu) draws.
-#' @seealso [bootstrap_logmu_mglm()], [estimate_dispersion_nb()]
-#' @export
-#' @importFrom cli cli_abort
-bootstrap_cohort_logmu <- function(
-  counts,
-  offset = NULL,
-  dispersion = NULL,
-  group = NULL,
-  gene,
-  n_boot = 2000L,
-  seed = NULL,
-  assay = NULL
-) {
-  if (missing(gene) || is.null(gene) || length(gene) != 1L) {
-    cli_abort("`gene` must be a single gene identifier.")
-  }
-
-  source_obj <- counts
-  resolved <- extract_counts_offset(source_obj, offset = offset, assay = assay)
-  counts <- resolved$counts
-  offset <- resolved$offset
-  sample_role <- resolved$sample_role
-
-  if (as.character(gene) %in% rownames(counts)) {
-    gene_ensg <- as.character(gene)
-  } else {
-    gene_ensg <- resolve_gene_one(gene, strict = TRUE)
-  }
-  if (!gene_ensg %in% rownames(counts)) {
-    cli_abort("Gene `{gene_ensg}` not found in `counts`.")
-  }
-
-  cols_idx <- seq_len(ncol(counts))
-  if (!is.null(group)) {
-    resolved_group <- resolve_group(group, source_obj, ncol(counts), sample_role)
-    cols_idx <- which(resolved_group == group[[1]] | resolved_group %in% group)
-  } else if (!is.null(sample_role)) {
-    cols_idx <- which(sample_role == "user")
-  }
-  if (length(cols_idx) == 0L) {
-    cli_abort("No samples selected for cohort bootstrap.")
-  }
-
-  y <- counts[gene_ensg, cols_idx, drop = FALSE]
-  o <- as.numeric(offset)[cols_idx]
-
-  disp <- scalar_gene_dispersion(dispersion, gene_ensg)
-  if (!is.finite(disp) || disp <= 0) {
-    disp <- estimate_gene_dispersion(
-      source_obj,
-      gene_ensg,
-      offset = resolved$offset,
-      assay = assay
-    )
-  }
-  if (!is.finite(disp) || disp <= 0) {
-    cli_abort(
-      "Could not resolve a finite positive dispersion for gene `{gene_ensg}`."
-    )
-  }
-
-  bootstrap_logmu_mglm(
-    y = y,
-    offset = o,
-    dispersion = disp,
-    n_boot = n_boot,
-    seed = seed
-  )
-}
-
-#' Summarise bootstrap log(mu) draws for one cohort
-#' @keywords internal
-#' @noRd
-summarize_bootstrap_draws <- function(draws, hca_draws = NULL) {
-  log_mu <- stats::median(draws)
-  out <- list(
-    log_mu = unname(log_mu),
-    mu = unname(exp(log_mu)),
-    se = unname(stats::sd(draws)),
-    boot_q025 = unname(stats::quantile(draws, 0.025)),
-    boot_q975 = unname(stats::quantile(draws, 0.975))
-  )
-  if (!is.null(hca_draws)) {
-    if (is.list(hca_draws) && "draws" %in% names(hca_draws)) {
-      hca_draws <- hca_draws$draws
-    }
-    out$empirical_rank <- mean(hca_draws <= log_mu)
-  }
-  out
-}
-
-#' Bayesian bootstrap of cohort log(mu) for multiple groups
-#'
-#' Mirrors the ergonomics of [estimate_cohort_logmu()] and
-#' [welch_t_test_cohort_hca()]: one function call bootstraps every cohort
-#' (except `exclude_groups`) and returns a data frame with `group`, `log_mu`,
-#' and `se` columns compatible with downstream testing and plotting.
-#'
-#' @inheritParams estimate_cohort_logmu
-#' @inheritParams bootstrap_cohort_logmu
-#' @param cohorts Optional cohort labels to bootstrap. Defaults to all groups
-#'   except `exclude_groups`.
-#' @param exclude_groups Groups omitted when `cohorts` is `NULL` (default
-#'   `"reference"`).
-#' @param cohort_est Optional output from [estimate_cohort_logmu()]. When
-#'   supplied, `genes` and `dispersion` can be taken from this table.
-#' @param hca_draws Optional HCA posterior draws used to compute
-#'   `empirical_rank` for each cohort.
-#' @param keep_draws If `TRUE`, include a list-column `draws` with the raw
-#'   bootstrap vectors.
-#' @return A data frame with one row per cohort and columns compatible with
-#'   [estimate_cohort_logmu()], plus `method = "bootstrap"`, `boot_q025`,
-#'   `boot_q975`, and optionally `empirical_rank` and `draws`.
-#' @export
-#' @importFrom cli cli_abort
-bootstrap_cohort_logmu_batch <- function(
-  counts,
-  group,
-  genes = NULL,
-  cohorts = NULL,
-  exclude_groups = "reference",
-  dispersion = NULL,
-  cohort_est = NULL,
-  hca_draws = NULL,
-  n_boot = 2000L,
-  seed = NULL,
-  assay = NULL,
-  keep_draws = FALSE
-) {
-  if (!is.null(cohort_est)) {
-    if (!is.data.frame(cohort_est) || nrow(cohort_est) == 0L) {
-      cli::cli_abort("`cohort_est` must be a non-empty data frame.")
-    }
-    if (is.null(genes) && "gene" %in% names(cohort_est)) {
-      genes <- unique(as.character(cohort_est$gene))
-    }
-    if (is.null(cohorts) && "group" %in% names(cohort_est)) {
-      cohorts <- setdiff(unique(as.character(cohort_est$group)), exclude_groups)
-    }
-  }
-
-  if (is.null(genes) || length(genes) != 1L) {
-    cli::cli_abort("`genes` must be a single gene identifier.")
-  }
-  n_boot <- as.integer(n_boot[[1L]])
-  if (length(n_boot) != 1L || is.na(n_boot) || n_boot < 1L) {
-    cli::cli_abort("`n_boot` must be a positive integer.")
-  }
-
-  mat_check <- extract_count_matrix(counts, assay = assay, arg_name = "counts")
-  if (as.character(genes) %in% rownames(mat_check)) {
-    gene_ensg <- as.character(genes)
-    gene_symbol <- if (is_ensembl_gene_id(gene_ensg)) NA_character_ else as.character(genes)
-  } else {
-    gene_ensg <- resolve_gene_one(genes, strict = TRUE)
-    gene_symbol <- if (is_ensembl_gene_id(genes)) NA_character_ else as.character(genes)
-  }
-
-  if (is.null(dispersion) && !is.null(cohort_est) && "dispersion" %in% names(cohort_est)) {
-    disp_vals <- cohort_est$dispersion[cohort_est$gene == gene_ensg]
-    disp_vals <- disp_vals[is.finite(disp_vals) & disp_vals > 0]
-    if (length(disp_vals)) {
-      dispersion <- as.numeric(disp_vals[[1]])
-    }
-  }
-
-  n_lib <- ncol(extract_count_matrix(counts, assay = assay, arg_name = "counts"))
-  sample_role <- NULL
-  if (is_aligned_result(counts)) {
-    fields <- aligned_fields(counts)
-    sample_role <- fields$sample_role
-  }
-  resolved_group <- resolve_group(
-    group,
-    counts,
-    n_lib,
-    sample_role = sample_role,
-    assay = assay
-  )
-  if (is.null(cohorts)) {
-    cohorts <- setdiff(unique(as.character(resolved_group)), exclude_groups)
-  } else {
-    cohorts <- as.character(cohorts)
-  }
-  cohorts <- cohorts[!is.na(cohorts) & nzchar(cohorts)]
-  if (length(cohorts) == 0L) {
-    cli::cli_abort("No cohorts selected for bootstrap.")
-  }
-
-  if (!is.null(cohort_est) && "gene" %in% names(cohort_est)) {
-    gene_ids <- unique(as.character(cohort_est$gene))
-    if (length(gene_ids) > 1L) {
-      cli::cli_abort("`cohort_est` contains multiple genes; subset to one gene.")
-    }
-  }
-
-  if (is.null(dispersion) || !is.finite(scalar_gene_dispersion(dispersion, gene_ensg)) ||
-      scalar_gene_dispersion(dispersion, gene_ensg) <= 0) {
-    dispersion <- estimate_gene_dispersion(counts, gene_ensg, assay = assay)
-  }
-
-  out <- lapply(seq_along(cohorts), function(cohort_i) {
-    cohort_label <- cohorts[[cohort_i]]
-    sub_counts <- subset_aligned_by_group(
-      counts,
-      resolved_group,
-      cohort_label,
-      assay = assay
-    )
-    sub_meta <- extract_sample_metadata(sub_counts)
-    n_user <- sum(sub_meta$sample_role == "user", na.rm = TRUE)
-    if (n_user < 1L) {
-      cli::cli_abort("Cohort `{cohort_label}` has no user samples for bootstrap.")
-    }
-    cohort_seed <- if (is.null(seed)) NULL else seed + cohort_i - 1L
-    boot_draws <- bootstrap_cohort_logmu(
-      sub_counts,
-      gene = gene_ensg,
-      dispersion = dispersion,
-      n_boot = n_boot,
-      seed = cohort_seed,
-      assay = assay
-    )
-    summary <- summarize_bootstrap_draws(boot_draws, hca_draws = hca_draws)
-
-    meta_row <- NULL
-    if (!is.null(cohort_est)) {
-      meta_row <- cohort_est[cohort_est$group == cohort_label, , drop = FALSE]
-    }
-
-    row <- data.frame(
-      gene = gene_ensg,
-      gene_symbol = if (!is.null(meta_row) && "gene_symbol" %in% names(meta_row) &&
-        !is.na(meta_row$gene_symbol[[1]]) && nzchar(meta_row$gene_symbol[[1]])) {
-        as.character(meta_row$gene_symbol[[1]])
-      } else {
-        gene_symbol
-      },
-      cell_type = if (!is.null(meta_row) && "cell_type" %in% names(meta_row)) {
-        as.character(meta_row$cell_type[[1]])
-      } else {
-        NA_character_
-      },
-      group = cohort_label,
-      n = n_user,
-      log_mu = summary$log_mu,
-      mu = summary$mu,
-      se = summary$se,
-      df = NA_real_,
-      dispersion = if (!is.null(meta_row) && "dispersion" %in% names(meta_row)) {
-        as.numeric(meta_row$dispersion[[1]])
-      } else if (!is.null(dispersion)) {
-        if (!is.null(names(dispersion)) && gene_ensg %in% names(dispersion)) {
-          as.numeric(dispersion[[gene_ensg]])
-        } else {
-          as.numeric(dispersion[[1]])
-        }
-      } else {
-        NA_real_
-      },
-      method = "bootstrap",
-      boot_q025 = summary$boot_q025,
-      boot_q975 = summary$boot_q975,
-      empirical_rank = if (!is.null(summary$empirical_rank)) summary$empirical_rank else NA_real_,
-      stringsAsFactors = FALSE
-    )
-    if (isTRUE(keep_draws)) {
-      row$draws <- list(boot_draws)
-    }
-    row
-  })
-
-  do.call(rbind, out)
-}
-
-#' Welch t-test for one cohort row against HCA posterior draws
-#' @keywords internal
-#' @noRd
-welch_t_test_one_cohort <- function(
-  cohort_row,
-  hca_draws,
-  hca_meta,
-  alpha = 0.05
-) {
-  if (!all(c("log_mu", "se") %in% names(cohort_row))) {
-    cli_abort("`cohort_est` data frame must contain `log_mu` and `se` columns.")
-  }
-
-  cohort_meta <- cohort_est_metadata(cohort_row)
-  validate_expr_metadata_match(cohort_meta, hca_meta, context = "`cohort_est` and `hca_draws`")
-
-  cohort <- cohort_estimate_at(cohort_row, row = 1L)
-  gene_ensg <- cohort$gene
-  if (is.na(gene_ensg) || !nzchar(gene_ensg)) {
-    gene_ensg <- hca_meta$gene_ensg
-  }
-  gene_symbol <- cohort$gene_symbol
-  if (is.na(gene_symbol) || !nzchar(gene_symbol)) {
-    gene_symbol <- hca_meta$gene_symbol
-  }
-  cell_type <- cohort$cell_type
-  if (is.na(cell_type) || !nzchar(cell_type)) {
-    cell_type <- hca_meta$cell_type
-  }
-
-  out <- compare_logmu_to_baseline(
-    mu = cohort$mu,
-    se = cohort$se,
-    n = cohort$n,
-    baseline_draws = hca_draws,
-    cohort = cohort$group,
-    method = cohort$method,
-    gene = gene_ensg,
-    gene_symbol = gene_symbol,
-    cell_type = cell_type,
-    alpha = alpha
-  )
-  out
-}
-
-#' Welch t-test of cohort log(mu) against HCA posterior draws
-#'
-#' Compares cohort estimates from [estimate_cohort_logmu()] to healthy HCA
-#' posterior draws using [compare_logmu_to_baseline()]. By default, tests
-#' every cohort in `cohort_est` except `exclude_groups`.
-#'
-#' For a manual workflow, extract summaries with [cohort_estimate_at()] and
-#' [summarize_posterior_draws()], then call [welch_test_means()] or
-#' [compare_logmu_to_baseline()] directly.
-#'
-#' @param cohort_est A data frame from [estimate_cohort_logmu()] or
-#'   [bootstrap_cohort_logmu_batch()] with columns `group`, `log_mu`, and `se`.
-#' @param hca_draws A numeric vector of posterior draws, or the list returned
-#'   by [expr_draws()] / [expr_predict()].
-#' @param cohorts Optional character vector of cohort labels to test. Defaults
-#'   to all groups in `cohort_est` except those in `exclude_groups`.
-#' @param exclude_groups Groups omitted when `cohorts` is `NULL` (default
-#'   `"reference"`).
-#' @param alpha Significance level used for the `direction` column.
-#' @return A data frame with one row per tested cohort (see
-#'   [compare_logmu_to_baseline()]).
-#' @export
-#' @importFrom cli cli_abort
-welch_t_test_cohort_hca <- function(
-  cohort_est,
-  hca_draws,
-  cohorts = NULL,
-  exclude_groups = "reference",
-  alpha = 0.05
-) {
-  if (!is.data.frame(cohort_est) || nrow(cohort_est) == 0L) {
-    cli_abort("`cohort_est` must be a non-empty data frame from [estimate_cohort_logmu()] or [bootstrap_cohort_logmu_batch()].")
-  }
-  if (!all(c("group", "log_mu", "se") %in% names(cohort_est))) {
-    cli_abort("`cohort_est` must contain `group`, `log_mu`, and `se` columns.")
-  }
-
-  hca_meta <- expr_metadata(hca_draws)
-  hca_vec <- extract_posterior_draws(hca_draws)
-  if (length(hca_vec) < 2L) {
-    cli_abort("`hca_draws` must contain at least 2 numeric draws.")
-  }
-
-  if (is.null(cohorts)) {
-    cohorts <- setdiff(unique(as.character(cohort_est$group)), exclude_groups)
-  } else {
-    cohorts <- as.character(cohorts)
-  }
-  cohorts <- cohorts[!is.na(cohorts) & nzchar(cohorts)]
-  if (length(cohorts) == 0L) {
-    cli_abort("No cohorts selected for testing.")
-  }
-
-  sub <- cohort_est[cohort_est$group %in% cohorts, , drop = FALSE]
-  if (nrow(sub) == 0L) {
-    cli_abort(
-      "No rows in `cohort_est` match `cohorts`: {paste(cohorts, collapse = ', ')}."
-    )
-  }
-
-  if ("gene" %in% names(sub)) {
-    genes <- unique(as.character(sub$gene))
-    if (length(genes) > 1L) {
-      cli_abort(
-        "`cohort_est` contains multiple genes; subset to one gene or provide one `hca_draws` object per gene."
-      )
-    }
-  }
-
-  validate_expr_metadata_match(cohort_est_metadata(sub[1, , drop = FALSE]), hca_meta)
-
-  out <- lapply(seq_len(nrow(sub)), function(i) {
-    welch_t_test_one_cohort(
-      cohort_row = sub[i, , drop = FALSE],
-      hca_draws = hca_vec,
-      hca_meta = hca_meta,
-      alpha = alpha
-    )
-  })
-
-  do.call(rbind, out)
 }

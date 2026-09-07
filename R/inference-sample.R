@@ -7,7 +7,7 @@
 #' @param observed_count Numeric vector of observed counts (one per sample).
 #' @param offset Numeric vector of library-size offsets (default `0`).
 #' @param predictive_draws A numeric vector of draws (for 1 sample), a draws-by-sample
-#'   matrix, or a list containing `$draws` from [expr_draws()] with `quantity = "predict"`.
+#'   matrix, or a list containing `$draws` from [expression_draws()] with `quantity = "predict"`.
 #' @param linpred_draws Optional numeric vector or matrix of latent log(mu) draws from
 #'   `posterior_linpred(transform = FALSE)`.
 #' @param epred_draws Optional numeric vector or matrix of expected count draws from

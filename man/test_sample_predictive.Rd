@@ -21,7 +21,7 @@ test_sample_predictive(
 \item{offset}{Numeric vector of library-size offsets (default `0`).}
 
 \item{predictive_draws}{A numeric vector of draws (for 1 sample), a draws-by-sample
-matrix, or a list containing `$draws` from [expr_draws()] with `quantity = "predict"`.}
+matrix, or a list containing `$draws` from [expression_draws()] with `quantity = "predict"`.}
 
 \item{linpred_draws}{Optional numeric vector or matrix of latent log(mu) draws from
 `posterior_linpred(transform = FALSE)`.}

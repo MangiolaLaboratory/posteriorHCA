@@ -7,8 +7,8 @@
 summarize_posterior_draws(draws, value = NULL)
 }
 \arguments{
-\item{draws}{A numeric vector or a list from [expr_draws()] /
-[expr_predict()].}
+\item{draws}{A numeric vector or a list with a `$draws` element (for
+example from [expression_draws()]).}
 
 \item{value}{Optional scalar; when supplied, `empirical_rank` is the
 proportion of draws less than or equal to `value`.}

@@ -171,19 +171,28 @@ print(plot_composition_vs_hca(comp_draws, test_results = test_results))
 
 ### **2. Gene Expression Prediction**
 
-The `expr_predict()` function allows predicting gene expression levels for specific cell types and genes based on sample metadata:
+Load a stored expression model and draw healthy posteriors with
+`load_expression_fit()`, `build_newdata_grid()`, and `expression_draws()`:
 
 ```{r eval = requireNamespace("brms", quietly = TRUE), fig.width= 10, fig.height= 6 }
-# Predict gene expression for a specific cell type and gene
-expr_result <- expr_predict(
+expression_fit <- load_expression_fit(
   cell_type = "cd4 naive",
-  gene = "ENSG00000000419",
+  gene_ensg = "ENSG00000000419"
+)
+newdata <- build_newdata_grid(
+  expression_fit,
   age_decade = "7",
   sex = "female",
   disease_groups = "Normal",
   ethnicity_groups = "European",
   assay_groups = "10x Genomics 3",
   tissue_groups = "blood"
+)
+posterior_draws <- expression_draws(
+  expression_fit,
+  newdata = newdata,
+  quantity = "linpred",
+  collapse = "mean"
 )
 ```
 
@@ -192,24 +201,18 @@ expr_result <- expr_predict(
 **Summary Statistics:**
 
 ```{r eval = requireNamespace("brms", quietly = TRUE)}
-print(expr_result$summary)
+summarize_posterior_draws(posterior_draws)
 ```
 
 **Density Plot of Predicted Expression:**
 
 ```{r eval = requireNamespace("brms", quietly = TRUE), fig.width= 10, fig.height= 6 }
-print(expr_result$plot)
-```
-
-**Predicted Values:**
-
-```{r eval = requireNamespace("brms", quietly = TRUE)}
-head(expr_result$pred)
+print(plot_hca_draws(posterior_draws))
 ```
 
 ## **Input Arguments and Valid Values**
 
-Both [composition_test()] / [composition_draws()] and [expr_predict()]
+Both [composition_test()] / [composition_draws()] and [expression_draws()]
 accept metadata inputs corresponding to observed sample characteristics. For
 composition, the default healthy sccomp model uses **sex, age decade,
 ethnicity, assay, and tissue**. Unknown covariates can be set to `NA` and are
