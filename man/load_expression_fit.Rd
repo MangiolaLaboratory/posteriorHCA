@@ -24,8 +24,8 @@ load_expression_fit(
 \item{use_cache}{Logical. Reuse a previously downloaded file.}
 }
 \value{
-A `posteriorHCA_expr_fit` object: a list with `fit` (`brmsfit`),
-  `cell_type`, and `gene_ensg`.
+A `posteriorHCA_expr_fit` list with `fit`, `cell_type`, and
+  `gene_ensg`.
 }
 \description{
 Load a stored gene-level brms fit

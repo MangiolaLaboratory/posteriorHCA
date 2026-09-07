@@ -24,6 +24,5 @@ get_gene_universe(
 Character vector of Ensembl gene ids.
 }
 \description{
-Reads `genes.csv` from Nectar object storage (`{container}/{cell_type}/genes.csv`).
-The file lists one Ensembl gene id per row in a `.feature` column.
+Download the ENSG gene universe for a cell type
 }

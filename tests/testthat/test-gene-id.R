@@ -19,14 +19,14 @@ test_that("strip_ensembl_version removes version suffix", {
   expect_equal(strip_ensembl_version("ENSG00000169252.1"), "ENSG00000169252")
 })
 
-test_that("expression metadata helpers propagate fit annotations", {
+test_that("new_expression_fit stores annotations", {
   fit <- new_expression_fit(
     fit = list(data = data.frame(x = 1)),
     cell_type = "monocytic",
     gene_ensg = "ENSG00000169252"
   )
-  meta <- expression_metadata(fit)
-  expect_equal(meta$cell_type, "monocytic")
-  expect_equal(meta$gene_ensg, "ENSG00000169252")
   expect_true(is_expression_fit(fit))
+  expect_equal(fit$cell_type, "monocytic")
+  expect_equal(fit$gene_ensg, "ENSG00000169252")
+  expect_identical(as_brms_fit(fit), fit$fit)
 })

@@ -16,39 +16,29 @@ scale_to_hca_reference(
 \arguments{
 \item{counts}{User libraries (matrix, SE/SCE, or Seurat).}
 
-\item{reference}{Cell type, Nectar download list from
-[get_reference_sample_ready()], or a one-library count object.}
+\item{reference}{Cell type string, Nectar download list, or one-library
+count object.}
 
-\item{reference_name}{Column name for the bound atlas library.
-Default is the atlas sample id, or `"hca_reference"`.}
+\item{reference_name}{Column name for the bound atlas library.}
 
-\item{method}{Passed to [edgeR::calcNormFactors()]. Default `"TMMwsp"`.}
+\item{method}{Passed to [edgeR::calcNormFactors()].}
 
-\item{assay}{Assay name for SE / Seurat input. Default `"counts"` when present.}
+\item{assay}{Assay name for SE / Seurat input.}
 
-\item{version}{Nectar version pin, used when `reference` is a cell type.}
+\item{version}{Nectar version pin when `reference` is a cell type.}
 }
 \value{
-An object of the same class as `counts` with the atlas reference
-  library appended and alignment fields attached.
+Same class as `counts`, with the atlas library appended.
 }
 \description{
-Wrapper over [merge_with_reference_sample()] and
-[calculate_tmm_offset()]. Accepts a matrix,
-`SummarizedExperiment` / `SingleCellExperiment`, or `Seurat` object and
-returns the same class with the atlas library appended and alignment
-metadata attached (`hca_offset`, `hca_multiplier`, `sample_role`, …).
+Convenience wrapper for Seurat / SummarizedExperiment / matrix input.
+Calls [merge_with_reference_sample()] and [calculate_tmm_offset()], then
+returns an object of the same class with `hca_offset`, `hca_multiplier`,
+and `sample_role` available on sample metadata (or as matrix attributes).
 }
 \details{
-The atlas reference is usually a cell type string resolved via
-[load_reference_sample()] / Nectar. A named count vector, one-column
-matrix/SE, or [get_reference_sample_ready()] download list is also
-accepted. The reference sits at offset 0.
-
-For a matrix-only pipeline without container I/O, call the two core
-helpers directly (see examples in `examples/savi_adrb2_workflow.R`).
+For a matrix-only pipeline, prefer calling the two core helpers directly.
 }
 \seealso{
-[merge_with_reference_sample()], [calculate_tmm_offset()],
-  [estimate_logmu_ql()]
+[merge_with_reference_sample()], [calculate_tmm_offset()]
 }

@@ -18,7 +18,7 @@ build_newdata_grid(
 )
 }
 \arguments{
-\item{fit}{A `brmsfit` with `$data`.}
+\item{fit}{A `brmsfit` or [load_expression_fit()] object.}
 
 \item{age_decade, sex, disease_groups, ethnicity_groups, assay_groups, tissue_groups}{See the rules above.}
 
@@ -29,16 +29,14 @@ build_newdata_grid(
 \item{new_study_id}{Label used when `dataset_id` is `NA`.}
 }
 \value{
-A data frame, one row per covariate profile. Attributes
-  `fixed` and `marginalised` name the user-facing variables.
+A data frame, one row per covariate profile.
 }
 \description{
 Each metadata argument is one of:
 * `NA` — marginalise over every level in the model
-* a single value — fix that level (must appear in the model)
+* a single value — fix that level
 * several values — marginalise over only those levels
 }
 \details{
-`dataset_id` is a random intercept. `NA` (the default) stamps a new
-unseen-study label rather than expanding over training datasets.
+`dataset_id` is a random intercept. `NA` stamps a new unseen-study label.
 }

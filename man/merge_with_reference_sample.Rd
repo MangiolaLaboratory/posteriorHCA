@@ -11,22 +11,18 @@ merge_with_reference_sample(
 )
 }
 \arguments{
-\item{counts}{Gene-by-sample numeric matrix (raw counts). Must have gene
-rownames and sample colnames.}
+\item{counts}{Gene-by-sample numeric matrix.}
 
-\item{reference}{Named numeric gene vector, or a one-column matrix / data
-frame of counts.}
+\item{reference}{Named numeric gene vector, or a one-column matrix.}
 
-\item{reference_name}{Column name for the appended reference library.
-Default `"hca_reference"`.}
+\item{reference_name}{Column name for the appended reference library.}
 }
 \value{
-A gene-by-sample matrix of shared genes with the reference column
-  last. Attribute `shared_features` stores the gene ids used.
+Gene-by-sample matrix with the reference column last.
 }
 \description{
-Core matrix helper: keeps genes shared with the reference and appends the
-reference as one column. Does not scale or compute offsets.
+Keeps genes shared with the reference and appends the reference as one
+column. Does not scale or compute offsets.
 }
 \seealso{
 [calculate_tmm_offset()], [scale_to_hca_reference()]

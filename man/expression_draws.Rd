@@ -22,17 +22,14 @@ expression_draws(
 
 \item{newdata}{Covariate grid from [build_newdata_grid()].}
 
-\item{quantity}{`"linpred"` is log(μ) (`posterior_linpred`,
-`transform = FALSE`). `"predict"` is posterior predicted counts.
-`"epred"` is the expected count (`posterior_epred`).}
+\item{quantity}{`"linpred"` (log μ), `"predict"`, or `"epred"`.}
 
-\item{collapse}{How to combine several grid rows. Use `"mean"` for
-location tests; `"pool"` for densities of predicted counts.}
+\item{collapse}{How to combine several grid rows: `"mean"`, `"pool"`,
+or `"sample"`.}
 
 \item{ndraws}{Number of posterior draws, or `NULL` for all.}
 
-\item{transform}{Passed to `posterior_linpred` only. Default `FALSE`
-keeps log(μ). Set `TRUE` for μ on the count-mean scale.}
+\item{transform}{Passed to `posterior_linpred` only.}
 
 \item{re_formula, allow_new_levels, sample_new_levels}{Passed to brms.}
 
@@ -40,7 +37,7 @@ keeps log(μ). Set `TRUE` for μ on the count-mean scale.}
 }
 \value{
 A list with `draws`, `grid`, `quantity`, `collapse`, `n_grid`,
-  `cell_type`, and `gene_ensg` (when available on `fit`).
+  `cell_type`, and `gene_ensg`.
 }
 \description{
 Posterior draws of gene expression from a fitted brms model

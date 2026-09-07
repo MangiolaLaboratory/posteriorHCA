@@ -26,7 +26,5 @@ A list with `cell_type`, `sample_id`, `counts` (named numeric
   vector), and `path`.
 }
 \description{
-Calls [get_reference_sample_ready()] (or uses its return value), reads
-the cached one-column `SummarizedExperiment`, and returns the `counts`
-assay to merge with user data.
+Load the atlas reference library for a cell type
 }

@@ -8,28 +8,21 @@ calculate_tmm_offset(counts, reference_name, method = "TMMwsp")
 }
 \arguments{
 \item{counts}{Gene-by-sample count matrix that already includes the
-reference column (e.g. from [merge_with_reference_sample()]).}
+reference column.}
 
-\item{reference_name}{Name of the reference column used as
-`refColumn` in [edgeR::calcNormFactors()].}
+\item{reference_name}{Name of the reference column.}
 
 \item{method}{Passed to [edgeR::calcNormFactors()]. Default `"TMMwsp"`.}
 }
 \value{
-A list with named numeric vectors `norm_factors`, `library_size`,
-  `effective_size`, `multiplier`, `offset`, plus scalars `reference_name`
-  and `method`.
+A list with `norm_factors`, `library_size`, `effective_size`,
+  `multiplier`, `offset`, `reference_name`, and `method`.
 }
 \description{
-Core matrix helper. Runs [edgeR::calcNormFactors()] with
-`refColumn = reference_name`, then returns:
-\itemize{
-  \item `multiplier_j = effectiveSize_ref / effectiveSize_j`
-  \item `offset_j = log(1 / multiplier_j)` (natural log)
-}
-so the reference sample has multiplier 1 and offset 0. This is the same
-offset convention as `tidybulk::scale_abundance()` followed by
-`log(1 / multiplier)`, and what [edgeR::mglmOneGroup()] expects.
+Runs [edgeR::calcNormFactors()] with `refColumn = reference_name`. Returns
+`multiplier_j = effectiveSize_ref / effectiveSize_j` and
+`offset_j = log(1 / multiplier_j)` so the reference has multiplier 1 and
+offset 0.
 }
 \seealso{
 [merge_with_reference_sample()], [scale_to_hca_reference()]

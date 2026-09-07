@@ -45,12 +45,13 @@ normalize_draws_input <- function(x, quantity = NULL) {
     "linpred"
   }
 
-  meta <- expression_metadata(x)
+  meta_gene <- if (!is.null(x$gene_ensg)) as.character(x$gene_ensg[[1]]) else NA_character_
+  meta_ct <- if (!is.null(x$cell_type)) as.character(x$cell_type[[1]]) else NA_character_
   list(
     draws = as.numeric(draws_vec),
     quantity = qty,
-    gene_ensg = meta$gene_ensg,
-    cell_type = meta$cell_type
+    gene_ensg = meta_gene,
+    cell_type = meta_ct
   )
 }
 

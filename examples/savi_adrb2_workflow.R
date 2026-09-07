@@ -16,8 +16,10 @@ suppressPackageStartupMessages({
 
 pkg_dir <- if (file.exists("DESCRIPTION")) {
   normalizePath(".")
+} else if (file.exists("../DESCRIPTION")) {
+  normalizePath("..")
 } else {
-  "/home/a1237163/lab/chen/posteriorHCA"
+  stop("Run this script from the posteriorHCA package root (or its parent).")
 }
 devtools::load_all(pkg_dir)
 
@@ -31,12 +33,8 @@ gene_ensg <- "ENSG00000169252"
 # ------------------------------------------------------------------------------
 cli::cli_h2("1. Preparing counts")
 
-savi_path <- Sys.getenv(
-  "SAVI_PSEUDOBULK_RDS",
-  unset = "/home/a1237163/lab/chen/posteriorHCA_case_studies/SAVI/data/GSE226598_SAVI_pseudobulk_Sample_CellType.rds"
-)
-
-if (file.exists(savi_path)) {
+savi_path <- Sys.getenv("SAVI_PSEUDOBULK_RDS", unset = "")
+if (nzchar(savi_path) && file.exists(savi_path)) {
   savi <- readRDS(savi_path)
   savi_mono <- subset(savi, subset = CellType == "17. Disease-associated monocytes")
 } else {
@@ -106,7 +104,6 @@ expression_estimates <- expression_estimates[
 ]
 print(expression_estimates)
 
-# Optional: intercept-only design (~ 1) per Category
 cli::cli_h3("Intercept-only design (~ 1)")
 
 expression_estimates_by_level <- map_dfr(

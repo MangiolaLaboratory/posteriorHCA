@@ -9,31 +9,18 @@ estimate_logmu_ql(counts, offset, design, robust = TRUE)
 \arguments{
 \item{counts}{Gene-by-sample numeric count matrix.}
 
-\item{offset}{Numeric vector (length `ncol(counts)`) or matrix. Typically
-`log(1 / multiplier)` from [calculate_tmm_offset()] for the user samples.}
+\item{offset}{Numeric vector (length `ncol(counts)`) or matrix.}
 
-\item{design}{Numeric design matrix (`nrow` = number of samples). Column
-names become the `group` labels in the output.}
+\item{design}{Numeric design matrix from [stats::model.matrix()].}
 
-\item{robust}{Passed to [edgeR::estimateDisp()] and [edgeR::glmQLFit()].}
+\item{robust}{Passed to edgeR.}
 }
 \value{
-A data frame with one row per gene × design column: `gene`,
-  `group`, `n`, `log_mu`, `mu`, `se`, `df`, `dispersion`.
+Data frame with `gene`, `group`, `n`, `log_mu`, `mu`, `se`,
+  `df`, `dispersion`.
 }
 \description{
 Fits [edgeR::estimateDisp()] and [edgeR::glmQLFit()] once with
-`prior.count = 0`, then returns absolute group means (QL coefficients on
-the supplied offset scale) and QL Wald SEs for every gene.
-}
-\details{
-Pass the **user** count matrix and the corresponding offsets. The HCA
-reference library is used when computing TMM offsets, but should not be
-included here as an artificial design group.
-
-Build the design with ordinary [stats::model.matrix()], for example
-`model.matrix(~ 0 + Category, sample_metadata)`.
-}
-\seealso{
-[calculate_tmm_offset()], [welch_test_means()]
+`prior.count = 0`. Pass the **user** count matrix and corresponding
+offsets; do not include the HCA reference as a design group.
 }
