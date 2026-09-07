@@ -19,3 +19,6 @@ A list with `mean`, `sd`, `n`, and optionally `empirical_rank`.
 \description{
 Summarise posterior draws for comparison with a point estimate
 }
+\seealso{
+[compare_cohort_to_hca()], [welch_test_means()]
+}

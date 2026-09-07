@@ -112,3 +112,74 @@ test_that("expression_draws rejects a bad quantity before calling brms", {
     "arg"
   )
 })
+
+test_that("expression_baseline_draws requires fit or cell_type + gene_ensg", {
+  expect_error(
+    expression_baseline_draws(cell_type = "monocytic"),
+    "Provide `fit`"
+  )
+  expect_error(
+    expression_baseline_draws(gene_ensg = "ENSG00000169252"),
+    "Provide `fit`"
+  )
+})
+
+test_that("expression_baseline_draws matches build_newdata_grid + expression_draws", {
+  fit <- fake_expression_fit()
+  wrap_env <- environment(expression_baseline_draws)
+  original_draws <- wrap_env$expression_draws
+  on.exit(assign("expression_draws", original_draws, envir = wrap_env), add = TRUE)
+
+  stub_draws <- function(
+    fit,
+    newdata,
+    quantity = c("linpred", "predict", "epred"),
+    collapse = c("mean", "pool", "sample"),
+    ndraws = NULL,
+    transform = FALSE,
+    re_formula = NULL,
+    allow_new_levels = TRUE,
+    sample_new_levels = "gaussian",
+    seed = NULL
+  ) {
+    quantity <- match.arg(quantity)
+    collapse <- match.arg(collapse)
+    list(
+      draws = rep(as.numeric(if (is.null(seed)) 0 else seed), nrow(newdata)),
+      grid = newdata,
+      quantity = quantity,
+      collapse = collapse,
+      n_grid = nrow(newdata),
+      cell_type = NA_character_,
+      gene_ensg = NA_character_
+    )
+  }
+  assign("expression_draws", stub_draws, envir = wrap_env)
+
+  wrapper_result <- suppressMessages(expression_baseline_draws(
+    fit = fit,
+    disease_groups = "Normal",
+    tissue_groups = "blood",
+    assay_groups = "10x Genomics 3",
+    seed = 42
+  ))
+
+  grid <- suppressMessages(build_newdata_grid(
+    fit,
+    disease_groups = "Normal",
+    tissue_groups = "blood",
+    assay_groups = "10x Genomics 3"
+  ))
+  core_result <- stub_draws(
+    fit,
+    newdata = grid,
+    quantity = "linpred",
+    collapse = "mean",
+    seed = 42
+  )
+
+  expect_equal(wrapper_result$draws, core_result$draws)
+  expect_equal(wrapper_result$grid, core_result$grid)
+  expect_equal(wrapper_result$n_grid, core_result$n_grid)
+  expect_equal(wrapper_result$quantity, "linpred")
+})

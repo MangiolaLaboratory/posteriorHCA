@@ -1,10 +1,10 @@
 ---
-title: "Cohort expression workflow"
+title: "Cohort expression workflow (core)"
 author: "Chen Zhan"
 date: "`r Sys.Date()`"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{Cohort expression workflow}
+  %\VignetteIndexEntry{Cohort expression workflow (core)}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 params:
@@ -67,6 +67,12 @@ if (requireNamespace("devtools", quietly = TRUE)) {
 ```
 
 SAVI case study: *ADRB2* (`ENSG00000169252`) in disease-associated monocytes.
+
+This vignette is the **core** path: each statistical step is written out
+explicitly. It does **not** call the high-level wrappers
+`estimate_cohort_logmu()`, `expression_baseline_draws()`, or
+`compare_cohort_to_hca()`. The concise wrapper path is
+`vignette("cohort-expression-wrappers", package = "posteriorHCA")`.
 
 Workflow:
 

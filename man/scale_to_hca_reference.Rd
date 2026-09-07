@@ -31,14 +31,16 @@ count object.}
 Same class as `counts`, with the atlas library appended.
 }
 \description{
-Convenience wrapper for Seurat / SummarizedExperiment / matrix input.
-Calls [merge_with_reference_sample()] and [calculate_tmm_offset()], then
-returns an object of the same class with `hca_offset`, `hca_multiplier`,
-and `sample_role` available on sample metadata (or as matrix attributes).
+Convenience wrapper around [load_reference_sample()] (when `reference` is
+a cell-type string), [merge_with_reference_sample()], and
+[calculate_tmm_offset()] for Seurat / SummarizedExperiment / matrix input.
 }
 \details{
-For a matrix-only pipeline, prefer calling the two core helpers directly.
+Returns an object of the same class with `hca_offset`, `hca_multiplier`,
+and `sample_role` on sample metadata (or as matrix attributes). For a
+matrix-only pipeline, prefer calling the core helpers directly.
 }
 \seealso{
-[merge_with_reference_sample()], [calculate_tmm_offset()]
+[merge_with_reference_sample()], [calculate_tmm_offset()],
+  [load_reference_sample()], [estimate_cohort_logmu()]
 }

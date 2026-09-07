@@ -1,5 +1,10 @@
 # Expression-model queries
 #
+#   Core:
+#     build_newdata_grid() / expression_draws() / load_expression_fit()
+#   Wrapper (compose cores only):
+#     expression_baseline_draws()
+#
 # Metadata choices for each covariate:
 #   NA            -> expand over every level the model knows
 #   "A"           -> fix that level
@@ -219,6 +224,8 @@ build_newdata_grid <- function(
 #' @param seed Optional RNG seed.
 #' @return A list with `draws`, `grid`, `quantity`, `collapse`, `n_grid`,
 #'   `cell_type`, and `gene_ensg`.
+#' @seealso [expression_baseline_draws()], [build_newdata_grid()],
+#'   [load_expression_fit()]
 #' @export
 #' @importFrom cli cli_abort
 expression_draws <- function(
@@ -327,5 +334,95 @@ load_expression_fit <- function(
     fit = obj$brms_fit[[1]],
     cell_type = res$cell_type,
     gene_ensg = gene_ensg
+  )
+}
+
+#' Posterior draws for an HCA expression baseline query
+#'
+#' Convenience wrapper around [load_expression_fit()],
+#' [build_newdata_grid()], and [expression_draws()]. Loads the atlas model
+#' when `fit` is not supplied, builds the covariate grid, and returns the
+#' usual [expression_draws()] list. Does not call brms posterior helpers
+#' directly and does not summarise or test draws.
+#'
+#' @param cell_type Cell type name (required when `fit` is `NULL`).
+#' @param gene_ensg Ensembl gene id (required when `fit` is `NULL`).
+#' @param fit Optional pre-loaded fit from [load_expression_fit()].
+#' @param age_decade,sex,disease_groups,ethnicity_groups,assay_groups,tissue_groups
+#'   Passed to [build_newdata_grid()].
+#' @param dataset_id,offset,new_study_id Passed to [build_newdata_grid()].
+#' @param quantity,collapse,ndraws,transform,re_formula,allow_new_levels,sample_new_levels,seed
+#'   Passed to [expression_draws()].
+#' @inheritParams load_expression_fit
+#' @return A list from [expression_draws()].
+#' @seealso [load_expression_fit()], [build_newdata_grid()],
+#'   [expression_draws()], [compare_cohort_to_hca()]
+#' @export
+#' @importFrom cli cli_abort
+expression_baseline_draws <- function(
+  cell_type = NULL,
+  gene_ensg = NULL,
+  fit = NULL,
+  age_decade = NA,
+  sex = NA,
+  disease_groups = NA,
+  ethnicity_groups = NA,
+  assay_groups = NA,
+  tissue_groups = NA,
+  dataset_id = NA,
+  offset = 0,
+  new_study_id = "__new_study__",
+  quantity = c("linpred", "predict", "epred"),
+  collapse = c("mean", "pool", "sample"),
+  ndraws = NULL,
+  transform = FALSE,
+  re_formula = NULL,
+  allow_new_levels = TRUE,
+  sample_new_levels = "gaussian",
+  seed = NULL,
+  version = "latest",
+  cache_directory = get_default_cache_dir(),
+  use_cache = TRUE
+) {
+  quantity <- match.arg(quantity)
+  collapse <- match.arg(collapse)
+
+  if (is.null(fit)) {
+    if (is.null(cell_type) || is.null(gene_ensg)) {
+      cli_abort("Provide `fit`, or both `cell_type` and `gene_ensg`.")
+    }
+    fit <- load_expression_fit(
+      cell_type = cell_type,
+      gene_ensg = gene_ensg,
+      version = version,
+      cache_directory = cache_directory,
+      use_cache = use_cache
+    )
+  }
+
+  newdata <- build_newdata_grid(
+    fit,
+    age_decade = age_decade,
+    sex = sex,
+    disease_groups = disease_groups,
+    ethnicity_groups = ethnicity_groups,
+    assay_groups = assay_groups,
+    tissue_groups = tissue_groups,
+    dataset_id = dataset_id,
+    offset = offset,
+    new_study_id = new_study_id
+  )
+
+  expression_draws(
+    fit,
+    newdata = newdata,
+    quantity = quantity,
+    collapse = collapse,
+    ndraws = ndraws,
+    transform = transform,
+    re_formula = re_formula,
+    allow_new_levels = allow_new_levels,
+    sample_new_levels = sample_new_levels,
+    seed = seed
   )
 }

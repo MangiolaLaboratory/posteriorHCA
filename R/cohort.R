@@ -1,8 +1,11 @@
 # User counts on the atlas scale
 #
-#   merge_with_reference_sample() / calculate_tmm_offset()
-#   scale_to_hca_reference()  — Seurat / SummarizedExperiment convenience
-#   estimate_logmu_ql()       — edgeR QL means on user libraries
+#   Core:
+#     merge_with_reference_sample() / calculate_tmm_offset()
+#     estimate_logmu_ql()
+#   Wrappers (compose cores only):
+#     scale_to_hca_reference()   — load + merge + TMM
+#     estimate_cohort_logmu()    — extract + model.matrix + estimate_logmu_ql
 
 #' Extract a gene-by-sample count matrix
 #' @keywords internal
@@ -258,12 +261,13 @@ calculate_tmm_offset <- function(counts, reference_name, method = "TMMwsp") {
 
 #' TMM-align user counts to an atlas reference sample
 #'
-#' Convenience wrapper for Seurat / SummarizedExperiment / matrix input.
-#' Calls [merge_with_reference_sample()] and [calculate_tmm_offset()], then
-#' returns an object of the same class with `hca_offset`, `hca_multiplier`,
-#' and `sample_role` available on sample metadata (or as matrix attributes).
+#' Convenience wrapper around [load_reference_sample()] (when `reference` is
+#' a cell-type string), [merge_with_reference_sample()], and
+#' [calculate_tmm_offset()] for Seurat / SummarizedExperiment / matrix input.
 #'
-#' For a matrix-only pipeline, prefer calling the two core helpers directly.
+#' Returns an object of the same class with `hca_offset`, `hca_multiplier`,
+#' and `sample_role` on sample metadata (or as matrix attributes). For a
+#' matrix-only pipeline, prefer calling the core helpers directly.
 #'
 #' @param counts User libraries (matrix, SE/SCE, or Seurat).
 #' @param reference Cell type string, Nectar download list, or one-library
@@ -273,7 +277,8 @@ calculate_tmm_offset <- function(counts, reference_name, method = "TMMwsp") {
 #' @param assay Assay name for SE / Seurat input.
 #' @param version Nectar version pin when `reference` is a cell type.
 #' @return Same class as `counts`, with the atlas library appended.
-#' @seealso [merge_with_reference_sample()], [calculate_tmm_offset()]
+#' @seealso [merge_with_reference_sample()], [calculate_tmm_offset()],
+#'   [load_reference_sample()], [estimate_cohort_logmu()]
 #' @export
 #' @importFrom cli cli_abort cli_alert_info
 scale_to_hca_reference <- function(
@@ -373,12 +378,23 @@ fit_nb_ql <- function(counts, offset, design, robust = TRUE) {
   design <- as.matrix(design)
 
   if (is.matrix(offset)) {
+    if (!identical(dim(offset), dim(counts))) {
+      cli::cli_abort("Matrix `offset` must have the same dimensions as `counts`.")
+    }
     offset_mat <- offset
     storage.mode(offset_mat) <- "double"
   } else {
     offset <- as.numeric(offset)
     if (!is.null(names(offset)) && !is.null(colnames(counts))) {
       offset <- offset[colnames(counts)]
+      if (anyNA(offset)) {
+        cli::cli_abort("`offset` is missing values for one or more samples in `counts`.")
+      }
+    }
+    if (length(offset) != ncol(counts)) {
+      cli::cli_abort(
+        "`offset` length must match the number of columns in `counts`."
+      )
     }
     offset_mat <- matrix(offset, nrow = nrow(counts), ncol = ncol(counts), byrow = TRUE)
   }
@@ -412,6 +428,7 @@ fit_nb_ql <- function(counts, offset, design, robust = TRUE) {
 #' @param robust Passed to edgeR.
 #' @return Data frame with `gene`, `group`, `n`, `log_mu`, `mu`, `se`,
 #'   `df`, `dispersion`.
+#' @seealso [estimate_cohort_logmu()]
 #' @export
 #' @importFrom cli cli_abort
 estimate_logmu_ql <- function(counts, offset, design, robust = TRUE) {
@@ -464,4 +481,99 @@ estimate_logmu_ql <- function(counts, offset, design, robust = TRUE) {
     dispersion = rep(as.numeric(dispersion), times = n_group),
     stringsAsFactors = FALSE
   )
+}
+
+#' Estimate cohort log(μ) from a scaled count container
+#'
+#' Convenience wrapper around [stats::model.matrix()] and
+#' [estimate_logmu_ql()] for scaled Seurat / SummarizedExperiment / matrix
+#' inputs from [scale_to_hca_reference()].
+#'
+#' Extracts user libraries and their `hca_offset` values, builds the design
+#' matrix from `formula`, and delegates all edgeR QL estimation to
+#' [estimate_logmu_ql()]. Does not call edgeR itself.
+#'
+#' @param data Scaled object from [scale_to_hca_reference()] (or equivalent
+#'   container with counts, `sample_role`, and `hca_offset`).
+#' @param formula Model formula evaluated on user sample metadata
+#'   (for example `~ 0 + Category`).
+#' @param gene_ensg Optional character vector of Ensembl gene ids to keep.
+#' @param assay Assay name for Seurat / SummarizedExperiment input.
+#' @param robust Passed to [estimate_logmu_ql()].
+#' @return Data frame from [estimate_logmu_ql()], optionally filtered by
+#'   `gene_ensg`.
+#' @seealso [estimate_logmu_ql()], [scale_to_hca_reference()],
+#'   [expression_baseline_draws()], [compare_cohort_to_hca()]
+#' @export
+#' @importFrom cli cli_abort
+estimate_cohort_logmu <- function(
+  data,
+  formula,
+  gene_ensg = NULL,
+  assay = NULL,
+  robust = TRUE
+) {
+  counts <- extract_counts(data, assay = assay)
+  sample_metadata <- extract_sample_metadata(data)
+
+  if (!nrow(sample_metadata) && !is.null(attr(data, "sample_role"))) {
+    sample_metadata <- data.frame(
+      sample_role = unname(attr(data, "sample_role")),
+      hca_offset = unname(as.numeric(attr(data, "hca_offset"))),
+      row.names = colnames(counts),
+      stringsAsFactors = FALSE
+    )
+  }
+
+  if (!nrow(sample_metadata)) {
+    cli_abort(c(
+      "`data` has no sample metadata.",
+      "i" = "Pass a Seurat / SummarizedExperiment from [scale_to_hca_reference()], or a matrix with `sample_role` and `hca_offset` attributes."
+    ))
+  }
+
+  if (!"hca_offset" %in% names(sample_metadata)) {
+    cli_abort("`data` must contain an `hca_offset` column (or matrix attribute).")
+  }
+
+  if ("sample_role" %in% names(sample_metadata)) {
+    user_samples <- sample_metadata$sample_role == "user"
+  } else {
+    user_samples <- rep(TRUE, nrow(sample_metadata))
+  }
+  if (!any(user_samples)) {
+    cli_abort("No user samples found (`sample_role == \"user\"`).")
+  }
+
+  user_counts <- counts[, user_samples, drop = FALSE]
+  user_metadata <- droplevels(sample_metadata[user_samples, , drop = FALSE])
+  user_offset <- setNames(
+    as.numeric(user_metadata$hca_offset),
+    rownames(user_metadata)
+  )
+
+  design_matrix <- stats::model.matrix(formula, data = user_metadata)
+  if (nrow(design_matrix) != ncol(user_counts)) {
+    cli_abort(
+      "`formula` produced {nrow(design_matrix)} design row{?s} for {ncol(user_counts)} user sample{?s}."
+    )
+  }
+
+  cohort_estimates <- estimate_logmu_ql(
+    counts = user_counts,
+    offset = user_offset,
+    design = design_matrix,
+    robust = robust
+  )
+
+  if (!is.null(gene_ensg)) {
+    gene_ensg <- as.character(gene_ensg)
+    cohort_estimates <- cohort_estimates[
+      cohort_estimates$gene %in% gene_ensg,
+      ,
+      drop = FALSE
+    ]
+  }
+
+  cohort_estimates
 }

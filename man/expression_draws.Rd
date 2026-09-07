@@ -42,3 +42,7 @@ A list with `draws`, `grid`, `quantity`, `collapse`, `n_grid`,
 \description{
 Posterior draws of gene expression from a fitted brms model
 }
+\seealso{
+[expression_baseline_draws()], [build_newdata_grid()],
+  [load_expression_fit()]
+}

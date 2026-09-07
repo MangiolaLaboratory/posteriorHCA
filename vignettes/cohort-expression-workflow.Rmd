@@ -15,16 +15,41 @@ knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
 
 SAVI case study (*ADRB2* / `ENSG00000169252` in disease-associated monocytes).
 
-The full worked example is:
+posteriorHCA provides transparent statistical **core** functions and a small
+set of convenience **wrappers** built directly on those cores.
 
-`vignette("cohort-expression-core", package = "posteriorHCA")`
+| Path | Vignette |
+|------|----------|
+| Concise wrapper workflow | `vignette("cohort-expression-wrappers", package = "posteriorHCA")` |
+| Transparent core workflow | `vignette("cohort-expression-core", package = "posteriorHCA")` |
 
-and the matching script `examples/savi_adrb2_workflow.R`.
+Matching script: `examples/savi_adrb2_workflow.R` (core path).
 
-Intended sequence:
+### High-level API
 
-1. Scale user libraries to one HCA reference (`merge_with_reference_sample` + `calculate_tmm_offset`, or `scale_to_hca_reference` for Seurat / SummarizedExperiment)
-2. Build a design with `model.matrix()`
-3. Estimate user means with `estimate_logmu_ql()`
-4. Load the HCA model with `load_expression_fit()` and draw with `expression_draws()`
-5. Summarise with `summarize_posterior_draws()` and test with `welch_test_means()`
+```r
+scale_to_hca_reference()
+estimate_cohort_logmu()
+expression_baseline_draws()
+compare_cohort_to_hca()
+```
+
+### Core API
+
+```r
+load_reference_sample()
+merge_with_reference_sample()
+calculate_tmm_offset()
+
+estimate_logmu_ql()
+
+load_expression_fit()
+build_newdata_grid()
+expression_draws()
+
+summarize_posterior_draws()
+welch_test_means()
+```
+
+Wrappers reduce boilerplate. Cores expose the methodology. They must not
+diverge statistically.

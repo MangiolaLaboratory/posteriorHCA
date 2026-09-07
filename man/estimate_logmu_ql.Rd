@@ -24,3 +24,6 @@ Fits [edgeR::estimateDisp()] and [edgeR::glmQLFit()] once with
 `prior.count = 0`. Pass the **user** count matrix and corresponding
 offsets; do not include the HCA reference as a design group.
 }
+\seealso{
+[estimate_cohort_logmu()]
+}

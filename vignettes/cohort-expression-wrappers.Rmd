@@ -1,26 +1,231 @@
 ---
-title: "Cohort expression workflow (Seurat scaling note)"
+title: "Cohort expression workflow (wrappers)"
 author: "Chen Zhan"
 date: "`r Sys.Date()`"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{Cohort expression workflow (Seurat scaling note)}
+  %\VignetteIndexEntry{Cohort expression workflow (wrappers)}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
+params:
+  for_github_md: false
+knit: >
+    (function(x, ...){
+        proj_root <- rprojroot::find_package_root_file() |> normalizePath()
+        rmarkdown::render(
+            x,
+            output_file = "cohort-expression-wrappers.md",
+            output_format = "github_document",
+            output_dir = file.path(proj_root, "vignettes"),
+            knit_root_dir = proj_root,
+            params = list(for_github_md = TRUE)
+        )
+        rmarkdown::render(
+            x,
+            output_format = "rmarkdown::html_vignette",
+            params = list(for_github_md = FALSE)
+        )
+    })
 ---
 
 ```{r setup, include = FALSE}
-knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.width = 7,
+  fig.height = 4.5,
+  message = FALSE,
+  warning = FALSE
+)
+
+if (isTRUE(params$for_github_md)) {
+  root_dir <- knitr::opts_knit$get("root.dir")
+  if (!is.null(root_dir)) {
+    knitr::opts_knit$set(output.dir = file.path(root_dir, "vignettes"))
+  }
+  knitr::opts_chunk$set(fig.path = "cohort-expression-wrappers_files/figure-gfm/")
+}
+
+has_seurat <- requireNamespace("Seurat", quietly = TRUE)
+has_edb <- requireNamespace("org.Hs.eg.db", quietly = TRUE) &&
+  requireNamespace("AnnotationDbi", quietly = TRUE)
+has_brms <- requireNamespace("brms", quietly = TRUE)
+can_run <- has_seurat && has_edb && has_brms
+
+if (requireNamespace("devtools", quietly = TRUE)) {
+  pkg_root <- if (file.exists("DESCRIPTION") && dir.exists("R")) {
+    normalizePath(".")
+  } else if (file.exists("../DESCRIPTION") && dir.exists("../R")) {
+    normalizePath("..")
+  } else {
+    NULL
+  }
+  if (!is.null(pkg_root)) {
+    devtools::load_all(pkg_root, quiet = TRUE)
+  }
+}
 ```
 
-The main cohort expression workflow is documented in
+SAVI case study: *ADRB2* (`ENSG00000169252`) in disease-associated monocytes.
+
+This vignette is the **high-level wrapper** path. Each wrapper only composes
+core functions; it does not reimplement TMM, edgeR QL, brms draws, or Welch
+mathematics. The transparent core path is
 `vignette("cohort-expression-core", package = "posteriorHCA")`.
 
-If your counts live in a Seurat or SummarizedExperiment object,
-`scale_to_hca_reference()` is a convenience wrapper around
-`merge_with_reference_sample()` and `calculate_tmm_offset()`. After scaling,
-extract the user count matrix and offsets and continue with ordinary
-`model.matrix()` + `estimate_logmu_ql()` as in the main vignette.
+```text
+HIGH-LEVEL WRAPPER                  CORE FUNCTIONS CALLED
+──────────────────                  ─────────────────────
 
-Atlas models require Ensembl gene ids. Map symbols to ENSG outside this
-package (for example with AnnotationDbi / org.Hs.eg.db) before scaling.
+scale_to_hca_reference()
+    ├── load_reference_sample()
+    ├── merge_with_reference_sample()
+    └── calculate_tmm_offset()
+
+estimate_cohort_logmu()
+    ├── extract counts / metadata
+    ├── stats::model.matrix()
+    └── estimate_logmu_ql()
+
+expression_baseline_draws()
+    ├── load_expression_fit()
+    ├── build_newdata_grid()
+    └── expression_draws()
+
+compare_cohort_to_hca()
+    ├── summarize_posterior_draws()
+    └── welch_test_means()
+```
+
+## Setup
+
+```{r libraries, eval = can_run}
+library(posteriorHCA)
+library(Seurat)
+library(AnnotationDbi)
+library(org.Hs.eg.db)
+library(purrr)
+
+cell_type <- "monocytic"
+gene_ensg <- "ENSG00000169252"
+```
+
+## Map symbols to Ensembl ids
+
+Atlas models are keyed by ENSG. Map once with AnnotationDbi (outside
+posteriorHCA), then rebuild a Seurat object that keeps `Category`.
+
+```{r prepare-seurat, eval = can_run}
+data(savi_mono)
+
+counts <- as.matrix(Seurat::GetAssayData(savi_mono, layer = "counts"))
+mapped <- AnnotationDbi::mapIds(
+  org.Hs.eg.db,
+  keys = rownames(counts),
+  column = "ENSEMBL",
+  keytype = "SYMBOL",
+  multiVals = "first"
+)
+keep <- !is.na(mapped) & !duplicated(mapped)
+counts <- counts[keep, , drop = FALSE]
+rownames(counts) <- unname(mapped[keep])
+
+meta <- savi_mono[[]][colnames(counts), , drop = FALSE]
+savi_ensg <- Seurat::CreateSeuratObject(counts = counts, meta.data = meta)
+```
+
+## Wrapper workflow
+
+`scale_to_hca_reference()` is a convenience wrapper around
+`load_reference_sample()` (when `reference` is a cell-type string),
+`merge_with_reference_sample()`, and `calculate_tmm_offset()`.
+
+```{r scale, eval = can_run}
+scaled <- scale_to_hca_reference(
+  savi_ensg,
+  reference = cell_type
+)
+```
+
+`estimate_cohort_logmu()` is a convenience wrapper that constructs the design
+with `model.matrix()` and delegates estimation to `estimate_logmu_ql()`.
+
+```{r estimate, eval = can_run}
+cohort_estimates <- estimate_cohort_logmu(
+  scaled,
+  formula = ~ 0 + Category,
+  gene_ensg = gene_ensg
+)
+cohort_estimates
+```
+
+Intercept-only design (`~ 1`): subset to one `Category`, then call
+`estimate_cohort_logmu()` with `formula = ~ 1`. The intercept is that cohort's
+absolute log(μ). Offsets were already computed by `scale_to_hca_reference()`,
+so the reference library is not needed in the subset.
+
+```{r estimate-by-level, eval = can_run}
+cohort_estimates_by_level <- map_dfr(
+  unique(as.character(scaled$Category[scaled$sample_role == "user"])),
+  function(category) {
+    out <- estimate_cohort_logmu(
+      subset(scaled, sample_role == "user" & Category == category),
+      formula = ~ 1,
+      gene_ensg = gene_ensg
+    )
+    out$group <- category
+    out
+  }
+)
+cohort_estimates_by_level
+```
+
+`expression_baseline_draws()` delegates model loading, query-grid construction
+and posterior generation to `load_expression_fit()`, `build_newdata_grid()` and
+`expression_draws()`.
+
+```{r hca, eval = can_run}
+hca_draws <- expression_baseline_draws(
+  cell_type = cell_type,
+  gene_ensg = gene_ensg,
+  disease_groups = "Normal",
+  tissue_groups = "blood",
+  assay_groups = "10x Genomics 3"
+)
+```
+
+`compare_cohort_to_hca()` summarizes HCA posterior draws with
+`summarize_posterior_draws()` and delegates the actual statistical test to
+`welch_test_means()`.
+
+```{r compare, eval = can_run}
+test_results <- compare_cohort_to_hca(
+  cohort_estimates,
+  hca_draws
+)
+test_results
+```
+
+## Plots
+
+```{r plot-hca, eval = can_run, fig.asp = 0.7}
+plot_hca_draws(
+  draws = hca_draws,
+  subtitle = "Normal, 10x Genomics 3 healthy baseline"
+)
+```
+
+```{r plot-cohort, eval = can_run, fig.asp = 0.7}
+plot_cohort_vs_hca(
+  hca_draws = hca_draws,
+  cohort_est = test_results,
+  subtitle = "QL cohort estimates (wrapper path)",
+  annotate = c("group", "p_value")
+)
+```
+
+## Session info
+
+```{r session-info}
+sessionInfo()
+```

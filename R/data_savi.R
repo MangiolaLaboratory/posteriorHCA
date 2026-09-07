@@ -9,8 +9,8 @@
 #' @source Derived from `GSE226598_SAVI_pseudobulk_Sample_CellType.rds`; see
 #'   `vignette("cohort-expression-core", package = "posteriorHCA")` for
 #'   preparation code.
-#' @seealso [scale_to_hca_reference()], [estimate_logmu_ql()],
-#'   [welch_test_means()]
+#' @seealso [scale_to_hca_reference()], [estimate_cohort_logmu()],
+#'   [expression_baseline_draws()], [compare_cohort_to_hca()]
 #' @usage data(savi_mono)
 #' @examples
 #' data(savi_mono)

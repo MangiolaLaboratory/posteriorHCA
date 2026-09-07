@@ -36,3 +36,6 @@ using a Welch-style statistic. When `n1` and `n2` are supplied and both
 are at least 2, p-values use the Welch–Satterthwaite t distribution;
 otherwise a normal approximation is used.
 }
+\seealso{
+[compare_cohort_to_hca()], [summarize_posterior_draws()]
+}

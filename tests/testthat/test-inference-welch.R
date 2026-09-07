@@ -37,3 +37,34 @@ test_that("summarize_posterior_draws accepts expression_draws-like lists", {
   expect_equal(out$mean, 2.5)
   expect_equal(out$n, 4L)
 })
+
+test_that("compare_cohort_to_hca matches summarize + welch_test_means", {
+  cohort_estimates <- data.frame(
+    gene = c("g1", "g1"),
+    group = c("A", "B"),
+    n = c(4L, 5L),
+    log_mu = c(3.0, 2.5),
+    se = c(0.2, 0.15),
+    stringsAsFactors = FALSE
+  )
+  hca_draws <- list(draws = c(1.8, 2.0, 2.1, 1.9, 2.2))
+
+  wrapper <- compare_cohort_to_hca(cohort_estimates, hca_draws)
+  expect_equal(nrow(wrapper), 2L)
+
+  hca_summary <- summarize_posterior_draws(hca_draws)
+  core_a <- welch_test_means(
+    mu1 = cohort_estimates$log_mu[[1]],
+    se1 = cohort_estimates$se[[1]],
+    mu2 = hca_summary$mean,
+    se2 = hca_summary$sd,
+    n1 = cohort_estimates$n[[1]],
+    n2 = hca_summary$n
+  )
+  expect_equal(wrapper$p_value[[1]], core_a$p_value)
+  expect_equal(wrapper$t_stat[[1]], core_a$t_stat)
+  expect_equal(wrapper$delta[[1]], core_a$delta)
+  expect_equal(wrapper$df[[1]], core_a$df)
+  expect_equal(wrapper$hca_mean[[1]], hca_summary$mean)
+  expect_equal(wrapper$group, c("A", "B"))
+})

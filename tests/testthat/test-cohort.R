@@ -280,6 +280,31 @@ test_that("estimate_logmu_ql errors when design rows do not match samples", {
   )
 })
 
+test_that("estimate_logmu_ql errors on wrong-length vector offset", {
+  toy <- toy_counts()
+  design_matrix <- model.matrix(
+    ~ 0 + factor(c("A", "A", "B", "B")),
+    data = data.frame(row.names = colnames(toy$user))
+  )
+  expect_error(
+    estimate_logmu_ql(toy$user, offset = c(0, 0), design = design_matrix),
+    "offset"
+  )
+})
+
+test_that("estimate_logmu_ql errors on wrong-dimension matrix offset", {
+  toy <- toy_counts()
+  design_matrix <- model.matrix(
+    ~ 0 + factor(c("A", "A", "B", "B")),
+    data = data.frame(row.names = colnames(toy$user))
+  )
+  bad_offset <- matrix(0, nrow = 2, ncol = 2)
+  expect_error(
+    estimate_logmu_ql(toy$user, offset = bad_offset, design = design_matrix),
+    "offset"
+  )
+})
+
 test_that("a gene-specific count increase raises log_mu", {
   genes <- paste0("g", 1:30)
   set.seed(2)
@@ -368,4 +393,49 @@ test_that("reference merge uses counts, not counts_scaled", {
     unname(parsed$counts),
     unname(as.numeric(SummarizedExperiment::assay(ref, "counts")[, 1L]))
   )
+})
+
+test_that("estimate_cohort_logmu matches model.matrix + estimate_logmu_ql", {
+  skip_if_not_installed("SummarizedExperiment")
+  skip_if_not_installed("S4Vectors")
+
+  toy <- toy_counts()
+  aligned <- suppressMessages(
+    scale_to_hca_reference(toy$user, toy$ref, reference_name = "hca_ref")
+  )
+
+  sample_metadata <- data.frame(
+    sample_role = unname(attr(aligned, "sample_role")),
+    hca_offset = unname(as.numeric(attr(aligned, "hca_offset"))),
+    Category = factor(c("A", "A", "B", "B", NA_character_), levels = c("A", "B")),
+    row.names = colnames(aligned),
+    stringsAsFactors = FALSE
+  )
+  scaled_se <- SummarizedExperiment::SummarizedExperiment(
+    assays = list(counts = aligned),
+    colData = S4Vectors::DataFrame(sample_metadata)
+  )
+
+  wrapper_result <- estimate_cohort_logmu(
+    scaled_se,
+    formula = ~ 0 + Category,
+    gene_ensg = "g1"
+  )
+
+  user_samples <- sample_metadata$sample_role == "user"
+  user_counts <- aligned[, user_samples, drop = FALSE]
+  user_metadata <- droplevels(sample_metadata[user_samples, , drop = FALSE])
+  user_offset <- setNames(
+    as.numeric(user_metadata$hca_offset),
+    rownames(user_metadata)
+  )
+  design_matrix <- stats::model.matrix(~ 0 + Category, data = user_metadata)
+  core_result <- estimate_logmu_ql(user_counts, user_offset, design_matrix)
+  core_result <- core_result[core_result$gene == "g1", , drop = FALSE]
+
+  expect_equal(nrow(wrapper_result), nrow(core_result))
+  expect_equal(wrapper_result$group, core_result$group)
+  expect_equal(wrapper_result$log_mu, core_result$log_mu)
+  expect_equal(wrapper_result$se, core_result$se)
+  expect_equal(wrapper_result$n, core_result$n)
 })

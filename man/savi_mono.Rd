@@ -26,7 +26,7 @@ data(savi_mono)
 ncol(savi_mono)
 }
 \seealso{
-[scale_to_hca_reference()], [estimate_logmu_ql()],
-  [welch_test_means()]
+[scale_to_hca_reference()], [estimate_cohort_logmu()],
+  [expression_baseline_draws()], [compare_cohort_to_hca()]
 }
 \keyword{datasets}
