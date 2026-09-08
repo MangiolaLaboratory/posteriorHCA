@@ -1,7 +1,7 @@
 #!/usr/bin/env Rscript
 # SAVI case study: ADRB2 (ENSG00000169252) in disease-associated monocytes
 #
-# user data -> TMM offsets -> model.matrix -> estimate_logmu_ql
+# user data -> TMM scaling -> estimate_ql(formula, contrast)
 #   -> load_expression_fit -> expression_draws
 #   -> summarize_posterior_draws -> welch_test_means
 
@@ -64,7 +64,7 @@ cli::cli_alert_info(
 )
 
 # ------------------------------------------------------------------------------
-# 2. Scale to HCA reference (offsets only; estimation uses user libraries)
+# 2. Scale to HCA reference (joint TMM; estimation uses user libraries)
 # ------------------------------------------------------------------------------
 cli::cli_h2("2. Aligning to HCA monocytic reference")
 
@@ -74,53 +74,56 @@ combined_counts <- merge_with_reference_sample(
   reference = reference$counts,
   reference_name = reference$sample_id
 )
-scaling <- calculate_tmm_offset(
+scaling <- calculate_tmm_scaling(
   combined_counts,
   reference_name = reference$sample_id
 )
-user_offset <- scaling$offset[colnames(user_counts)]
+user_offset <- scaling$log_effective_library_size[colnames(user_counts)]
 
 cli::cli_alert_info(
-  "Reference `{reference$sample_id}` offset = {scaling$offset[[reference$sample_id]]}."
+  "Reference `{reference$sample_id}` log(E_H) = {scaling$hca_log_effective_library_size}."
 )
 
 # ------------------------------------------------------------------------------
-# 3. Estimate cohort log(mu)
+# 3. Estimate cohort log(mu) via formula + contrast (optional edgeR helper)
 # ------------------------------------------------------------------------------
 cli::cli_h2("3. Estimating cohort log(mu)")
 
-design_matrix <- model.matrix(~ 0 + Category, data = sample_metadata)
-colnames(design_matrix) <- sub("^Category", "", colnames(design_matrix))
-
-expression_estimates <- estimate_logmu_ql(
-  user_counts,
-  user_offset,
-  design_matrix
+coef_estimates <- estimate_ql(
+  counts = user_counts,
+  offset = user_offset,
+  metadata = sample_metadata,
+  formula = ~ 0 + Category,
+  contrast = NULL
 )
+expression_estimates <- within(coef_estimates, {
+  group <- contrast
+  log_mu <- estimate + scaling$hca_log_effective_library_size
+  mu <- exp(log_mu)
+})
 expression_estimates <- expression_estimates[
   expression_estimates$gene == gene_ensg,
-  ,
-  drop = FALSE
+  c("gene", "group", "estimate", "log_mu", "mu", "se", "df", "dispersion")
 ]
 print(expression_estimates)
 
-cli::cli_h3("Intercept-only design (~ 1)")
+cli::cli_h3("Intercept-only design (~ 1) per Category")
 
 expression_estimates_by_level <- map_dfr(
   levels(sample_metadata$Category),
   function(category) {
     sample_ids <- rownames(sample_metadata)[sample_metadata$Category == category]
-    design_one <- model.matrix(
-      ~ 1,
-      data = sample_metadata[sample_ids, , drop = FALSE]
-    )
-    out <- estimate_logmu_ql(
-      user_counts[, sample_ids, drop = FALSE],
-      user_offset[sample_ids],
-      design_one
+    out <- estimate_ql(
+      counts = user_counts[, sample_ids, drop = FALSE],
+      offset = user_offset[sample_ids],
+      metadata = sample_metadata[sample_ids, , drop = FALSE],
+      formula = ~ 1,
+      contrast = "(Intercept)"
     )
     out <- out[out$gene == gene_ensg, , drop = FALSE]
     out$group <- category
+    out$log_mu <- out$estimate + scaling$hca_log_effective_library_size
+    out$mu <- exp(out$log_mu)
     out
   }
 )

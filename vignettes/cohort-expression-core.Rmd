@@ -68,19 +68,24 @@ if (requireNamespace("devtools", quietly = TRUE)) {
 
 SAVI case study: *ADRB2* (`ENSG00000169252`) in disease-associated monocytes.
 
-This vignette is the **core** path: each statistical step is written out
-explicitly. It does **not** call the high-level wrappers
-`estimate_cohort_logmu()`, `expression_baseline_draws()`, or
-`compare_cohort_to_hca()`. The concise wrapper path is
-`vignette("cohort-expression-wrappers", package = "posteriorHCA")`.
+posteriorHCA compares a **user-supplied mean estimate and SE** to an HCA
+posterior mean and SE via `welch_test_means()`. The optional edgeR helper
+`estimate_ql()` fits a covariate-aware NB QL model and extracts a
+user-defined fitted expression quantity (`estimate` + `se`). Any other
+valid statistical model that produces a comparable estimate and SE can be
+used instead.
+
+This vignette writes the steps explicitly. The concise one-hot wrapper
+path is `vignette("cohort-expression-wrappers", package = "posteriorHCA")`.
 
 Workflow:
 
-1. Scale user libraries to one HCA reference (TMM offsets)
-2. Build a design with `model.matrix()` (`~ 0 + Category` or intercept-only `~ 1`)
-3. Estimate user expression means with `estimate_logmu_ql()`
-4. Load the HCA expression model and draw posteriors
-5. Summarise draws and run a Welch test
+1. Jointly TMM-scale user libraries with one HCA reference
+2. Fit the user cohort with edgeR QL (`formula`), then extract a target
+   expression estimand (`contrast`) and SE
+3. If that estimand is absolute, place it on the HCA scale with `log(E_HCA)`
+4. Load the HCA expression model and summarise the posterior
+5. Run `welch_test_means()`
 
 ## Setup
 
@@ -89,16 +94,12 @@ library(posteriorHCA)
 library(Seurat)
 library(AnnotationDbi)
 library(org.Hs.eg.db)
-library(purrr)
 
 cell_type <- "monocytic"
 gene_ensg <- "ENSG00000169252"
 ```
 
 ## Prepare counts with Ensembl gene ids
-
-Atlas models are keyed by ENSG. Map gene symbols once with AnnotationDbi
-before the posteriorHCA workflow.
 
 ```{r load-savi-mono, eval = can_run}
 data(savi_mono)
@@ -117,18 +118,20 @@ rownames(user_counts) <- unname(mapped[keep])
 
 sample_metadata <- data.frame(
   Category = factor(savi_mono$Category[colnames(user_counts)]),
+  Experiment = factor(savi_mono$Experiment[colnames(user_counts)]),
   row.names = colnames(user_counts),
   stringsAsFactors = FALSE
 )
 
 dim(user_counts)
-table(sample_metadata$Category)
+table(sample_metadata$Category, sample_metadata$Experiment)
 ```
 
 ## Scale to the HCA reference
 
-The reference library is used only to compute TMM offsets. User estimation
-below uses user libraries and their offsets only.
+Joint TMM / TMMwsp puts user and HCA effective library sizes on one scale.
+edgeR is then fitted on **user libraries only** with offset
+`log(effective library size)`.
 
 ```{r scale, eval = can_run}
 reference <- load_reference_sample(cell_type)
@@ -138,63 +141,127 @@ combined_counts <- merge_with_reference_sample(
   reference = reference$counts,
   reference_name = reference$sample_id
 )
-scaling <- calculate_tmm_offset(
+scaling <- calculate_tmm_scaling(
   combined_counts,
   reference_name = reference$sample_id
 )
 
-user_offset <- scaling$offset[colnames(user_counts)]
+user_offset <- scaling$log_effective_library_size[colnames(user_counts)]
 ```
 
-## Estimate user expression means
+## Optional edgeR helper: estimate after accounting for covariates
 
-Cell-means design (`~ 0 + Category`):
+`estimate_ql()` is an **estimation** helper, not differential-expression
+testing. The `formula` controls which effects enter the NB QL model (for
+example Category and Experiment). The `contrast` selects which fitted
+expression quantity to extract:
 
-```{r estimate, eval = can_run}
-design_matrix <- model.matrix(~ 0 + Category, data = sample_metadata)
-colnames(design_matrix) <- sub("^Category", "", colnames(design_matrix))
+```text
+estimate = c' beta
+SE       = sqrt(c' Var(beta) c)
+```
 
-expression_estimates <- estimate_logmu_ql(
-  user_counts,
-  user_offset,
-  design_matrix
+posteriorHCA does not interpret the contrast and does not invent a unique
+"batch-adjusted mean"; the user owns that estimand. Return value:
+
+```text
+gene, contrast, estimate, se, df, dispersion
+```
+
+`estimate` is natural-log edgeR scale (`log(mu) = X beta + offset`), not
+DE-table log2 `logFC`, and not automatically named `log_mu`.
+
+### Simple group mean
+
+Under `~ 0 + Category`, `CategorySAVI` is an absolute normalized group
+mean *under that parameterisation*.
+
+```{r estimate-simple, eval = can_run}
+savi_est <- estimate_ql(
+  counts = user_counts,
+  offset = user_offset,
+  metadata = sample_metadata,
+  formula = ~ 0 + Category,
+  contrast = "CategorySAVI"
 )
-
-expression_estimates <- expression_estimates[
-  expression_estimates$gene == gene_ensg,
-  ,
-  drop = FALSE
-]
-expression_estimates
+savi_est <- savi_est[savi_est$gene == gene_ensg, , drop = FALSE]
+savi_est
 ```
 
-Intercept-only design (`~ 1`): subset to one `Category`, fit
-`model.matrix(~ 1, ...)`, and treat the intercept as that cohort's absolute
-log(μ).
+Because this contrast is an absolute mean, add the fixed HCA constant for
+comparison on the matched reference scale. SE is unchanged.
 
-```{r estimate-by-level, eval = can_run}
-expression_estimates_by_level <- map_dfr(
-  levels(sample_metadata$Category),
-  function(category) {
-    sample_ids <- rownames(sample_metadata)[sample_metadata$Category == category]
-    design_one <- model.matrix(
-      ~ 1,
-      data = sample_metadata[sample_ids, , drop = FALSE]
-    )
-    out <- estimate_logmu_ql(
-      user_counts[, sample_ids, drop = FALSE],
-      user_offset[sample_ids],
-      design_one
-    )
-    out <- out[out$gene == gene_ensg, , drop = FALSE]
-    out$group <- category
-    out
-  }
+```{r hca-scale-simple, eval = can_run}
+user_log_mu <- savi_est$estimate + scaling$hca_log_effective_library_size
+user_se <- savi_est$se
+n_savi <- sum(sample_metadata$Category == "SAVI")
+c(log_mu = user_log_mu, se = user_se, n = n_savi)
+```
+
+### Accounting for Experiment
+
+Fit Category while including Experiment in the model. Different contrasts
+select different fitted conditions of the **same** model — neither is the
+unique "correct" adjusted mean.
+
+```{r estimate-adjusted, eval = can_run}
+exp2 <- paste0("Experiment", levels(sample_metadata$Experiment)[[2]])
+
+# Absolute estimands: SAVI at reference Experiment vs SAVI at EXP2
+batch_fit <- estimate_ql(
+  counts = user_counts,
+  offset = user_offset,
+  metadata = sample_metadata,
+  formula = ~ 0 + Category + Experiment,
+  contrast = c(
+    "CategorySAVI",
+    paste("CategorySAVI +", exp2)
+  )
 )
-expression_estimates_by_level
+batch_fit <- batch_fit[batch_fit$gene == gene_ensg, , drop = FALSE]
+batch_fit
 ```
 
-## Load HCA model and draw the healthy baseline
+These are absolute fitted quantities, so add the fixed HCA constant for
+comparison (SE unchanged), the same as in the simple group-mean case.
+
+```{r hca-scale-adjusted, eval = can_run}
+batch_fit$log_mu <- batch_fit$estimate + scaling$hca_log_effective_library_size
+batch_fit[, c("gene", "contrast", "estimate", "log_mu", "se")]
+```
+
+A relative contrast does **not** get the HCA shift: if both group means
+were shifted by the same `log(E_HCA)`, that constant would cancel in the
+difference. Use `estimate` / `se` as returned.
+
+```{r estimate-relative, eval = can_run}
+hca_const <- scaling$hca_log_effective_library_size
+
+rel_fit <- estimate_ql(
+  counts = user_counts,
+  offset = user_offset,
+  metadata = sample_metadata,
+  formula = ~ 0 + Category + Experiment,
+  contrast = c(
+    "CategorySAVI",
+    "CategoryCTRL",
+    "CategorySAVI - CategoryCTRL"
+  )
+)
+rel_fit <- rel_fit[rel_fit$gene == gene_ensg, , drop = FALSE]
+rel_fit
+
+est <- setNames(rel_fit$estimate, rel_fit$contrast)
+# Absolute means may be HCA-shifted; their difference is unchanged.
+c(
+  relative_contrast = unname(est[["CategorySAVI - CategoryCTRL"]]),
+  log_mu_CategorySAVI = est[["CategorySAVI"]] + hca_const,
+  log_mu_CategoryCTRL = est[["CategoryCTRL"]] + hca_const,
+  difference_of_hca_shifted_absolutes =
+    (est[["CategorySAVI"]] + hca_const) - (est[["CategoryCTRL"]] + hca_const)
+)
+```
+## HCA posterior
 
 ```{r hca, eval = can_run}
 expression_fit <- load_expression_fit(
@@ -217,63 +284,46 @@ posterior_draws <- expression_draws(
 )
 ```
 
-## Summarise posterior and Welch test
+## Comparison
+
+`welch_test_means()` only needs two means and two SEs on the same scale.
+Here we compare the simple SAVI group mean (HCA-shifted) to the HCA
+baseline. Estimates from outside posteriorHCA can be passed the same way.
 
 ```{r welch, eval = can_run}
-cohort_estimate <- expression_estimates[
-  expression_estimates$group == "SAVI",
-  ,
-  drop = FALSE
-]
-
 posterior_summary <- summarize_posterior_draws(
   posterior_draws,
-  value = cohort_estimate$log_mu
+  value = user_log_mu
 )
 
 welch_test_means(
-  cohort_estimate$log_mu,
-  cohort_estimate$se,
-  posterior_summary$log_mu,
-  posterior_summary$se,
-  n1 = cohort_estimate$n,
+  mu1 = user_log_mu,
+  se1 = user_se,
+  mu2 = posterior_summary$log_mu,
+  se2 = posterior_summary$se,
+  n1 = n_savi,
   n2 = posterior_summary$n
 )
 ```
 
-Compare every cohort the same way with ordinary R:
-
-```{r welch-all, eval = can_run}
-test_results <- map_dfr(
-  expression_estimates$group,
-  function(group) {
-    cohort_estimate <- expression_estimates[
-      expression_estimates$group == group,
-      ,
-      drop = FALSE
-    ]
-    posterior_summary <- summarize_posterior_draws(
-      posterior_draws,
-      value = cohort_estimate$log_mu
-    )
-    test <- welch_test_means(
-      cohort_estimate$log_mu,
-      cohort_estimate$se,
-      posterior_summary$log_mu,
-      posterior_summary$se,
-      n1 = cohort_estimate$n,
-      n2 = posterior_summary$n
-    )
-    data.frame(
-      group = group,
-      log_mu = test$mu1,
-      se = test$se1,
-      hca_log_mu = test$mu2,
-      hca_se = test$se2,
-      p_value = test$p_value,
-      stringsAsFactors = FALSE
-    )
-  }
+```{r welch-table, eval = can_run}
+test <- welch_test_means(
+  mu1 = user_log_mu,
+  se1 = user_se,
+  mu2 = posterior_summary$log_mu,
+  se2 = posterior_summary$se,
+  n1 = n_savi,
+  n2 = posterior_summary$n
+)
+test_results <- data.frame(
+  group = "SAVI",
+  n = n_savi,
+  log_mu = test$mu1,
+  se = test$se1,
+  hca_log_mu = test$mu2,
+  hca_se = test$se2,
+  p_value = test$p_value,
+  stringsAsFactors = FALSE
 )
 test_results
 ```
@@ -291,7 +341,7 @@ plot_hca_draws(
 plot_cohort_vs_hca(
   hca_draws = posterior_draws,
   cohort_est = test_results,
-  subtitle = "QL cohort estimates",
+  subtitle = "SAVI Category mean via edgeR formula + contrast",
   annotate = c("group", "p_value")
 )
 ```

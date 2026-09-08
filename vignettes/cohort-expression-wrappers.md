@@ -1,29 +1,32 @@
 Cohort expression workflow (wrappers)
 ================
 Chen Zhan
-2026-09-07
+2026-09-08
 
 SAVI case study: *ADRB2* (`ENSG00000169252`) in disease-associated
 monocytes.
 
-This vignette is the **high-level wrapper** path. Each wrapper only
+This vignette is the **high-level wrapper** path for the standard
+posteriorHCA case-study settings: one mean per `Category` via
+`~ 0 + Category`, with automatic HCA-scale `log_mu`. Each wrapper only
 composes core functions; it does not reimplement TMM, edgeR QL, brms
-draws, or Welch mathematics. The transparent core path is
+draws, or Welch mathematics. For arbitrary edgeR designs (for example
+`~ 1 + Experiment` on a single cohort), see
 `vignette("cohort-expression-core", package = "posteriorHCA")`.
 
-``` text
+```
 HIGH-LEVEL WRAPPER                  CORE FUNCTIONS CALLED
 ──────────────────                  ─────────────────────
 
 scale_to_hca_reference()
     ├── load_reference_sample()
     ├── merge_with_reference_sample()
-    └── calculate_tmm_offset()
+    └── calculate_tmm_scaling()
 
 estimate_cohort_logmu()
     ├── extract counts / metadata
     ├── stats::model.matrix()
-    └── estimate_logmu_ql()
+    └── estimate_ql()
 
 expression_baseline_draws()
     ├── load_expression_fit()
@@ -76,7 +79,9 @@ savi_ensg <- Seurat::CreateSeuratObject(counts = counts, meta.data = meta)
 
 `scale_to_hca_reference()` is a convenience wrapper around
 `load_reference_sample()` (when `reference` is a cell-type string),
-`merge_with_reference_sample()`, and `calculate_tmm_offset()`.
+`merge_with_reference_sample()`, and `calculate_tmm_scaling()`. It
+stores sample effective library sizes and the HCA reference `log(E_H)`
+for later alignment; edgeR itself is fitted with `offset = log(E_user)`.
 
 ``` r
 scaled <- scale_to_hca_reference(
@@ -85,9 +90,11 @@ scaled <- scale_to_hca_reference(
 )
 ```
 
-`estimate_cohort_logmu()` is a convenience wrapper that constructs the
-design with `model.matrix()` and delegates estimation to
-`estimate_logmu_ql()`.
+`estimate_cohort_logmu()` automates the package’s standard group-mean
+workflow: `formula = ~ 0 + Category`, validate one-hot group means, call
+`estimate_ql(formula, contrast = NULL)`, then add `log(E_HCA)` to return
+HCA-scale group `log_mu`. Arbitrary formulas and contrasts belong in the
+core vignette / `estimate_ql()` directly.
 
 ``` r
 cohort_estimates <- estimate_cohort_logmu(
@@ -97,20 +104,17 @@ cohort_estimates <- estimate_cohort_logmu(
 )
 cohort_estimates
 #>                  gene                group n   log_mu         mu        se
-#> 2617  ENSG00000169252         CategoryCTRL 7 3.304671   27.23958 0.6015499
-#> 12234 ENSG00000169252         CategorySAVI 5 6.930949 1023.46522 0.3661802
-#> 21851 ENSG00000169252 CategorySAVI_treated 5 6.284042  535.95061 0.3896259
-#>            df dispersion
-#> 2617  19.0239  0.2235231
-#> 12234 19.0239  0.2235231
-#> 21851 19.0239  0.2235231
+#> 2617  ENSG00000169252         CategoryCTRL 7 3.302730   27.18675 0.6161250
+#> 12234 ENSG00000169252         CategorySAVI 5 6.929494 1021.97712 0.3961903
+#> 21851 ENSG00000169252 CategorySAVI_treated 5 6.283457  535.63706 0.4177957
+#>             df dispersion
+#> 2617  19.03172  0.2235231
+#> 12234 19.03172  0.2235231
+#> 21851 19.03172  0.2235231
 ```
 
-Intercept-only design (`~ 1`): subset to one `Category`, then call
-`estimate_cohort_logmu()` with `formula = ~ 1`. The intercept is that
-cohort’s absolute log(μ). Offsets were already computed by
-`scale_to_hca_reference()`, so the reference library is not needed in
-the subset.
+Optionally, fit each `Category` alone with `formula = ~ 1` (still a
+one-hot / single-group design supported by this wrapper):
 
 ``` r
 cohort_estimates_by_level <- map_dfr(
@@ -127,9 +131,9 @@ cohort_estimates_by_level <- map_dfr(
 )
 cohort_estimates_by_level
 #>              gene        group n   log_mu        mu        se        df
-#> 1 ENSG00000169252         CTRL 7 3.326279  27.83459 0.3974670 10.928782
-#> 2 ENSG00000169252         SAVI 5 6.899991 992.26549 0.2464727  4.013446
-#> 3 ENSG00000169252 SAVI_treated 5 6.291712 540.07736 0.2111886  3.954086
+#> 1 ENSG00000169252         CTRL 7 3.327928  27.88051 0.3881143 10.907503
+#> 2 ENSG00000169252         SAVI 5 6.898946 991.22957 0.2846382  4.016435
+#> 3 ENSG00000169252 SAVI_treated 5 6.292200 540.34074 0.2132725  3.953662
 #>   dispersion
 #> 1  0.2302444
 #> 2  0.3381536
@@ -160,14 +164,14 @@ test_results <- compare_cohort_to_hca(
   hca_draws
 )
 test_results
-#>              gene                group   log_mu        se n hca_log_mu    hca_se
-#> 1 ENSG00000169252         CategoryCTRL 3.304671 0.6015499 7 4.444192 0.8688719
-#> 2 ENSG00000169252         CategorySAVI 6.930949 0.3661802 5 4.444192 0.8688719
-#> 3 ENSG00000169252 CategorySAVI_treated 6.284042 0.3896259 5 4.444192 0.8688719
-#>   hca_n     delta   se_diff    t_stat        df     p_value
-#> 1   400 -1.139521 1.0567879 -1.078287  53.63923 0.285730957
-#> 2   400  2.486758 0.9428819  2.637401 133.43381 0.009346491
-#> 3   400  1.839850 0.9522325  1.932144 114.35430 0.055815505
+#>              gene                group   log_mu        se n hca_log_mu
+#> 1 ENSG00000169252         CategoryCTRL 3.302730 0.6161250 7   4.444192
+#> 2 ENSG00000169252         CategorySAVI 6.929494 0.3961903 5   4.444192
+#> 3 ENSG00000169252 CategorySAVI_treated 6.283457 0.4177957 5   4.444192
+#>      hca_se hca_n     delta   se_diff    t_stat        df    p_value
+#> 1 0.8688719   400 -1.141462 1.0651518 -1.071643  50.58617 0.28896677
+#> 2 0.8688719   400  2.485303 0.9549373  2.602582 109.58968 0.01053221
+#> 3 0.8688719   400  1.839265 0.9641015  1.907750  95.51093 0.05942752
 ```
 
 ## Plots
@@ -229,8 +233,8 @@ sessionInfo()
 #>   [9] StanHeaders_2.39.1          edgeR_4.10.4               
 #>  [11] rprojroot_2.1.1             vroom_1.7.1                
 #>  [13] processx_3.9.0              globals_0.19.1             
-#>  [15] sccomp_2.4.0                lattice_0.22-9             
-#>  [17] MASS_7.3-65                 backports_1.5.1            
+#>  [15] sccomp_2.4.0                lattice_0.23-1             
+#>  [17] MASS_7.3-66                 backports_1.5.1            
 #>  [19] magrittr_2.0.5              limma_3.68.5               
 #>  [21] plotly_4.12.1               rmarkdown_2.32             
 #>  [23] yaml_2.3.12                 httpuv_1.6.17              
@@ -253,7 +257,7 @@ sessionInfo()
 #>  [57] matrixStats_1.5.0           spatstat.explore_3.8-2     
 #>  [59] Seqinfo_1.2.0               jsonlite_2.0.0             
 #>  [61] ellipsis_0.3.3              progressr_1.0.0            
-#>  [63] ggridges_0.5.7              survival_3.8-6             
+#>  [63] ggridges_0.5.7              survival_3.8-11            
 #>  [65] tools_4.6.1                 ica_1.0-3                  
 #>  [67] Rcpp_1.1.2                  glue_1.8.1                 
 #>  [69] SparseArray_1.12.2          gridExtra_2.3.1            
@@ -279,15 +283,15 @@ sessionInfo()
 #> [109] spatstat.univar_3.2-0       knitr_1.52                 
 #> [111] rstudioapi_0.19.0           tzdb_0.5.0                 
 #> [113] reshape2_1.4.5              coda_0.19-4.1              
-#> [115] checkmate_2.3.4             nlme_3.1-169               
+#> [115] checkmate_2.3.4             nlme_3.1-171               
 #> [117] cachem_1.1.0                zoo_1.9-0                  
-#> [119] stringr_1.6.0               KernSmooth_2.23-26         
+#> [119] stringr_1.6.0               KernSmooth_2.23-27         
 #> [121] parallel_4.6.1              miniUI_0.1.2               
 #> [123] desc_1.4.3                  pillar_1.11.1              
 #> [125] grid_4.6.1                  vctrs_0.7.3                
 #> [127] RANN_2.6.3                  promises_1.5.0             
 #> [129] stringfish_0.19.2           xtable_1.8-8               
-#> [131] cluster_2.1.8.2             evaluate_1.0.5             
+#> [131] cluster_2.1.8.3             evaluate_1.0.5             
 #> [133] readr_2.2.0                 locfit_1.5-9.12            
 #> [135] mvtnorm_1.4-2               cli_3.6.6                  
 #> [137] compiler_4.6.1              rlang_1.3.0                
@@ -299,7 +303,7 @@ sessionInfo()
 #> [149] viridisLite_0.4.3           deldir_2.0-4               
 #> [151] Biostrings_2.80.2           devtools_2.5.2             
 #> [153] spatstat.geom_3.8-2         Brobdingnag_1.2-9          
-#> [155] Matrix_1.7-5                RcppHNSW_0.7.0             
+#> [155] Matrix_1.7-6                RcppHNSW_0.7.0             
 #> [157] hms_1.1.4                   patchwork_1.3.2            
 #> [159] bit64_4.8.6                 future_1.75.0              
 #> [161] ggplot2_4.0.3               statmod_1.5.2              

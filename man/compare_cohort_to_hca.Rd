@@ -11,9 +11,8 @@ compare_cohort_to_hca(
 )
 }
 \arguments{
-\item{cohort_estimates}{Data frame from [estimate_logmu_ql()] /
-[estimate_cohort_logmu()] with columns `log_mu`, `se`, and preferably
-`group`, `gene`, and `n`.}
+\item{cohort_estimates}{Data frame from [estimate_cohort_logmu()] with
+columns `log_mu`, `se`, and preferably `group`, `gene`, and `n`.}
 
 \item{hca_draws}{Numeric draws or a list from [expression_draws()] /
 [expression_baseline_draws()].}

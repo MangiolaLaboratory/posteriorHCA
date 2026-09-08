@@ -2,7 +2,7 @@
 % Please edit documentation in R/cohort.R
 \name{estimate_cohort_logmu}
 \alias{estimate_cohort_logmu}
-\title{Estimate cohort log(μ) from a scaled count container}
+\title{Estimate HCA-scale cohort log(μ) for a one-hot group-mean design}
 \usage{
 estimate_cohort_logmu(
   data,
@@ -14,32 +14,35 @@ estimate_cohort_logmu(
 }
 \arguments{
 \item{data}{Scaled object from [scale_to_hca_reference()] (or equivalent
-container with counts, `sample_role`, and `hca_offset`).}
+container with counts, `sample_role`, `log_effective_library_size`, and
+`hca_log_effective_library_size`).}
 
-\item{formula}{Model formula evaluated on user sample metadata
-(for example `~ 0 + Category`).}
+\item{formula}{One-hot group-mean formula on user sample metadata
+(`~ 0 + Category` or `~ 1`).}
 
 \item{gene_ensg}{Optional character vector of Ensembl gene ids to keep.}
 
 \item{assay}{Assay name for Seurat / SummarizedExperiment input.}
 
-\item{robust}{Passed to [estimate_logmu_ql()].}
+\item{robust}{Passed to [estimate_ql()].}
 }
 \value{
-Data frame from [estimate_logmu_ql()], optionally filtered by
-  `gene_ensg`.
+Data frame with `gene`, `group`, `n`, `log_mu`, `mu`, `se`, `df`,
+  `dispersion` on the matched HCA reference effective-library-size scale.
 }
 \description{
-Convenience wrapper around [stats::model.matrix()] and
-[estimate_logmu_ql()] for scaled Seurat / SummarizedExperiment / matrix
-inputs from [scale_to_hca_reference()].
+Opinionated convenience wrapper around [scale_to_hca_reference()] inputs
+and [estimate_ql()]. Assumes a one-hot group-mean design such as
+`~ 0 + Category` (or `~ 1` for a single group), treats each coefficient
+as an absolute group log abundance, and returns HCA-scale
+`log_mu = estimate + hca_log_effective_library_size`.
 }
 \details{
-Extracts user libraries and their `hca_offset` values, builds the design
-matrix from `formula`, and delegates all edgeR QL estimation to
-[estimate_logmu_ql()]. Does not call edgeR itself.
+For arbitrary formulas/contrasts, call [estimate_ql()] directly and
+decide yourself whether the estimand should receive the HCA scale shift
+before [welch_test_means()].
 }
 \seealso{
-[estimate_logmu_ql()], [scale_to_hca_reference()],
+[estimate_ql()], [scale_to_hca_reference()],
   [expression_baseline_draws()], [compare_cohort_to_hca()]
 }

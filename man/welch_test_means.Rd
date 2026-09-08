@@ -36,6 +36,11 @@ using a Welch-style statistic. When `n1` and `n2` are supplied and both
 are at least 2, p-values use the Welch–Satterthwaite t distribution;
 otherwise a normal approximation is used.
 }
+\details{
+The caller is responsible for ensuring that `mu1` and `mu2` are comparable
+estimands on the same scale. This function does not inspect how either
+estimate was produced (edgeR, another model, or HCA posteriors).
+}
 \seealso{
 [compare_cohort_to_hca()], [summarize_posterior_draws()]
 }

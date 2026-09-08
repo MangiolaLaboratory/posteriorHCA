@@ -1,3 +1,5 @@
+# Internal bootstrap / mglm helpers (not part of the public cohort API).
+# Sourced directly so tests do not depend on exports.
 library(testthat)
 
 skip_if_not_installed("edgeR")

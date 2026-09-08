@@ -22,7 +22,8 @@ Imports:
     qs2,
     brms,
     readr,
-    edgeR
+    edgeR,
+    limma
 LazyData: true
 Collate:
     'utlis.R'

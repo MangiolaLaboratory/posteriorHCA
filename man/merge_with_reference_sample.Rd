@@ -25,5 +25,5 @@ Keeps genes shared with the reference and appends the reference as one
 column. Does not scale or compute offsets.
 }
 \seealso{
-[calculate_tmm_offset()], [scale_to_hca_reference()]
+[calculate_tmm_scaling()], [scale_to_hca_reference()]
 }

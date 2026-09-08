@@ -68,9 +68,12 @@ if (requireNamespace("devtools", quietly = TRUE)) {
 
 SAVI case study: *ADRB2* (`ENSG00000169252`) in disease-associated monocytes.
 
-This vignette is the **high-level wrapper** path. Each wrapper only composes
-core functions; it does not reimplement TMM, edgeR QL, brms draws, or Welch
-mathematics. The transparent core path is
+This vignette is the **high-level wrapper** path for the standard
+posteriorHCA case-study settings: one mean per `Category` via
+`~ 0 + Category`, with automatic HCA-scale `log_mu`. Each wrapper only
+composes core functions; it does not reimplement TMM, edgeR QL, brms draws,
+or Welch mathematics. For arbitrary edgeR designs (for example
+`~ 1 + Experiment` on a single cohort), see
 `vignette("cohort-expression-core", package = "posteriorHCA")`.
 
 ```text
@@ -80,12 +83,12 @@ HIGH-LEVEL WRAPPER                  CORE FUNCTIONS CALLED
 scale_to_hca_reference()
     ├── load_reference_sample()
     ├── merge_with_reference_sample()
-    └── calculate_tmm_offset()
+    └── calculate_tmm_scaling()
 
 estimate_cohort_logmu()
     ├── extract counts / metadata
     ├── stats::model.matrix()
-    └── estimate_logmu_ql()
+    └── estimate_ql()
 
 expression_baseline_draws()
     ├── load_expression_fit()
@@ -138,7 +141,10 @@ savi_ensg <- Seurat::CreateSeuratObject(counts = counts, meta.data = meta)
 
 `scale_to_hca_reference()` is a convenience wrapper around
 `load_reference_sample()` (when `reference` is a cell-type string),
-`merge_with_reference_sample()`, and `calculate_tmm_offset()`.
+`merge_with_reference_sample()`, and `calculate_tmm_scaling()`.
+It stores sample effective library sizes and the HCA reference
+`log(E_H)` for later alignment; edgeR itself is fitted with
+`offset = log(E_user)`.
 
 ```{r scale, eval = can_run}
 scaled <- scale_to_hca_reference(
@@ -147,8 +153,11 @@ scaled <- scale_to_hca_reference(
 )
 ```
 
-`estimate_cohort_logmu()` is a convenience wrapper that constructs the design
-with `model.matrix()` and delegates estimation to `estimate_logmu_ql()`.
+`estimate_cohort_logmu()` automates the package's standard group-mean
+workflow: `formula = ~ 0 + Category`, validate one-hot group means, call
+`estimate_ql(formula, contrast = NULL)`, then add `log(E_HCA)` to
+return HCA-scale group `log_mu`. Arbitrary formulas and contrasts belong
+in the core vignette / `estimate_ql()` directly.
 
 ```{r estimate, eval = can_run}
 cohort_estimates <- estimate_cohort_logmu(
@@ -159,10 +168,8 @@ cohort_estimates <- estimate_cohort_logmu(
 cohort_estimates
 ```
 
-Intercept-only design (`~ 1`): subset to one `Category`, then call
-`estimate_cohort_logmu()` with `formula = ~ 1`. The intercept is that cohort's
-absolute log(μ). Offsets were already computed by `scale_to_hca_reference()`,
-so the reference library is not needed in the subset.
+Optionally, fit each `Category` alone with `formula = ~ 1` (still a
+one-hot / single-group design supported by this wrapper):
 
 ```{r estimate-by-level, eval = can_run}
 cohort_estimates_by_level <- map_dfr(

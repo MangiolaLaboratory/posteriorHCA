@@ -1,7 +1,8 @@
-# Cohort bootstrap helpers for gene-expression workflow
+# Internal bootstrap / mglm user-estimation utilities
 #
-#   estimate_dispersion_nb()  — gene-wise NB dispersion from a count matrix
-#   bootstrap_logmu_mglm()    — Dirichlet-weighted mglmOneGroup draws
+#   Not part of the supported public cohort-expression API.
+#   Retained for validation / benchmarking. Preferred public user helper:
+#   estimate_ql(formula, contrast) → estimate + SE.
 
 #' Dirichlet weights for Bayesian bootstrap
 #'
@@ -22,19 +23,20 @@ draw_dirichlet_weights <- function(n) {
   n * weights / sum(weights)
 }
 
-#' Estimate NB dispersions from a count matrix with explicit offset
+#' Estimate NB dispersions (internal bootstrap path)
 #'
-#' Fits an intercept-only edgeR QL model and returns the gene-wise dispersion
-#' vector. Prefer this over fitting a one-gene matrix alone: dispersion
-#' shrinks better with many genes.
+#' Internal helper for the experimental bootstrap/mglm estimator. Fits an
+#' intercept-only edgeR QL model and returns gene-wise dispersions. Not part
+#' of the supported user-facing cohort-expression API; prefer
+#' [estimate_ql()] for public workflows.
 #'
 #' @param counts Gene-by-sample numeric count matrix.
 #' @param offset Numeric vector (length `ncol(counts)`) or matrix. Typically
-#'   from [calculate_tmm_offset()].
+#'   `log(effective_size)` from [calculate_tmm_scaling()] for user samples.
 #' @param robust Passed to [edgeR::estimateDisp()] / [edgeR::glmQLFit()].
 #' @return Named numeric vector of dispersions (names = gene ids).
-#' @seealso [estimate_logmu_ql()], [bootstrap_logmu_mglm()]
-#' @export
+#' @keywords internal
+#' @noRd
 estimate_dispersion_nb <- function(counts, offset, robust = TRUE) {
   counts <- as.matrix(counts)
   design <- matrix(1, nrow = ncol(counts), ncol = 1L)
@@ -48,11 +50,12 @@ estimate_dispersion_nb <- function(counts, offset, robust = TRUE) {
   )$dispersion
 }
 
-#' Bayesian bootstrap of log(μ) via weighted mglmOneGroup
+#' Bootstrap log(μ) via weighted mglmOneGroup (internal)
 #'
-#' Repeatedly draws Dirichlet(1,…,1) weights and fits
-#' [edgeR::mglmOneGroup()] for a single gene (one row of counts). Returns
-#' posterior draws of latent log(μ) on the supplied offset scale.
+#' Internal bootstrap estimator retained for validation/benchmarking; not part
+#' of the supported user-facing cohort-expression API. Repeatedly draws
+#' Dirichlet(1,…,1) weights and fits [edgeR::mglmOneGroup()] for a single gene.
+#' Prefer [estimate_ql()] for public workflows.
 #'
 #' @param y Numeric vector or one-row matrix of counts for one gene.
 #' @param offset Numeric vector of sample offsets (same length as `y`).
@@ -60,8 +63,8 @@ estimate_dispersion_nb <- function(counts, offset, robust = TRUE) {
 #' @param n_boot Integer number of bootstrap iterations (default `2000L`).
 #' @param seed Optional RNG seed.
 #' @return Numeric vector of length `n_boot`.
-#' @seealso [estimate_dispersion_nb()], [estimate_logmu_ql()]
-#' @export
+#' @keywords internal
+#' @noRd
 #' @importFrom cli cli_abort
 bootstrap_logmu_mglm <- function(
   y,

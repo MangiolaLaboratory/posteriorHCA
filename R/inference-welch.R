@@ -29,6 +29,10 @@ welch_satterthwaite_df <- function(se1, se2, n1 = NULL, n2 = NULL) {
 #' are at least 2, p-values use the Welch–Satterthwaite t distribution;
 #' otherwise a normal approximation is used.
 #'
+#' The caller is responsible for ensuring that `mu1` and `mu2` are comparable
+#' estimands on the same scale. This function does not inspect how either
+#' estimate was produced (edgeR, another model, or HCA posteriors).
+#'
 #' @param mu1,mu2 Point estimates of the two means.
 #' @param se1,se2 Standard errors (or posterior SDs) associated with `mu1`
 #'   and `mu2`.
@@ -138,9 +142,8 @@ summarize_posterior_draws <- function(draws, value = NULL) {
 #' comparison for each row of `cohort_estimates`. Does not implement Welch
 #' mathematics itself.
 #'
-#' @param cohort_estimates Data frame from [estimate_logmu_ql()] /
-#'   [estimate_cohort_logmu()] with columns `log_mu`, `se`, and preferably
-#'   `group`, `gene`, and `n`.
+#' @param cohort_estimates Data frame from [estimate_cohort_logmu()] with
+#'   columns `log_mu`, `se`, and preferably `group`, `gene`, and `n`.
 #' @param hca_draws Numeric draws or a list from [expression_draws()] /
 #'   [expression_baseline_draws()].
 #' @param alternative Passed to [welch_test_means()].

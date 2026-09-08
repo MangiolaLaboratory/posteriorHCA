@@ -18,10 +18,10 @@ SAVI case study (*ADRB2* / `ENSG00000169252` in disease-associated monocytes).
 posteriorHCA provides transparent statistical **core** functions and a small
 set of convenience **wrappers** built directly on those cores.
 
-| Path | Vignette |
-|------|----------|
-| Concise wrapper workflow | `vignette("cohort-expression-wrappers", package = "posteriorHCA")` |
-| Transparent core workflow | `vignette("cohort-expression-core", package = "posteriorHCA")` |
+| Path | Focus | Vignette |
+|------|-------|----------|
+| Concise wrapper workflow | `~ 0 + Category` group means | `vignette("cohort-expression-wrappers")` |
+| Transparent core workflow | optional edgeR `formula` + `contrast` helper | `vignette("cohort-expression-core")` |
 
 Matching script: `examples/savi_adrb2_workflow.R` (core path).
 
@@ -39,9 +39,9 @@ compare_cohort_to_hca()
 ```r
 load_reference_sample()
 merge_with_reference_sample()
-calculate_tmm_offset()
+calculate_tmm_scaling()
 
-estimate_logmu_ql()
+estimate_ql()
 
 load_expression_fit()
 build_newdata_grid()
