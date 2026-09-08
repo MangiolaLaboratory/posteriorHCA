@@ -394,6 +394,11 @@ scale_to_hca_reference <- function(
 }
 
 #' Fit edgeR QL with prior.count = 0 and explicit log-library-size offset
+#'
+#' Passes `prior.count = 0` on Bioconductor release edgeR so coefficients are
+#' unshrunk. Bioconductor devel `glmQLFit()` already hardcodes
+#' `prior.count = 0` when calling `glmFit()` and also forwards `...`, so
+#' passing it again errors with a duplicate formal argument.
 #' @keywords internal
 #' @noRd
 fit_nb_ql <- function(counts, offset, design, robust = TRUE) {
@@ -437,13 +442,19 @@ fit_nb_ql <- function(counts, offset, design, robust = TRUE) {
     offset = offset_mat,
     robust = robust
   )
-  fit <- edgeR::glmQLFit(
+  ql_args <- list(
     y = counts,
     design = design,
     offset = offset_mat,
-    robust = robust,
-    prior.count = 0
+    robust = robust
   )
+  # Release glmQLFit forwards ... to glmFit (default prior.count = 0.125).
+  # Devel hardcodes prior.count = 0 and also forwards ..., so passing it
+  # again fails with a duplicate formal.
+  if (utils::packageVersion("edgeR") < "4.99.0") {
+    ql_args$prior.count <- 0
+  }
+  fit <- do.call(edgeR::glmQLFit, ql_args)
 
   dispersion <- if (!is.null(disp$trended.dispersion)) {
     disp$trended.dispersion
@@ -816,7 +827,8 @@ ql_fit_nb_dispersion <- function(fit, n_gene) {
 #' the HCA posterior, not a differential-expression testing workflow.
 #'
 #' Builds `design = model.matrix(formula, data = metadata)`, fits
-#' [edgeR::estimateDisp()] / [edgeR::glmQLFit()] (`prior.count = 0`) with
+#' [edgeR::estimateDisp()] / [edgeR::glmQLFit()] (`prior.count = 0` on
+#' Bioconductor release; devel already forces this) with
 #' offset `log(effective library size)`, optionally builds contrasts with
 #' [limma::makeContrasts()], and returns
 #'

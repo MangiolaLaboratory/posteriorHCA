@@ -41,7 +41,8 @@ the HCA posterior, not a differential-expression testing workflow.
 }
 \details{
 Builds `design = model.matrix(formula, data = metadata)`, fits
-[edgeR::estimateDisp()] / [edgeR::glmQLFit()] (`prior.count = 0`) with
+[edgeR::estimateDisp()] / [edgeR::glmQLFit()] (`prior.count = 0` on
+Bioconductor release; devel already forces this) with
 offset `log(effective library size)`, optionally builds contrasts with
 [limma::makeContrasts()], and returns
 
