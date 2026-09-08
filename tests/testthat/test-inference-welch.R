@@ -23,18 +23,18 @@ test_that("welch_test_means works without n1/n2", {
   expect_true(out$p_value < 0.05)
 })
 
-test_that("summarize_posterior_draws computes mean, sd, n, and rank", {
+test_that("summarize_posterior_draws computes log_mu, se, n, and rank", {
   draws <- c(1, 2, 3, 4, 5)
   out <- summarize_posterior_draws(draws, value = 2.5)
-  expect_equal(out$mean, 3)
-  expect_equal(out$sd, sd(draws))
+  expect_equal(out$log_mu, 3)
+  expect_equal(out$se, sd(draws))
   expect_equal(out$n, 5L)
   expect_equal(out$empirical_rank, mean(draws <= 2.5))
 })
 
 test_that("summarize_posterior_draws accepts expression_draws-like lists", {
   out <- summarize_posterior_draws(list(draws = c(1, 2, 3, 4)))
-  expect_equal(out$mean, 2.5)
+  expect_equal(out$log_mu, 2.5)
   expect_equal(out$n, 4L)
 })
 
@@ -56,8 +56,8 @@ test_that("compare_cohort_to_hca matches summarize + welch_test_means", {
   core_a <- welch_test_means(
     mu1 = cohort_estimates$log_mu[[1]],
     se1 = cohort_estimates$se[[1]],
-    mu2 = hca_summary$mean,
-    se2 = hca_summary$sd,
+    mu2 = hca_summary$log_mu,
+    se2 = hca_summary$se,
     n1 = cohort_estimates$n[[1]],
     n2 = hca_summary$n
   )
@@ -65,6 +65,7 @@ test_that("compare_cohort_to_hca matches summarize + welch_test_means", {
   expect_equal(wrapper$t_stat[[1]], core_a$t_stat)
   expect_equal(wrapper$delta[[1]], core_a$delta)
   expect_equal(wrapper$df[[1]], core_a$df)
-  expect_equal(wrapper$hca_mean[[1]], hca_summary$mean)
+  expect_equal(wrapper$hca_log_mu[[1]], hca_summary$log_mu)
+  expect_equal(wrapper$hca_se[[1]], hca_summary$se)
   expect_equal(wrapper$group, c("A", "B"))
 })

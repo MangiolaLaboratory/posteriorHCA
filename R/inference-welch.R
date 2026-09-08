@@ -2,7 +2,7 @@
 #
 #   Core:
 #     welch_test_means()           — core test (mu/se/n for both sides)
-#     summarize_posterior_draws()  — mean/sd/n from HCA posterior draws
+#     summarize_posterior_draws()  — log_mu/se/n from HCA posterior draws
 #   Wrapper (compose cores only):
 #     compare_cohort_to_hca()      — summarise draws + welch_test_means per row
 
@@ -105,7 +105,7 @@ welch_test_means <- function(
 #'   example from [expression_draws()]).
 #' @param value Optional scalar; when supplied, `empirical_rank` is the
 #'   proportion of draws less than or equal to `value`.
-#' @return A list with `mean`, `sd`, `n`, and optionally `empirical_rank`.
+#' @return A list with `log_mu`, `se`, `n`, and optionally `empirical_rank`.
 #' @seealso [compare_cohort_to_hca()], [welch_test_means()]
 #' @export
 #' @importFrom cli cli_abort
@@ -121,8 +121,8 @@ summarize_posterior_draws <- function(draws, value = NULL) {
     cli_abort("`draws` must contain at least 2 numeric values.")
   }
   out <- list(
-    mean = unname(mean(x)),
-    sd = unname(stats::sd(x)),
+    log_mu = unname(mean(x)),
+    se = unname(stats::sd(x)),
     n = length(x)
   )
   if (!is.null(value)) {
@@ -174,8 +174,8 @@ compare_cohort_to_hca <- function(
     test <- welch_test_means(
       mu1 = cohort_row$log_mu[[1]],
       se1 = cohort_row$se[[1]],
-      mu2 = hca_summary$mean,
-      se2 = hca_summary$sd,
+      mu2 = hca_summary$log_mu,
+      se2 = hca_summary$se,
       n1 = n1,
       n2 = hca_summary$n,
       alternative = alternative
@@ -194,8 +194,8 @@ compare_cohort_to_hca <- function(
       log_mu = test$mu1,
       se = test$se1,
       n = if (is.null(test$n1)) NA_integer_ else as.integer(test$n1),
-      hca_mean = test$mu2,
-      hca_sd = test$se2,
+      hca_log_mu = test$mu2,
+      hca_se = test$se2,
       hca_n = if (is.null(test$n2)) NA_integer_ else as.integer(test$n2),
       delta = test$delta,
       se_diff = test$se_diff,

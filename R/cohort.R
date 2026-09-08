@@ -401,6 +401,14 @@ fit_nb_ql <- function(counts, offset, design, robust = TRUE) {
 
   dge <- edgeR::DGEList(counts = counts)
   dge$offset <- offset_mat
+  
+  # stopifnot(
+  #   isTRUE(all.equal(
+  #     as.matrix(edgeR::getOffset(dge)),
+  #     as.matrix(offset_mat)
+  #   ))
+  # )
+  
   dge <- edgeR::estimateDisp(dge, design, robust = robust)
   fit <- edgeR::glmQLFit(dge, design, robust = robust, prior.count = 0)
 

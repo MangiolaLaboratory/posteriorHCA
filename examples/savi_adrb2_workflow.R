@@ -169,8 +169,8 @@ posterior_summary <- summarize_posterior_draws(
 print(welch_test_means(
   cohort_estimate$log_mu,
   cohort_estimate$se,
-  posterior_summary$mean,
-  posterior_summary$sd,
+  posterior_summary$log_mu,
+  posterior_summary$se,
   n1 = cohort_estimate$n,
   n2 = posterior_summary$n
 ))
@@ -190,8 +190,8 @@ test_results <- map_dfr(
     test <- welch_test_means(
       cohort_estimate$log_mu,
       cohort_estimate$se,
-      posterior_summary$mean,
-      posterior_summary$sd,
+      posterior_summary$log_mu,
+      posterior_summary$se,
       n1 = cohort_estimate$n,
       n2 = posterior_summary$n
     )

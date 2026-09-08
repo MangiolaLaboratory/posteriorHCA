@@ -14,7 +14,7 @@ example from [expression_draws()]).}
 proportion of draws less than or equal to `value`.}
 }
 \value{
-A list with `mean`, `sd`, `n`, and optionally `empirical_rank`.
+A list with `log_mu`, `se`, `n`, and optionally `empirical_rank`.
 }
 \description{
 Summarise posterior draws for comparison with a point estimate

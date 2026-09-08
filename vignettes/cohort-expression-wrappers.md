@@ -160,7 +160,7 @@ test_results <- compare_cohort_to_hca(
   hca_draws
 )
 test_results
-#>              gene                group   log_mu        se n hca_mean    hca_sd
+#>              gene                group   log_mu        se n hca_log_mu    hca_se
 #> 1 ENSG00000169252         CategoryCTRL 3.304671 0.6015499 7 4.444192 0.8688719
 #> 2 ENSG00000169252         CategorySAVI 6.930949 0.3661802 5 4.444192 0.8688719
 #> 3 ENSG00000169252 CategorySAVI_treated 6.284042 0.3896259 5 4.444192 0.8688719

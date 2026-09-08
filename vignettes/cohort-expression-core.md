@@ -187,8 +187,8 @@ posterior_summary <- summarize_posterior_draws(
 welch_test_means(
   cohort_estimate$log_mu,
   cohort_estimate$se,
-  posterior_summary$mean,
-  posterior_summary$sd,
+  posterior_summary$log_mu,
+  posterior_summary$se,
   n1 = cohort_estimate$n,
   n2 = posterior_summary$n
 )
@@ -244,8 +244,8 @@ test_results <- map_dfr(
     test <- welch_test_means(
       cohort_estimate$log_mu,
       cohort_estimate$se,
-      posterior_summary$mean,
-      posterior_summary$sd,
+      posterior_summary$log_mu,
+      posterior_summary$se,
       n1 = cohort_estimate$n,
       n2 = posterior_summary$n
     )
@@ -253,15 +253,15 @@ test_results <- map_dfr(
       group = group,
       log_mu = test$mu1,
       se = test$se1,
-      hca_mean = test$mu2,
-      hca_sd = test$se2,
+      hca_log_mu = test$mu2,
+      hca_se = test$se2,
       p_value = test$p_value,
       stringsAsFactors = FALSE
     )
   }
 )
 test_results
-#>          group   log_mu        se hca_mean    hca_sd     p_value
+#>          group   log_mu        se hca_log_mu    hca_se     p_value
 #> 1         CTRL 3.301308 0.5652071 4.388392 0.8231683 0.281063450
 #> 2         SAVI 6.928445 0.3482651 4.388392 0.8231683 0.005197391
 #> 3 SAVI_treated 6.283036 0.3697428 4.388392 0.8231683 0.037975059

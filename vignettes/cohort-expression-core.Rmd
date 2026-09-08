@@ -234,8 +234,8 @@ posterior_summary <- summarize_posterior_draws(
 welch_test_means(
   cohort_estimate$log_mu,
   cohort_estimate$se,
-  posterior_summary$mean,
-  posterior_summary$sd,
+  posterior_summary$log_mu,
+  posterior_summary$se,
   n1 = cohort_estimate$n,
   n2 = posterior_summary$n
 )
@@ -259,8 +259,8 @@ test_results <- map_dfr(
     test <- welch_test_means(
       cohort_estimate$log_mu,
       cohort_estimate$se,
-      posterior_summary$mean,
-      posterior_summary$sd,
+      posterior_summary$log_mu,
+      posterior_summary$se,
       n1 = cohort_estimate$n,
       n2 = posterior_summary$n
     )
@@ -268,8 +268,8 @@ test_results <- map_dfr(
       group = group,
       log_mu = test$mu1,
       se = test$se1,
-      hca_mean = test$mu2,
-      hca_sd = test$se2,
+      hca_log_mu = test$mu2,
+      hca_se = test$se2,
       p_value = test$p_value,
       stringsAsFactors = FALSE
     )
