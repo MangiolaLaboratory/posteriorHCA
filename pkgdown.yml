@@ -1,6 +1,10 @@
-pandoc: 3.8.2.1
-pkgdown: 2.2.0
+pandoc: 3.10.2
+pkgdown: 2.2.1
 pkgdown_sha: ~
 articles:
+  cohort-expression-core: cohort-expression-core.html
+  cohort-expression-workflow: cohort-expression-workflow.html
+  cohort-expression-wrappers: cohort-expression-wrappers.html
+  composition-workflow: composition-workflow.html
   Introduction: Introduction.html
-last_built: 2025-11-18T03:34Z
+last_built: 2026-09-09T00:10Z

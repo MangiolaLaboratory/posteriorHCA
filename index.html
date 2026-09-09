@@ -33,7 +33,7 @@
       </button>
       <span class="navbar-brand">
         <a class="navbar-link" href="index.html">posteriorHCA</a>
-        <span class="version label label-default" data-toggle="tooltip" data-placement="bottom" title="">0.1.0</span>
+        <span class="version label label-default" data-toggle="tooltip" data-placement="bottom" title="">0.2.0</span>
       </span>
     </div>
 
@@ -50,6 +50,18 @@
   </a>
   <ul class="dropdown-menu" role="menu">
 <li>
+      <a href="articles/cohort-expression-core.html">Cohort expression workflow (core)</a>
+    </li>
+    <li>
+      <a href="articles/cohort-expression-workflow.html">Cohort expression workflow (overview)</a>
+    </li>
+    <li>
+      <a href="articles/cohort-expression-wrappers.html">Cohort expression workflow (wrappers)</a>
+    </li>
+    <li>
+      <a href="articles/composition-workflow.html">Composition workflow</a>
+    </li>
+    <li>
       <a href="articles/Introduction.html">posteriorHCA</a>
     </li>
   </ul>
@@ -74,24 +86,43 @@
 <!-- badges: start -->
 
 <!-- badges: end -->
-<p><code>PosteriorHCA</code> applies <strong>Bayesian inference</strong> from the <code>sccomp</code> package to model the comprehensive <strong>Human Cell Atlas (HCA)</strong>, allowing researchers to probabilistically measure human cellular composition.</p>
-<p>This package <strong>models variations in cellular composition</strong> across:</p>
+<p><code>PosteriorHCA</code> applies <strong>Bayesian inference</strong> to model the comprehensive <strong>Human Cell Atlas (HCA)</strong>, allowing researchers to probabilistically analyze both <strong>cellular composition</strong> and <strong>gene expression</strong> patterns across human samples.</p>
+<p>This package provides two main analytical capabilities:</p>
+<ol style="list-style-type: decimal">
+<li>
+<strong>Cellular Composition Analysis</strong>: Uses the <code>sccomp</code> package to model variations in cell type proportions across:
 <ul>
-<li><p><strong>Cell Types</strong></p></li>
-<li><p><strong>Sex</strong></p></li>
-<li><p><strong>Age</strong></p></li>
-<li><p><strong>Ethnicity</strong></p></li>
-<li><p><strong>Disease conditions</strong></p></li>
-<li><p><strong>Tissue Groups</strong></p></li>
+<li><strong>Cell Types</strong></li>
+<li><strong>Sex</strong></li>
+<li><strong>Age</strong></li>
+<li><strong>Ethnicity</strong></li>
+<li><strong>Disease conditions</strong></li>
+<li><strong>Tissue Groups</strong></li>
 </ul>
-<p>The probabilistic landscape is <strong>pre-learned</strong>, meaning it represents a <strong>posterior distribution</strong> estimated from millions of cells. <code>PosteriorHCA</code> makes this <strong>queryable</strong>, allowing researchers to:</p>
+</li>
+<li>
+<strong>Gene Expression Prediction</strong>: Uses <code>brms</code> models to predict gene expression levels for specific cell types and genes based on sample metadata including:
+<ul>
+<li><strong>Cell Types</strong></li>
+<li><strong>Sex</strong></li>
+<li><strong>Age Decade</strong></li>
+<li><strong>Disease Groups</strong></li>
+<li><strong>Ethnicity Groups</strong></li>
+<li><strong>Assay Groups</strong></li>
+<li><strong>Tissue Groups</strong></li>
+</ul>
+</li>
+</ol>
+<p>The probabilistic landscapes are <strong>pre-trained</strong>, meaning they represent <strong>posterior distributions</strong> estimated from millions of cells. <code>PosteriorHCA</code> makes these <strong>queryable</strong>, allowing researchers to:</p>
 <ul>
 <li>
-<strong>Test hypotheses</strong> against a precomputed reference baseline.</li>
+<strong>Test hypotheses</strong> against precomputed reference baselines.</li>
 <li>
-<strong>Compare new samples</strong> to the expected cellular composition distribution.</li>
+<strong>Compare new samples</strong> to expected cellular composition distributions.</li>
 <li>
-<strong>Assess how cell proportions vary</strong> across human conditions.</li>
+<strong>Predict gene expression</strong> levels for specific cell types and genes.</li>
+<li>
+<strong>Assess how cell proportions and gene expression vary</strong> across human conditions.</li>
 </ul>
 <div class="section level2">
 <h2 id="installation">
@@ -103,118 +134,180 @@
 <span><span class="fu"><a href="https://rdrr.io/r/utils/install.packages.html" class="external-link">install.packages</a></span><span class="op">(</span><span class="st">"devtools"</span><span class="op">)</span></span>
 <span></span>
 <span><span class="co"># Install PosteriorHCA from GitHub</span></span>
-<span><span class="fu">devtools</span><span class="fu">::</span><span class="fu"><a href="https://remotes.r-lib.org/reference/install_github.html" class="external-link">install_github</a></span><span class="op">(</span><span class="st">"MangiolaLaboratory/posteriorHCA"</span><span class="op">)</span></span></code></pre></div>
+<span><span class="fu">devtools</span><span class="fu">::</span><span class="fu"><a href="https://devtools.r-lib.org/reference/install-deprecated.html" class="external-link">install_github</a></span><span class="op">(</span><span class="st">"MangiolaLaboratory/posteriorHCA"</span><span class="op">)</span></span></code></pre></div>
 <p>Once installed, load the package:</p>
 <div class="sourceCode" id="cb2"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="kw"><a href="https://rdrr.io/r/base/library.html" class="external-link">library</a></span><span class="op">(</span><span class="va">posteriorHCA</span><span class="op">)</span></span></code></pre></div>
+<p>To rebuild this vignette <strong>and</strong> sync <code>README.md</code>, run <code>source("scripts/render_introduction.R"); render_introduction()</code> (or <code>Rscript scripts/render_introduction_cli.R</code> from the package root). Plain <code>rmarkdown::render("vignettes/Introduction.Rmd")</code> only builds the vignette HTML.</p>
 </div>
 <div class="section level2">
-<h2 id="usage-example">Usage Example<a class="anchor" aria-label="anchor" href="#usage-example"></a>
+<h2 id="usage-examples">Usage Examples<a class="anchor" aria-label="anchor" href="#usage-examples"></a>
 </h2>
 <div class="section level3">
-<h3 id="id_1-load-relevant-packages-and-example-data">1. Load relevant packages and example data<a class="anchor" aria-label="anchor" href="#id_1-load-relevant-packages-and-example-data"></a>
+<h3 id="id_1-cellular-composition-analysis">
+<strong>1. Cellular Composition Analysis</strong><a class="anchor" aria-label="anchor" href="#id_1-cellular-composition-analysis"></a>
 </h3>
+<div class="section level4">
+<h4 id="load-relevant-packages-and-example-data">Load relevant packages and example data<a class="anchor" aria-label="anchor" href="#load-relevant-packages-and-example-data"></a>
+</h4>
 <p>The package includes a small example dataset for demonstration:</p>
 <div class="sourceCode" id="cb3"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="kw"><a href="https://rdrr.io/r/base/library.html" class="external-link">library</a></span><span class="op">(</span><span class="va"><a href="https://dplyr.tidyverse.org" class="external-link">dplyr</a></span><span class="op">)</span></span>
-<span><span class="kw"><a href="https://rdrr.io/r/base/library.html" class="external-link">library</a></span><span class="op">(</span><span class="va"><a href="https://tidyr.tidyverse.org" class="external-link">tidyr</a></span><span class="op">)</span></span>
-<span><span class="kw"><a href="https://rdrr.io/r/base/library.html" class="external-link">library</a></span><span class="op">(</span><span class="va"><a href="https://ggplot2.tidyverse.org" class="external-link">ggplot2</a></span><span class="op">)</span></span>
-<span></span>
-<span><span class="fu"><a href="https://rdrr.io/r/utils/data.html" class="external-link">data</a></span><span class="op">(</span><span class="va">example_proportions</span><span class="op">)</span></span>
+<code class="sourceCode R"><span><span class="fu"><a href="https://rdrr.io/r/utils/data.html" class="external-link">data</a></span><span class="op">(</span><span class="va">example_proportions</span><span class="op">)</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/base/print.html" class="external-link">print</a></span><span class="op">(</span><span class="va">example_proportions</span><span class="op">)</span></span>
-<span><span class="co">#&gt; # A tibble: 48 × 3</span></span>
-<span><span class="co">#&gt;    sample_id                        cell_type proportion</span></span>
-<span><span class="co">#&gt;    &lt;chr&gt;                            &lt;chr&gt;          &lt;dbl&gt;</span></span>
-<span><span class="co">#&gt;  1 0000c153da22cf963b807c0563aca6a6 b memory    0       </span></span>
-<span><span class="co">#&gt;  2 0000c153da22cf963b807c0563aca6a6 b naive     0       </span></span>
-<span><span class="co">#&gt;  3 0000c153da22cf963b807c0563aca6a6 cd14 mono   0.0259  </span></span>
-<span><span class="co">#&gt;  4 0000c153da22cf963b807c0563aca6a6 cd16 mono   0       </span></span>
-<span><span class="co">#&gt;  5 0000c153da22cf963b807c0563aca6a6 cd4 naive   0       </span></span>
-<span><span class="co">#&gt;  6 0000c153da22cf963b807c0563aca6a6 cd4 tcm     0.00104 </span></span>
-<span><span class="co">#&gt;  7 0000c153da22cf963b807c0563aca6a6 cd4 tem     0.000692</span></span>
-<span><span class="co">#&gt;  8 0000c153da22cf963b807c0563aca6a6 cd8 naive   0       </span></span>
-<span><span class="co">#&gt;  9 0000c153da22cf963b807c0563aca6a6 cd8 tcm     0       </span></span>
-<span><span class="co">#&gt; 10 0000c153da22cf963b807c0563aca6a6 cd8 tem     0       </span></span>
-<span><span class="co">#&gt; # ℹ 38 more rows</span></span></code></pre></div>
+<span><span class="co">#&gt; # A tibble: 26 × 3</span></span>
+<span><span class="co">#&gt;    sample_id                        cell_type       proportion</span></span>
+<span><span class="co">#&gt;    &lt;chr&gt;                            &lt;chr&gt;                &lt;dbl&gt;</span></span>
+<span><span class="co">#&gt;  1 0000c153da22cf963b807c0563aca6a6 b memory          0       </span></span>
+<span><span class="co">#&gt;  2 0000c153da22cf963b807c0563aca6a6 b naive           0       </span></span>
+<span><span class="co">#&gt;  3 0000c153da22cf963b807c0563aca6a6 cd14 mono         0       </span></span>
+<span><span class="co">#&gt;  4 0000c153da22cf963b807c0563aca6a6 cd16 mono         0.00502 </span></span>
+<span><span class="co">#&gt;  5 0000c153da22cf963b807c0563aca6a6 cd4 fh em         0       </span></span>
+<span><span class="co">#&gt;  6 0000c153da22cf963b807c0563aca6a6 cd4 naive         0       </span></span>
+<span><span class="co">#&gt;  7 0000c153da22cf963b807c0563aca6a6 cd4 tcm           0.000359</span></span>
+<span><span class="co">#&gt;  8 0000c153da22cf963b807c0563aca6a6 cd4 th1 em        0       </span></span>
+<span><span class="co">#&gt;  9 0000c153da22cf963b807c0563aca6a6 cd4 th1/th17 em   0.000359</span></span>
+<span><span class="co">#&gt; 10 0000c153da22cf963b807c0563aca6a6 cd4 th17 em       0       </span></span>
+<span><span class="co">#&gt; # ℹ 16 more rows</span></span></code></pre></div>
 </div>
-<div class="section level3">
-<h3 id="id_2-run-posterior-testing">
-<strong>2. Run Posterior Testing</strong><a class="anchor" aria-label="anchor" href="#id_2-run-posterior-testing"></a>
-</h3>
-<p>The core function, <code><a href="reference/posterior_test.html">posterior_test()</a></code>, allows testing new data against the probabilistic model:</p>
+<div class="section level4">
+<h4 id="load-the-healthy-sccomp-reference">Load the healthy sccomp reference<a class="anchor" aria-label="anchor" href="#load-the-healthy-sccomp-reference"></a>
+</h4>
+<p>The default composition model is a healthy-only CellNexus sccomp fit. Unknown covariates can be left as <code>NA</code>; sccomp marginalises over them automatically.</p>
 <div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="va">result</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/posterior_test.html">posterior_test</a></span><span class="op">(</span></span>
-<span>    proportions <span class="op">=</span> <span class="va">example_proportions</span>,</span>
-<span>    sex <span class="op">=</span> <span class="st">"male"</span>,</span>
-<span>    age_bin <span class="op">=</span> <span class="st">"Middle Age"</span>,</span>
-<span>    disease_groups <span class="op">=</span> <span class="st">"Normal"</span>,</span>
-<span>    ethnicity_groups <span class="op">=</span> <span class="st">"European"</span>,</span>
-<span>    tissue_groups <span class="op">=</span> <span class="st">"blood"</span>, </span>
-<span>    load_model_to_global_env <span class="op">=</span> <span class="cn">T</span></span>
+<code class="sourceCode R"><span><span class="va">sccomp_fit</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/load_sccomp_fit.html">load_sccomp_fit</a></span><span class="op">(</span><span class="op">)</span></span>
+<span><span class="co">#&gt; ℹ Using cached file: /home/a1237163/.cache/R/posteriorHCA/sccomp_est/cellNexus_1_0_12/estimates_age_decade___L3___disease_FALSE___immune_only_TRUE.rds</span></span></code></pre></div>
+</div>
+<div class="section level4">
+<h4 id="draw-healthy-reference-proportions">Draw healthy reference proportions<a class="anchor" aria-label="anchor" href="#draw-healthy-reference-proportions"></a>
+</h4>
+<div class="sourceCode" id="cb5"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="va">comp_draws</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/composition_draws.html">composition_draws</a></span><span class="op">(</span></span>
+<span>  <span class="va">sccomp_fit</span>,</span>
+<span>  sex <span class="op">=</span> <span class="st">"male"</span>,</span>
+<span>  age_decade <span class="op">=</span> <span class="st">"4"</span>,</span>
+<span>  ethnicity_groups <span class="op">=</span> <span class="st">"European"</span>,</span>
+<span>  assay_groups <span class="op">=</span> <span class="st">"10x Genomics 3"</span>,</span>
+<span>  tissue_groups <span class="op">=</span> <span class="st">"blood"</span></span>
 <span><span class="op">)</span></span>
-<span><span class="co">#&gt; ℹ Using cached model file: /home/chzhan1/.cache/R/posteriorHCA/estimates_age_bins___L2.rds</span></span>
-<span><span class="co">#&gt; Model file loaded: Global Env.</span></span>
-<span><span class="co">#&gt; All inputs of metadata are valid.</span></span>
-<span><span class="co">#&gt; Start to generative sampling form posterior...</span></span>
 <span><span class="co">#&gt; Loading model from cache...</span></span>
 <span><span class="co">#&gt; Running standalone generated quantities after 1 MCMC chain, with 1 thread(s) per chain...</span></span>
 <span><span class="co">#&gt; </span></span>
+<span><span class="co">#&gt; Chain 1  Elapsed Time: 3.472 seconds (Generated Quantities) </span></span>
 <span><span class="co">#&gt; Chain 1 finished in 0.0 seconds.</span></span>
-<span><span class="co">#&gt; # A tibble: 48 × 7</span></span>
-<span><span class="co">#&gt;    sample_id_observed  cell_type proportion_observed Empirical_Confidence   mean</span></span>
-<span><span class="co">#&gt;    &lt;chr&gt;               &lt;chr&gt;                   &lt;dbl&gt;                &lt;dbl&gt;  &lt;dbl&gt;</span></span>
-<span><span class="co">#&gt;  1 0000c153da22cf963b… b memory             0                           0 0.103 </span></span>
-<span><span class="co">#&gt;  2 0000c153da22cf963b… b naive              0                           0 0.101 </span></span>
-<span><span class="co">#&gt;  3 0000c153da22cf963b… cd14 mono            0.0259                      0 0.226 </span></span>
-<span><span class="co">#&gt;  4 0000c153da22cf963b… cd16 mono            0                           0 0.0348</span></span>
-<span><span class="co">#&gt;  5 0000c153da22cf963b… cd4 naive            0                           0 0.0465</span></span>
-<span><span class="co">#&gt;  6 0000c153da22cf963b… cd4 tcm              0.00104                     0 0.0484</span></span>
-<span><span class="co">#&gt;  7 0000c153da22cf963b… cd4 tem              0.000692                    0 0.0348</span></span>
-<span><span class="co">#&gt;  8 0000c153da22cf963b… cd8 naive            0                           0 0.0154</span></span>
-<span><span class="co">#&gt;  9 0000c153da22cf963b… cd8 tcm              0                           0 0.0206</span></span>
-<span><span class="co">#&gt; 10 0000c153da22cf963b… cd8 tem              0                           0 0.120 </span></span>
-<span><span class="co">#&gt; # ℹ 38 more rows</span></span>
-<span><span class="co">#&gt; # ℹ 2 more variables: lower &lt;dbl&gt;, upper &lt;dbl&gt;</span></span></code></pre></div>
-<p><img src="README_files/figure-gfm/unnamed-chunk-5-1.png"><!-- --></p>
+<span><span class="fu"><a href="https://rdrr.io/r/utils/head.html" class="external-link">head</a></span><span class="op">(</span><span class="va">comp_draws</span><span class="op">$</span><span class="va">draws</span><span class="op">)</span></span>
+<span><span class="co">#&gt;      sample_id age_decade  sex ethnicity_groups_imputed assay_groups___altered</span></span>
+<span><span class="co">#&gt; 1 query_sample          4 male                 European         10x Genomics 3</span></span>
+<span><span class="co">#&gt; 2 query_sample          4 male                 European         10x Genomics 3</span></span>
+<span><span class="co">#&gt; 3 query_sample          4 male                 European         10x Genomics 3</span></span>
+<span><span class="co">#&gt; 4 query_sample          4 male                 European         10x Genomics 3</span></span>
+<span><span class="co">#&gt; 5 query_sample          4 male                 European         10x Genomics 3</span></span>
+<span><span class="co">#&gt; 6 query_sample          4 male                 European         10x Genomics 3</span></span>
+<span><span class="co">#&gt;   dataset_id___altered tissue_groups       L3 proportion .draw cell_type</span></span>
+<span><span class="co">#&gt; 1                   NA         blood b memory 0.04567696     1  b memory</span></span>
+<span><span class="co">#&gt; 2                   NA         blood b memory 0.04531969     2  b memory</span></span>
+<span><span class="co">#&gt; 3                   NA         blood b memory 0.04686371     3  b memory</span></span>
+<span><span class="co">#&gt; 4                   NA         blood b memory 0.05109034     4  b memory</span></span>
+<span><span class="co">#&gt; 5                   NA         blood b memory 0.04660289     5  b memory</span></span>
+<span><span class="co">#&gt; 6                   NA         blood b memory 0.04953086     6  b memory</span></span></code></pre></div>
+</div>
 <div class="section level4">
-<h4 id="about-load_model_to_global_env">About <code>load_model_to_global_env</code>
-<a class="anchor" aria-label="anchor" href="#about-load_model_to_global_env"></a>
+<h4 id="compare-observed-proportions">Compare observed proportions<a class="anchor" aria-label="anchor" href="#compare-observed-proportions"></a>
 </h4>
-<p>In the <code>posterior_test</code> function, we added arg - <code>load_model_to_global_env</code> to determine if the model file should be loaded into global env or local env (scoop within the function running) in R session. By default, it is set to be TRUE - <code>load_model_to_global_env = T</code>, and this is particularly useful when you wish to repeatedly running the function. Loading model file into global env prevents re-loading the model file, which usually will cost you minutes to run.</p>
+<p><code><a href="reference/composition_posterior_test.html">composition_posterior_test()</a></code> keeps the legacy table + plot interface, but now uses [load_sccomp_fit()] and [composition_draws()] internally.</p>
+<div class="sourceCode" id="cb6"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="va">result</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/composition_posterior_test.html">composition_posterior_test</a></span><span class="op">(</span></span>
+<span>    proportions <span class="op">=</span> <span class="va">example_proportions</span>,</span>
+<span>    sex <span class="op">=</span> <span class="st">"male"</span>,</span>
+<span>    age_decade <span class="op">=</span> <span class="st">"4"</span>,</span>
+<span>    ethnicity_groups <span class="op">=</span> <span class="st">"European"</span>,</span>
+<span>    assay_groups <span class="op">=</span> <span class="st">"10x Genomics 3"</span>,</span>
+<span>    tissue_groups <span class="op">=</span> <span class="st">"blood"</span>,</span>
+<span>    fit <span class="op">=</span> <span class="va">sccomp_fit</span></span>
+<span><span class="op">)</span></span>
+<span><span class="co">#&gt; Loading model from cache...</span></span>
+<span><span class="co">#&gt; Running standalone generated quantities after 1 MCMC chain, with 1 thread(s) per chain...</span></span>
+<span><span class="co">#&gt; </span></span>
+<span><span class="co">#&gt; Chain 1  Elapsed Time: 3.523 seconds (Generated Quantities) </span></span>
+<span><span class="co">#&gt; Chain 1 finished in 0.0 seconds.</span></span>
+<span><span class="co">#&gt; # A tibble: 26 × 7</span></span>
+<span><span class="co">#&gt;    sample_id_observed cell_type proportion_observed Empirical_Confidence    mean</span></span>
+<span><span class="co">#&gt;    &lt;chr&gt;              &lt;chr&gt;                   &lt;dbl&gt;                &lt;dbl&gt;   &lt;dbl&gt;</span></span>
+<span><span class="co">#&gt;  1 0000c153da22cf963… b memory             0                           0 4.62e-2</span></span>
+<span><span class="co">#&gt;  2 0000c153da22cf963… b naive              0                           0 5.11e-2</span></span>
+<span><span class="co">#&gt;  3 0000c153da22cf963… cd14 mono            0                           0 3.72e-2</span></span>
+<span><span class="co">#&gt;  4 0000c153da22cf963… cd16 mono            0.00502                     0 1.23e-2</span></span>
+<span><span class="co">#&gt;  5 0000c153da22cf963… cd4 fh em            0                           0 6.81e-4</span></span>
+<span><span class="co">#&gt;  6 0000c153da22cf963… cd4 naive            0                           0 2.11e-1</span></span>
+<span><span class="co">#&gt;  7 0000c153da22cf963… cd4 tcm              0.000359                    0 1.85e-1</span></span>
+<span><span class="co">#&gt;  8 0000c153da22cf963… cd4 th1 …            0                           0 3.74e-3</span></span>
+<span><span class="co">#&gt;  9 0000c153da22cf963… cd4 th1/…            0.000359                    0 6.92e-3</span></span>
+<span><span class="co">#&gt; 10 0000c153da22cf963… cd4 th17…            0                           0 1.72e-3</span></span>
+<span><span class="co">#&gt; # ℹ 16 more rows</span></span>
+<span><span class="co">#&gt; # ℹ 2 more variables: lower &lt;dbl&gt;, upper &lt;dbl&gt;</span></span></code></pre></div>
+<p><img src="README_files/figure-gfm/unnamed-chunk-7-1.png"><!-- --></p>
+</div>
+<div class="section level4">
+<h4 id="inspect-composition-results">Inspect Composition Results<a class="anchor" aria-label="anchor" href="#inspect-composition-results"></a>
+</h4>
+<p><strong>Posterior Distribution Table:</strong></p>
+<div class="sourceCode" id="cb7"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="fu"><a href="https://rdrr.io/r/base/print.html" class="external-link">print</a></span><span class="op">(</span><span class="va">result</span><span class="op">$</span><span class="va">result_table</span><span class="op">)</span></span>
+<span><span class="co">#&gt; # A tibble: 26 × 7</span></span>
+<span><span class="co">#&gt;    sample_id_observed cell_type proportion_observed Empirical_Confidence    mean</span></span>
+<span><span class="co">#&gt;    &lt;chr&gt;              &lt;chr&gt;                   &lt;dbl&gt;                &lt;dbl&gt;   &lt;dbl&gt;</span></span>
+<span><span class="co">#&gt;  1 0000c153da22cf963… b memory             0                           0 4.62e-2</span></span>
+<span><span class="co">#&gt;  2 0000c153da22cf963… b naive              0                           0 5.11e-2</span></span>
+<span><span class="co">#&gt;  3 0000c153da22cf963… cd14 mono            0                           0 3.72e-2</span></span>
+<span><span class="co">#&gt;  4 0000c153da22cf963… cd16 mono            0.00502                     0 1.23e-2</span></span>
+<span><span class="co">#&gt;  5 0000c153da22cf963… cd4 fh em            0                           0 6.81e-4</span></span>
+<span><span class="co">#&gt;  6 0000c153da22cf963… cd4 naive            0                           0 2.11e-1</span></span>
+<span><span class="co">#&gt;  7 0000c153da22cf963… cd4 tcm              0.000359                    0 1.85e-1</span></span>
+<span><span class="co">#&gt;  8 0000c153da22cf963… cd4 th1 …            0                           0 3.74e-3</span></span>
+<span><span class="co">#&gt;  9 0000c153da22cf963… cd4 th1/…            0.000359                    0 6.92e-3</span></span>
+<span><span class="co">#&gt; 10 0000c153da22cf963… cd4 th17…            0                           0 1.72e-3</span></span>
+<span><span class="co">#&gt; # ℹ 16 more rows</span></span>
+<span><span class="co">#&gt; # ℹ 2 more variables: lower &lt;dbl&gt;, upper &lt;dbl&gt;</span></span></code></pre></div>
+<p><strong>Density Plot of Posterior Predictions:</strong></p>
+<div class="sourceCode" id="cb8"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="fu"><a href="https://rdrr.io/r/base/print.html" class="external-link">print</a></span><span class="op">(</span><span class="va">result</span><span class="op">$</span><span class="va">plot</span><span class="op">)</span></span></code></pre></div>
+<p><img src="README_files/figure-gfm/unnamed-chunk-9-1.png"><!-- --></p>
 </div>
 </div>
 <div class="section level3">
-<h3 id="id_3-inspect-the-results">
-<strong>3. Inspect the Results</strong><a class="anchor" aria-label="anchor" href="#id_3-inspect-the-results"></a>
+<h3 id="id_2-gene-expression-prediction">
+<strong>2. Gene Expression Prediction</strong><a class="anchor" aria-label="anchor" href="#id_2-gene-expression-prediction"></a>
 </h3>
+<p>Load a stored expression model and draw healthy posteriors with <code><a href="reference/load_expression_fit.html">load_expression_fit()</a></code>, <code><a href="reference/build_newdata_grid.html">build_newdata_grid()</a></code>, and <code><a href="reference/expression_draws.html">expression_draws()</a></code>:</p>
+<div class="sourceCode" id="cb9"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="va">expression_fit</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/load_expression_fit.html">load_expression_fit</a></span><span class="op">(</span></span>
+<span>  cell_type <span class="op">=</span> <span class="st">"cd4 naive"</span>,</span>
+<span>  gene_ensg <span class="op">=</span> <span class="st">"ENSG00000000419"</span></span>
+<span><span class="op">)</span></span>
+<span><span class="va">newdata</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/build_newdata_grid.html">build_newdata_grid</a></span><span class="op">(</span></span>
+<span>  <span class="va">expression_fit</span>,</span>
+<span>  age_decade <span class="op">=</span> <span class="st">"7"</span>,</span>
+<span>  sex <span class="op">=</span> <span class="st">"female"</span>,</span>
+<span>  disease_groups <span class="op">=</span> <span class="st">"Normal"</span>,</span>
+<span>  ethnicity_groups <span class="op">=</span> <span class="st">"European"</span>,</span>
+<span>  assay_groups <span class="op">=</span> <span class="st">"10x Genomics 3"</span>,</span>
+<span>  tissue_groups <span class="op">=</span> <span class="st">"blood"</span></span>
+<span><span class="op">)</span></span>
+<span><span class="va">posterior_draws</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/expression_draws.html">expression_draws</a></span><span class="op">(</span></span>
+<span>  <span class="va">expression_fit</span>,</span>
+<span>  newdata <span class="op">=</span> <span class="va">newdata</span>,</span>
+<span>  quantity <span class="op">=</span> <span class="st">"linpred"</span>,</span>
+<span>  collapse <span class="op">=</span> <span class="st">"mean"</span></span>
+<span><span class="op">)</span></span></code></pre></div>
 <div class="section level4">
-<h4 id="posterior-distribution-table">
-<strong>Posterior Distribution Table</strong><a class="anchor" aria-label="anchor" href="#posterior-distribution-table"></a>
+<h4 id="inspect-gene-expression-results">Inspect Gene Expression Results<a class="anchor" aria-label="anchor" href="#inspect-gene-expression-results"></a>
 </h4>
-<div class="sourceCode" id="cb5"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="fu"><a href="https://rdrr.io/r/base/print.html" class="external-link">print</a></span><span class="op">(</span><span class="va">result</span><span class="op">$</span><span class="va">result_table</span><span class="op">)</span></span>
-<span><span class="co">#&gt; # A tibble: 48 × 7</span></span>
-<span><span class="co">#&gt;    sample_id_observed  cell_type proportion_observed Empirical_Confidence   mean</span></span>
-<span><span class="co">#&gt;    &lt;chr&gt;               &lt;chr&gt;                   &lt;dbl&gt;                &lt;dbl&gt;  &lt;dbl&gt;</span></span>
-<span><span class="co">#&gt;  1 0000c153da22cf963b… b memory             0                           0 0.103 </span></span>
-<span><span class="co">#&gt;  2 0000c153da22cf963b… b naive              0                           0 0.101 </span></span>
-<span><span class="co">#&gt;  3 0000c153da22cf963b… cd14 mono            0.0259                      0 0.226 </span></span>
-<span><span class="co">#&gt;  4 0000c153da22cf963b… cd16 mono            0                           0 0.0348</span></span>
-<span><span class="co">#&gt;  5 0000c153da22cf963b… cd4 naive            0                           0 0.0465</span></span>
-<span><span class="co">#&gt;  6 0000c153da22cf963b… cd4 tcm              0.00104                     0 0.0484</span></span>
-<span><span class="co">#&gt;  7 0000c153da22cf963b… cd4 tem              0.000692                    0 0.0348</span></span>
-<span><span class="co">#&gt;  8 0000c153da22cf963b… cd8 naive            0                           0 0.0154</span></span>
-<span><span class="co">#&gt;  9 0000c153da22cf963b… cd8 tcm              0                           0 0.0206</span></span>
-<span><span class="co">#&gt; 10 0000c153da22cf963b… cd8 tem              0                           0 0.120 </span></span>
-<span><span class="co">#&gt; # ℹ 38 more rows</span></span>
-<span><span class="co">#&gt; # ℹ 2 more variables: lower &lt;dbl&gt;, upper &lt;dbl&gt;</span></span></code></pre></div>
-</div>
-<div class="section level4">
-<h4 id="density-plot-of-posterior-predictions">Density Plot of Posterior Predictions<a class="anchor" aria-label="anchor" href="#density-plot-of-posterior-predictions"></a>
-</h4>
-<div class="sourceCode" id="cb6"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="fu"><a href="https://rdrr.io/r/base/print.html" class="external-link">print</a></span><span class="op">(</span><span class="va">result</span><span class="op">$</span><span class="va">plot</span><span class="op">)</span></span></code></pre></div>
-<p><img src="README_files/figure-gfm/unnamed-chunk-7-1.png"><!-- --></p>
+<p><strong>Summary Statistics:</strong></p>
+<div class="sourceCode" id="cb10"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="fu"><a href="reference/summarize_posterior_draws.html">summarize_posterior_draws</a></span><span class="op">(</span><span class="va">posterior_draws</span><span class="op">)</span></span></code></pre></div>
+<p><strong>Density Plot of Predicted Expression:</strong></p>
+<div class="sourceCode" id="cb11"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="fu"><a href="https://rdrr.io/r/base/print.html" class="external-link">print</a></span><span class="op">(</span><span class="fu"><a href="reference/plot_hca_draws.html">plot_hca_draws</a></span><span class="op">(</span><span class="va">posterior_draws</span><span class="op">)</span><span class="op">)</span></span></code></pre></div>
+<p><img src="README_files/figure-gfm/unnamed-chunk-12-1.png"><!-- --></p>
 </div>
 </div>
 </div>
@@ -222,94 +315,118 @@
 <h2 id="input-arguments-and-valid-values">
 <strong>Input Arguments and Valid Values</strong><a class="anchor" aria-label="anchor" href="#input-arguments-and-valid-values"></a>
 </h2>
-<p>With the <code><a href="reference/posterior_test.html">posterior_test()</a></code> function, users can provide various metadata inputs corresponding to observed sample characteristics. These include <strong>sex, age group, disease condition, ethnicity, and tissue type, etc</strong>, along with observed cell type proportions. However, if some metadata or proportions are unknown, users can leave these fields empty, and the function will still generate meaningful posterior estimates based on the comprehensive reference.</p>
+<p>Both <code><a href="reference/composition_posterior_test.html">composition_posterior_test()</a></code> / [composition_draws()] and [expression_draws()] accept metadata inputs corresponding to observed sample characteristics. For composition, the default healthy sccomp model uses <strong>sex, age decade, ethnicity, assay, and tissue</strong>. Unknown covariates can be set to <code>NA</code> and are marginalised automatically by sccomp. For expression queries, metadata can also be left empty to marginalise over the pre-trained model.</p>
 <p>If users choose to specify metadata, it must be consistent with the <strong>Human Cell Atlas (HCA) annotations</strong> to ensure accurate comparisons. Below is a comprehensive list of valid arguments:</p>
 <ul>
-<li><p><strong>Cell Types:</strong> “b memory”, “b naive”, “cd14 mono”, “cd16 mono”, “cd4 naive”, “cd4 tcm”, “cd4 tem”, “cd8 naive”, “cd8 tcm”, “cd8 tem”, “cdc”, “cytotoxic”, “erythrocyte”, “granulocyte”, “ilc”, “macrophage”, “mait”, “mast”, “nk”, “nkt”, “pdc”, “plasma”, “tgd”, “treg”</p></li>
+<li><p><strong>Cell Types:</strong> “b memory”, “b naive”, “cd14 mono”, “cd16 mono”, “cd4 fh em”, “cd4 naive”, “cd4 tcm”, “cd4 th1 em”, “cd4 th1/th17 em”, “cd4 th17 em”, “cd4 th2 em”, “cd8 naive”, “cd8 tcm”, “cd8 tem”, “cdc”, “granulocyte”, “ilc”, “macrophage”, “mait”, “mast”, “nk”, “nkt”, “pdc”, “plasma”, “tgd”, “treg”</p></li>
 <li><p><strong>Sex:</strong> “female”, “male”, “unknown”</p></li>
-<li><p><strong>Age Groups:</strong> “Young Adulthood”, “Senior”, “Middle Age”, “Childhood”, “Adolescence”, “Infancy”</p></li>
-<li><p><strong>Disease Groups:</strong> “Normal”, “COVID-19 related”, “Metabolic and Other Disorders: Renal and Urinary Disorders”, “other”, “Metabolic and Other Disorders: Gastrointestinal Disorders”, “Respiratory Conditions: General Respiratory Disorders”, “Infectious and Immune-related Diseases: Autoimmune and Immune-Related Disorders”, “Infectious and Immune-related Diseases: Respiratory Infections”, “Cancer: Renal Cancer”, “Cancer: Gastrointestinal Cancer”, “Cancer: Hematologic Cancer”, “Cancer: Breast Cancer”, “Cancer: Lung Cancer”, “Respiratory Conditions: Restrictive Lung Diseases”, “Neurodegenerative and Neurological Disorders: Neurodegenerative Disorders”, “Metabolic and Other Disorders: Metabolic Disorders”, “Respiratory Conditions: Obstructive Lung Diseases”</p></li>
+<li><p><strong>Age Decades:</strong> 1, 2, 3, 4, 5, 6, 7, 8, 9, 10</p></li>
+</ul>
+<!-- -   **Disease Groups:** "Normal", "COVID-19 related_blood", "Metabolic and Other Disorders: Renal and Urinary Disorders_renal system", "Systemic Lupus Erythematosus_blood", "Respiratory Conditions: General Respiratory Disorders_blood", "COVID-19 related_nasal, oral, and pharyngeal regions", "COVID-19 related_respiratory system", "Glioblastoma_cerebral lobes and cortical areas", "Cancer: Hematologic Cancer_bone marrow", "Lung Adenocarcinoma_respiratory system", "Infectious and Immune-related Diseases: Autoimmune and Immune-Related Disorders_small intestine", "Infectious and Immune-related Diseases: Respiratory Infections_blood", "Metabolic and Other Disorders: Gastrointestinal Disorders_large intestine", "Cancer: Renal Cancer_renal system", "Infectious and Immune-related Diseases: Autoimmune and Immune-Related Disorders_respiratory system", "Infectious and Immune-related Diseases: Respiratory Infections_nasal, oral, and pharyngeal regions", "Metabolic and Other Disorders: Renal and Urinary Disorders_prostate", "Metabolic and Other Disorders_sensory-related structures", "Cancer: Gastrointestinal Cancer_large intestine", "Other Diseases_brainstem and cerebellar structures", "Metabolic and Other Disorders: Gastrointestinal Disorders_oesophagus", "Cancer: Lung Cancer_respiratory system", "Lung Adenocarcinoma_cerebral lobes and cortical areas", "Metabolic and Other Disorders: Gastrointestinal Disorders_stomach", "Lung Adenocarcinoma_liver", "Cancer: Lung Cancer_liver", "Respiratory Conditions: Restrictive Lung Diseases_respiratory system", "Cancer_integumentary system (skin)", "Infectious and Immune-related Diseases: Autoimmune and Immune-Related Disorders_large intestine", "Other Diseases_nasal, oral, and pharyngeal regions", "Cancer: Lung Cancer_lymphatic system", "Neurodegenerative and Neurological Disorders: Neurodegenerative Disorders_cerebral lobes and cortical areas", "Cancer: Breast Cancer_respiratory system", "Metabolic and Other Disorders: Metabolic Disorders_blood", "Cancer: Gastrointestinal Cancer_liver", "Cancer: Renal Cancer_blood", "Glioblastoma_brainstem and cerebellar structures", "Lung Adenocarcinoma_lymphatic system", "Cancer: Lung Cancer_integumentary system (skin)", "Respiratory Conditions: Obstructive Lung Diseases_respiratory system", "Metabolic and Other Disorders_female reproductive system", "Metabolic and Other Disorders: Gastrointestinal Disorders_liver", "Cancer: Lung Cancer_endocrine system", "Lung Adenocarcinoma_endocrine system", "COVID-19 related_trachea", "Neurodegenerative and Neurological Disorders_cerebral lobes and cortical areas", "Other Diseases_renal system", "Cancer: Renal Cancer_endocrine system", "Cancer: Renal Cancer_lymphatic system" --><ul>
 <li><p><strong>Ethnicity Groups:</strong> “African”, “Other/Unknown”, “European”, “East Asian”, “Hispanic/Latin American”, “South Asian”, “Native American &amp; Pacific Islander”</p></li>
-<li><p><strong>Tissue Groups:</strong> “respiratory system”, “blood”, “renal system”, “epithelium and mucosal tissues”, “nasal, oral, and pharyngeal regions”, “cerebral lobes and cortical areas”, “breast”, “cardiovascular system”, “small intestine”, “trachea”, “endocrine system”, “lymphatic system”, “prostate”, “sensory-related structures”, “liver”, “oesophagus”, “large intestine”, “spleen”, “brainstem and cerebellar structures”, “bone marrow”, “stomach”, “female reproductive system”, “thymus”, “adipose tissue”, “integumentary system (skin)”, “gallbladder”, “pancreas”</p></li>
+<li><p><strong>Tissue Groups:</strong> “respiratory system”, “blood”, “renal system”, “small intestine”, “nasal, oral, and pharyngeal regions”, “cerebral lobes and cortical areas”, “bone marrow”, “breast”, “cardiovascular system”, “trachea”, “endocrine system”, “liver”, “large intestine”, “lymphatic system”, “prostate”, “sensory-related structures”, “oesophagus”, “spleen”, “brainstem and cerebellar structures”, “stomach”, “female reproductive system”, “thymus”, “adipose tissue”, “integumentary system (skin)”, “digestive system (general)”, “gallbladder”, “pancreas”</p></li>
 </ul>
 </div>
 </div>
 <div class="section level1">
 <h1 id="session-info">Session Info<a class="anchor" aria-label="anchor" href="#session-info"></a>
 </h1>
-<div class="sourceCode" id="cb7"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb12"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu"><a href="https://rdrr.io/r/utils/sessionInfo.html" class="external-link">sessionInfo</a></span><span class="op">(</span><span class="op">)</span></span>
-<span><span class="co">#&gt; R version 4.4.0 (2024-04-24)</span></span>
-<span><span class="co">#&gt; Platform: x86_64-pc-linux-gnu</span></span>
-<span><span class="co">#&gt; Running under: Red Hat Enterprise Linux 9.4 (Plow)</span></span>
+<span><span class="co">#&gt; R version 4.5.3 (2026-03-11)</span></span>
+<span><span class="co">#&gt; Platform: x86_64-conda-linux-gnu</span></span>
+<span><span class="co">#&gt; Running under: Red Hat Enterprise Linux 8.4 (Ootpa)</span></span>
 <span><span class="co">#&gt; </span></span>
 <span><span class="co">#&gt; Matrix products: default</span></span>
-<span><span class="co">#&gt; BLAS/LAPACK: FlexiBLAS OPENBLAS;  LAPACK version 3.10.1</span></span>
+<span><span class="co">#&gt; BLAS/LAPACK: /home/a1237163/miniconda3/envs/R_env/lib/libopenblasp-r0.3.29.so;  LAPACK version 3.12.0</span></span>
 <span><span class="co">#&gt; </span></span>
 <span><span class="co">#&gt; locale:</span></span>
-<span><span class="co">#&gt;  [1] LC_CTYPE=en_AU.UTF-8       LC_NUMERIC=C              </span></span>
-<span><span class="co">#&gt;  [3] LC_TIME=en_AU.UTF-8        LC_COLLATE=en_AU.UTF-8    </span></span>
-<span><span class="co">#&gt;  [5] LC_MONETARY=en_AU.UTF-8    LC_MESSAGES=en_AU.UTF-8   </span></span>
-<span><span class="co">#&gt;  [7] LC_PAPER=en_AU.UTF-8       LC_NAME=C                 </span></span>
+<span><span class="co">#&gt;  [1] LC_CTYPE=en_US.UTF-8       LC_NUMERIC=C              </span></span>
+<span><span class="co">#&gt;  [3] LC_TIME=en_US.UTF-8        LC_COLLATE=en_US.UTF-8    </span></span>
+<span><span class="co">#&gt;  [5] LC_MONETARY=en_US.UTF-8    LC_MESSAGES=en_US.UTF-8   </span></span>
+<span><span class="co">#&gt;  [7] LC_PAPER=en_US.UTF-8       LC_NAME=C                 </span></span>
 <span><span class="co">#&gt;  [9] LC_ADDRESS=C               LC_TELEPHONE=C            </span></span>
-<span><span class="co">#&gt; [11] LC_MEASUREMENT=en_AU.UTF-8 LC_IDENTIFICATION=C       </span></span>
+<span><span class="co">#&gt; [11] LC_MEASUREMENT=en_US.UTF-8 LC_IDENTIFICATION=C       </span></span>
 <span><span class="co">#&gt; </span></span>
-<span><span class="co">#&gt; time zone: Australia/Melbourne</span></span>
+<span><span class="co">#&gt; time zone: Australia/Adelaide</span></span>
 <span><span class="co">#&gt; tzcode source: system (glibc)</span></span>
 <span><span class="co">#&gt; </span></span>
 <span><span class="co">#&gt; attached base packages:</span></span>
 <span><span class="co">#&gt; [1] stats     graphics  grDevices utils     datasets  methods   base     </span></span>
 <span><span class="co">#&gt; </span></span>
 <span><span class="co">#&gt; other attached packages:</span></span>
-<span><span class="co">#&gt; [1] ggplot2_3.5.1      tidyr_1.3.1        dplyr_1.1.4        posteriorHCA_0.1.0</span></span>
+<span><span class="co">#&gt; [1] posteriorHCA_0.2.0 testthat_3.3.2    </span></span>
 <span><span class="co">#&gt; </span></span>
 <span><span class="co">#&gt; loaded via a namespace (and not attached):</span></span>
-<span><span class="co">#&gt;  [1] tidyselect_1.2.1            farver_2.1.2               </span></span>
-<span><span class="co">#&gt;  [3] fastmap_1.2.0               SingleCellExperiment_1.28.1</span></span>
-<span><span class="co">#&gt;  [5] tensorA_0.36.2.1            digest_0.6.37              </span></span>
-<span><span class="co">#&gt;  [7] dittoSeq_1.18.0             lifecycle_1.0.4            </span></span>
-<span><span class="co">#&gt;  [9] sccomp_1.99.12              processx_3.8.6             </span></span>
-<span><span class="co">#&gt; [11] magrittr_2.0.3              posterior_1.6.1            </span></span>
-<span><span class="co">#&gt; [13] compiler_4.4.0              rlang_1.1.5                </span></span>
-<span><span class="co">#&gt; [15] sass_0.4.9                  tools_4.4.0                </span></span>
-<span><span class="co">#&gt; [17] utf8_1.2.4                  yaml_2.3.10                </span></span>
-<span><span class="co">#&gt; [19] data.table_1.17.0           knitr_1.49                 </span></span>
-<span><span class="co">#&gt; [21] labeling_0.4.3              S4Arrays_1.6.0             </span></span>
-<span><span class="co">#&gt; [23] DelayedArray_0.32.0         RColorBrewer_1.1-3         </span></span>
-<span><span class="co">#&gt; [25] cmdstanr_0.8.1              abind_1.4-8                </span></span>
-<span><span class="co">#&gt; [27] withr_3.0.2                 purrr_1.0.4                </span></span>
-<span><span class="co">#&gt; [29] BiocGenerics_0.52.0         grid_4.4.0                 </span></span>
-<span><span class="co">#&gt; [31] stats4_4.4.0                colorspace_2.1-1           </span></span>
-<span><span class="co">#&gt; [33] scales_1.3.0                ggridges_0.5.6             </span></span>
-<span><span class="co">#&gt; [35] SummarizedExperiment_1.36.0 cli_3.6.4                  </span></span>
-<span><span class="co">#&gt; [37] rmarkdown_2.29              crayon_1.5.3               </span></span>
-<span><span class="co">#&gt; [39] generics_0.1.3              rstudioapi_0.17.1          </span></span>
-<span><span class="co">#&gt; [41] httr_1.4.7                  tzdb_0.4.0                 </span></span>
-<span><span class="co">#&gt; [43] cachem_1.1.0                stringr_1.5.1              </span></span>
-<span><span class="co">#&gt; [45] zlibbioc_1.52.0             parallel_4.4.0             </span></span>
-<span><span class="co">#&gt; [47] XVector_0.46.0              matrixStats_1.5.0          </span></span>
-<span><span class="co">#&gt; [49] vctrs_0.6.5                 Matrix_1.7-2               </span></span>
-<span><span class="co">#&gt; [51] jsonlite_1.9.1              callr_3.7.6                </span></span>
-<span><span class="co">#&gt; [53] IRanges_2.40.1              hms_1.1.3                  </span></span>
-<span><span class="co">#&gt; [55] patchwork_1.3.0             S4Vectors_0.44.0           </span></span>
-<span><span class="co">#&gt; [57] ggrepel_0.9.6               jquerylib_0.1.4            </span></span>
-<span><span class="co">#&gt; [59] glue_1.8.0                  ps_1.9.0                   </span></span>
-<span><span class="co">#&gt; [61] distributional_0.5.0        cowplot_1.1.3              </span></span>
-<span><span class="co">#&gt; [63] stringi_1.8.4               gtable_0.3.6               </span></span>
-<span><span class="co">#&gt; [65] GenomeInfoDb_1.42.3         GenomicRanges_1.58.0       </span></span>
-<span><span class="co">#&gt; [67] UCSC.utils_1.2.0            munsell_0.5.1              </span></span>
-<span><span class="co">#&gt; [69] instantiate_0.2.3           tibble_3.2.1               </span></span>
-<span><span class="co">#&gt; [71] pillar_1.10.1               htmltools_0.5.8.1          </span></span>
-<span><span class="co">#&gt; [73] GenomeInfoDbData_1.2.13     R6_2.6.1                   </span></span>
-<span><span class="co">#&gt; [75] rprojroot_2.0.4             evaluate_1.0.3             </span></span>
-<span><span class="co">#&gt; [77] lattice_0.22-6              Biobase_2.66.0             </span></span>
-<span><span class="co">#&gt; [79] readr_2.1.5                 backports_1.5.0            </span></span>
-<span><span class="co">#&gt; [81] pheatmap_1.0.12             bslib_0.9.0                </span></span>
-<span><span class="co">#&gt; [83] Rcpp_1.0.14                 gridExtra_2.3              </span></span>
-<span><span class="co">#&gt; [85] SparseArray_1.6.2           checkmate_2.3.2            </span></span>
-<span><span class="co">#&gt; [87] xfun_0.51                   MatrixGenerics_1.18.1      </span></span>
-<span><span class="co">#&gt; [89] fs_1.6.5                    forcats_1.0.0              </span></span>
-<span><span class="co">#&gt; [91] pkgconfig_2.0.3</span></span></code></pre></div>
+<span><span class="co">#&gt;   [1] RColorBrewer_1.1-3          tensorA_0.36.2.1           </span></span>
+<span><span class="co">#&gt;   [3] rstudioapi_0.18.0           jsonlite_2.0.0             </span></span>
+<span><span class="co">#&gt;   [5] magrittr_2.0.5              TH.data_1.1-5              </span></span>
+<span><span class="co">#&gt;   [7] estimability_1.5.1          farver_2.1.2               </span></span>
+<span><span class="co">#&gt;   [9] rmarkdown_2.31              fs_2.1.0                   </span></span>
+<span><span class="co">#&gt;  [11] vctrs_0.7.3                 memoise_2.0.1              </span></span>
+<span><span class="co">#&gt;  [13] htmltools_0.5.9             S4Arrays_1.10.1            </span></span>
+<span><span class="co">#&gt;  [15] forcats_1.0.1               usethis_3.2.1              </span></span>
+<span><span class="co">#&gt;  [17] curl_7.1.0                  distributional_0.8.1       </span></span>
+<span><span class="co">#&gt;  [19] SparseArray_1.10.10         StanHeaders_2.39.0.9000    </span></span>
+<span><span class="co">#&gt;  [21] sass_0.4.10                 bslib_0.12.0               </span></span>
+<span><span class="co">#&gt;  [23] desc_1.4.3                  sandwich_3.1-1             </span></span>
+<span><span class="co">#&gt;  [25] emmeans_2.0.3               zoo_1.8-15                 </span></span>
+<span><span class="co">#&gt;  [27] cachem_1.1.0                lifecycle_1.0.5            </span></span>
+<span><span class="co">#&gt;  [29] pkgconfig_2.0.3             Matrix_1.7-5               </span></span>
+<span><span class="co">#&gt;  [31] R6_2.6.1                    fastmap_1.2.0              </span></span>
+<span><span class="co">#&gt;  [33] MatrixGenerics_1.22.0       digest_0.6.39              </span></span>
+<span><span class="co">#&gt;  [35] colorspace_2.1-2            patchwork_1.3.2            </span></span>
+<span><span class="co">#&gt;  [37] S4Vectors_0.48.1            ps_1.9.3                   </span></span>
+<span><span class="co">#&gt;  [39] rprojroot_2.1.1             brms_2.23.1                </span></span>
+<span><span class="co">#&gt;  [41] pkgload_1.5.2               GenomicRanges_1.62.1       </span></span>
+<span><span class="co">#&gt;  [43] labeling_0.4.3              httr_1.4.8                 </span></span>
+<span><span class="co">#&gt;  [45] abind_1.4-8                 compiler_4.5.3             </span></span>
+<span><span class="co">#&gt;  [47] bit64_4.8.2                 withr_3.0.3                </span></span>
+<span><span class="co">#&gt;  [49] inline_0.3.21               S7_0.2.2                   </span></span>
+<span><span class="co">#&gt;  [51] backports_1.5.1             QuickJSR_1.10.0            </span></span>
+<span><span class="co">#&gt;  [53] pkgbuild_1.4.8              MASS_7.3-65                </span></span>
+<span><span class="co">#&gt;  [55] DelayedArray_0.36.1         sessioninfo_1.2.3          </span></span>
+<span><span class="co">#&gt;  [57] loo_2.10.0.9000             tools_4.5.3                </span></span>
+<span><span class="co">#&gt;  [59] otel_0.2.0                  glue_1.8.1                 </span></span>
+<span><span class="co">#&gt;  [61] callr_3.8.0                 nlme_3.1-169               </span></span>
+<span><span class="co">#&gt;  [63] grid_4.5.3                  cmdstanr_0.9.0             </span></span>
+<span><span class="co">#&gt;  [65] instantiate_0.2.3           checkmate_2.3.4            </span></span>
+<span><span class="co">#&gt;  [67] generics_0.1.4              gtable_0.3.6               </span></span>
+<span><span class="co">#&gt;  [69] tzdb_0.5.0                  tidyr_1.3.2                </span></span>
+<span><span class="co">#&gt;  [71] data.table_1.18.4           hms_1.1.4                  </span></span>
+<span><span class="co">#&gt;  [73] stringfish_0.19.0           utf8_1.2.6                 </span></span>
+<span><span class="co">#&gt;  [75] XVector_0.50.0              BiocGenerics_0.56.0        </span></span>
+<span><span class="co">#&gt;  [77] ggrepel_0.9.8               pillar_1.11.1              </span></span>
+<span><span class="co">#&gt;  [79] stringr_1.6.0               vroom_1.7.1                </span></span>
+<span><span class="co">#&gt;  [81] limma_3.66.0                posterior_1.7.1            </span></span>
+<span><span class="co">#&gt;  [83] splines_4.5.3               dplyr_1.2.1                </span></span>
+<span><span class="co">#&gt;  [85] lattice_0.22-9              bit_4.6.0                  </span></span>
+<span><span class="co">#&gt;  [87] survival_3.8-6              tidyselect_1.2.1           </span></span>
+<span><span class="co">#&gt;  [89] SingleCellExperiment_1.32.0 locfit_1.5-9.12            </span></span>
+<span><span class="co">#&gt;  [91] knitr_1.51                  gridExtra_2.3.1            </span></span>
+<span><span class="co">#&gt;  [93] IRanges_2.44.0              Seqinfo_1.0.0              </span></span>
+<span><span class="co">#&gt;  [95] edgeR_4.8.2                 SummarizedExperiment_1.40.0</span></span>
+<span><span class="co">#&gt;  [97] stats4_4.5.3                xfun_0.57                  </span></span>
+<span><span class="co">#&gt;  [99] dittoSeq_1.22.0             bridgesampling_1.2-1       </span></span>
+<span><span class="co">#&gt; [101] Biobase_2.70.0              statmod_1.5.2              </span></span>
+<span><span class="co">#&gt; [103] devtools_2.5.2              brio_1.1.5                 </span></span>
+<span><span class="co">#&gt; [105] matrixStats_1.5.0           rstan_2.39.0.9000          </span></span>
+<span><span class="co">#&gt; [107] pheatmap_1.0.13             stringi_1.8.9              </span></span>
+<span><span class="co">#&gt; [109] sccomp_2.2.0                yaml_2.3.12                </span></span>
+<span><span class="co">#&gt; [111] evaluate_1.0.5              codetools_0.2-20           </span></span>
+<span><span class="co">#&gt; [113] tibble_3.3.1                cli_3.6.6                  </span></span>
+<span><span class="co">#&gt; [115] RcppParallel_5.1.11-2       xtable_1.8-8               </span></span>
+<span><span class="co">#&gt; [117] processx_3.9.0              jquerylib_0.1.4            </span></span>
+<span><span class="co">#&gt; [119] dichromat_2.0-0.1           Rcpp_1.1.2                 </span></span>
+<span><span class="co">#&gt; [121] coda_0.19-4.1               parallel_4.5.3             </span></span>
+<span><span class="co">#&gt; [123] rstantools_2.6.0.9000       ellipsis_0.3.3             </span></span>
+<span><span class="co">#&gt; [125] ggplot2_4.0.3               readr_2.2.0                </span></span>
+<span><span class="co">#&gt; [127] bayesplot_1.15.0.9000       Brobdingnag_1.2-9          </span></span>
+<span><span class="co">#&gt; [129] mvtnorm_1.4-2               scales_1.4.0               </span></span>
+<span><span class="co">#&gt; [131] ggridges_0.5.7              purrr_1.2.2                </span></span>
+<span><span class="co">#&gt; [133] crayon_1.5.3                rlang_1.3.0                </span></span>
+<span><span class="co">#&gt; [135] cowplot_1.2.0               qs2_0.2.1                  </span></span>
+<span><span class="co">#&gt; [137] multcomp_1.4-30</span></span></code></pre></div>
 </div>
 
   </div>
@@ -355,7 +472,7 @@
 
 <div class="pkgdown">
   <p></p>
-<p>Site built with <a href="https://pkgdown.r-lib.org/" class="external-link">pkgdown</a> 2.2.0.</p>
+<p>Site built with <a href="https://pkgdown.r-lib.org/" class="external-link">pkgdown</a> 2.2.1.</p>
 </div>
 
       </footer>

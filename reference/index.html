@@ -17,7 +17,7 @@
       </button>
       <span class="navbar-brand">
         <a class="navbar-link" href="../index.html">posteriorHCA</a>
-        <span class="version label label-default" data-toggle="tooltip" data-placement="bottom" title="">0.1.0</span>
+        <span class="version label label-default" data-toggle="tooltip" data-placement="bottom" title="">0.2.0</span>
       </span>
     </div>
 
@@ -32,6 +32,18 @@
     <span class="caret"></span>
   </a>
   <ul class="dropdown-menu" role="menu"><li>
+      <a href="../articles/cohort-expression-core.html">Cohort expression workflow (core)</a>
+    </li>
+    <li>
+      <a href="../articles/cohort-expression-workflow.html">Cohort expression workflow (overview)</a>
+    </li>
+    <li>
+      <a href="../articles/cohort-expression-wrappers.html">Cohort expression workflow (wrappers)</a>
+    </li>
+    <li>
+      <a href="../articles/composition-workflow.html">Composition workflow</a>
+    </li>
+    <li>
       <a href="../articles/Introduction.html">posteriorHCA</a>
     </li>
   </ul></li>
@@ -52,25 +64,161 @@
           <p class="section-desc"></p>
         </th>
       </tr></tbody><tbody><tr><td>
+          <p><code><a href="build_newdata_grid.html">build_newdata_grid()</a></code> </p>
+        </td>
+        <td><p>Build a covariate grid for an expression-model query</p></td>
+      </tr><tr><td>
+          <p><code><a href="calculate_tmm_scaling.html">calculate_tmm_scaling()</a></code> </p>
+        </td>
+        <td><p>TMM / TMMwsp effective library sizes with an HCA reference</p></td>
+      </tr><tr><td>
+          <p><code><a href="compare_cohort_to_hca.html">compare_cohort_to_hca()</a></code> </p>
+        </td>
+        <td><p>Compare cohort log(μ) estimates to an HCA posterior baseline</p></td>
+      </tr><tr><td>
+          <p><code><a href="composition_draws.html">composition_draws()</a></code> </p>
+        </td>
+        <td><p>Draw posterior predictive cell-type proportions from a sccomp fit</p></td>
+      </tr><tr><td>
+          <p><code><a href="composition_posterior_test.html">composition_posterior_test()</a></code> </p>
+        </td>
+        <td><p>composition_posterior_test: Perform posterior predictive analysis</p></td>
+      </tr><tr><td>
+          <p><code><a href="composition_test.html">composition_test()</a></code> </p>
+        </td>
+        <td><p>Test observed proportions against healthy composition draws</p></td>
+      </tr><tr><td>
+          <p><code><a href="composition_test_cohort.html">composition_test_cohort()</a></code> </p>
+        </td>
+        <td><p>Test multiple samples against healthy composition draws</p></td>
+      </tr><tr><td>
+          <p><code><a href="composition_test_sample.html">composition_test_sample()</a></code> </p>
+        </td>
+        <td><p>Test one sample's proportions against healthy composition draws</p></td>
+      </tr><tr><td>
+          <p><code><a href="empirical_proportion_confidence.html">empirical_proportion_confidence()</a></code> </p>
+        </td>
+        <td><p>Empirical confidence of an observed proportion against posterior draws</p></td>
+      </tr><tr><td>
+          <p><code><a href="estimate_cohort_logmu.html">estimate_cohort_logmu()</a></code> </p>
+        </td>
+        <td><p>Estimate HCA-scale cohort log(μ) for a one-hot group-mean design</p></td>
+      </tr><tr><td>
+          <p><code><a href="estimate_ql.html">estimate_ql()</a></code> </p>
+        </td>
+        <td><p>Optional edgeR QL estimator for a user-defined linear estimand</p></td>
+      </tr><tr><td>
           <p><code><a href="example_proportions.html">example_proportions</a></code> </p>
         </td>
         <td><p>Example Cell Proportions Dataset</p></td>
+      </tr><tr><td>
+          <p><code><a href="expression_baseline_draws.html">expression_baseline_draws()</a></code> </p>
+        </td>
+        <td><p>Posterior draws for an HCA expression baseline query</p></td>
+      </tr><tr><td>
+          <p><code><a href="expression_draws.html">expression_draws()</a></code> </p>
+        </td>
+        <td><p>Posterior draws of gene expression from a fitted brms model</p></td>
+      </tr><tr><td>
+          <p><code><a href="get_brms_ready.html">get_brms_ready()</a></code> </p>
+        </td>
+        <td><p>Download a gene-level brms fit for a cell type</p></td>
       </tr><tr><td>
           <p><code><a href="get_default_cache_dir.html">get_default_cache_dir()</a></code> </p>
         </td>
         <td><p>Returns the default cache directory with a version number</p></td>
       </tr><tr><td>
+          <p><code><a href="get_file_ready.html">get_file_ready()</a></code> </p>
+        </td>
+        <td><p>Get file from Nectar object storage</p></td>
+      </tr><tr><td>
+          <p><code><a href="get_gene_universe.html">get_gene_universe()</a></code> </p>
+        </td>
+        <td><p>Download the ENSG gene universe for a cell type</p></td>
+      </tr><tr><td>
           <p><code><a href="get_model_ready.html">get_model_ready()</a></code> </p>
         </td>
         <td><p>Get the file path for the pre-trained model</p></td>
+      </tr><tr><td>
+          <p><code><a href="get_nectar_catalog.html">get_nectar_catalog()</a></code> </p>
+        </td>
+        <td><p>Download the Nectar model catalog (`latest.csv` or `all.csv`)</p></td>
+      </tr><tr><td>
+          <p><code><a href="get_reference_sample_ready.html">get_reference_sample_ready()</a></code> </p>
+        </td>
+        <td><p>Download the reference sample RDS for a cell type</p></td>
+      </tr><tr><td>
+          <p><code><a href="get_sccomp_ready.html">get_sccomp_ready()</a></code> </p>
+        </td>
+        <td><p>Download a pre-trained sccomp composition model from Nectar</p></td>
       </tr><tr><td>
           <p><code><a href="get_sub_formula.html">get_sub_formula()</a></code> </p>
         </td>
         <td><p>Extract sub-formula from full formula</p></td>
       </tr><tr><td>
-          <p><code><a href="posterior_test.html">posterior_test()</a></code> </p>
+          <p><code><a href="load_expression_fit.html">load_expression_fit()</a></code> </p>
         </td>
-        <td><p>posterior_test: Perform posterior predictive analysis</p></td>
+        <td><p>Load a stored gene-level brms fit</p></td>
+      </tr><tr><td>
+          <p><code><a href="load_reference_sample.html">load_reference_sample()</a></code> </p>
+        </td>
+        <td><p>Load the atlas reference library for a cell type</p></td>
+      </tr><tr><td>
+          <p><code><a href="load_sccomp_fit.html">load_sccomp_fit()</a></code> </p>
+        </td>
+        <td><p>Load a pre-trained healthy-reference sccomp composition model</p></td>
+      </tr><tr><td>
+          <p><code><a href="lookup_cell_type_storage.html">lookup_cell_type_storage()</a></code> </p>
+        </td>
+        <td><p>Resolve which Nectar container holds a cell type</p></td>
+      </tr><tr><td>
+          <p><code><a href="merge_with_reference_sample.html">merge_with_reference_sample()</a></code> </p>
+        </td>
+        <td><p>Merge user counts with a one-library reference sample</p></td>
+      </tr><tr><td>
+          <p><code><a href="normalize_proportions.html">normalize_proportions()</a></code> </p>
+        </td>
+        <td><p>Normalise an observed proportions table</p></td>
+      </tr><tr><td>
+          <p><code><a href="plot_cohort_vs_hca.html">plot_cohort_vs_hca()</a></code> </p>
+        </td>
+        <td><p>Plot cohort log(mu) estimates against healthy HCA posterior draws</p></td>
+      </tr><tr><td>
+          <p><code><a href="plot_composition_draws.html">plot_composition_draws()</a></code> </p>
+        </td>
+        <td><p>Density plot of healthy composition posterior draws</p></td>
+      </tr><tr><td>
+          <p><code><a href="plot_composition_vs_hca.html">plot_composition_vs_hca()</a></code> </p>
+        </td>
+        <td><p>Plot observed proportions against healthy composition draws</p></td>
+      </tr><tr><td>
+          <p><code><a href="plot_hca_draws.html">plot_hca_draws()</a></code> </p>
+        </td>
+        <td><p>Density plot of healthy HCA posterior draws</p></td>
+      </tr><tr><td>
+          <p><code><a href="savi_mono.html">savi_mono</a></code> </p>
+        </td>
+        <td><p>SAVI disease-associated monocyte pseudobulk (example data)</p></td>
+      </tr><tr><td>
+          <p><code><a href="scale_to_hca_reference.html">scale_to_hca_reference()</a></code> </p>
+        </td>
+        <td><p>TMM-align user counts to an atlas reference sample</p></td>
+      </tr><tr><td>
+          <p><code><a href="summarize_composition_draws.html">summarize_composition_draws()</a></code> </p>
+        </td>
+        <td><p>Summarise composition draws by cell type</p></td>
+      </tr><tr><td>
+          <p><code><a href="summarize_posterior_draws.html">summarize_posterior_draws()</a></code> </p>
+        </td>
+        <td><p>Summarise posterior draws for comparison with a point estimate</p></td>
+      </tr><tr><td>
+          <p><code><a href="test_sample_predictive.html">test_sample_predictive()</a></code> </p>
+        </td>
+        <td><p>Personalized single-sample predictive test against healthy counterfactual</p></td>
+      </tr><tr><td>
+          <p><code><a href="welch_test_means.html">welch_test_means()</a></code> </p>
+        </td>
+        <td><p>Heteroscedastic Welch test for the difference between two mean estimates</p></td>
       </tr></tbody></table></div>
 
   <div class="col-md-3 hidden-xs hidden-sm" id="pkgdown-sidebar">
@@ -84,7 +232,7 @@
 </div>
 
 <div class="pkgdown">
-  <p></p><p>Site built with <a href="https://pkgdown.r-lib.org/" class="external-link">pkgdown</a> 2.2.0.</p>
+  <p></p><p>Site built with <a href="https://pkgdown.r-lib.org/" class="external-link">pkgdown</a> 2.2.1.</p>
 </div>
 
       </footer></div>
