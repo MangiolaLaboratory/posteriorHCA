@@ -196,13 +196,16 @@ SE       = sqrt(c' Var(beta) c)</code></pre>
 <p>posteriorHCA does not interpret the contrast and does not invent a
 unique “batch-adjusted mean”; the user owns that estimand. Return
 value:</p>
-<pre class="text"><code>gene, contrast, estimate, se, df, dispersion</code></pre>
+<pre class="text"><code>gene, contrast, estimate, se, df</code></pre>
 <p><code>estimate</code> is natural-log edgeR scale
 (<code>log(mu) = X beta + offset</code>), not DE-table log2
 <code>logFC</code>, and not automatically named <code>log_mu</code>.</p>
-<div class="section level3">
-<h3 id="simple-group-mean">Simple group mean<a class="anchor" aria-label="anchor" href="#simple-group-mean"></a>
-</h3>
+<p><code><a href="../reference/estimate_ql.html">estimate_ql()</a></code> follows the current edgeR v4 QL workflow,
+using the NB dispersion estimated internally by <code>glmQLFit()</code>
+together with gene-specific moderated quasi-dispersions. Earlier edgeR
+QL workflows commonly used trended NB dispersions estimated with
+<code>estimateDisp()</code>; we currently treat that as a
+sensitivity-analysis alternative. ### Simple group mean</p>
 <p>Under <code>~ 0 + Category</code>, <code>CategorySAVI</code> is an
 absolute normalized group mean <em>under that parameterisation</em>.</p>
 <div class="sourceCode" id="cb6"><pre class="downlit sourceCode r">
@@ -215,8 +218,8 @@ absolute normalized group mean <em>under that parameterisation</em>.</p>
 <span><span class="op">)</span></span>
 <span><span class="va">savi_est</span> <span class="op">&lt;-</span> <span class="va">savi_est</span><span class="op">[</span><span class="va">savi_est</span><span class="op">$</span><span class="va">gene</span> <span class="op">==</span> <span class="va">gene_ensg</span>, , drop <span class="op">=</span> <span class="cn">FALSE</span><span class="op">]</span></span>
 <span><span class="va">savi_est</span></span>
-<span><span class="co">#&gt;                 gene     contrast  estimate        se       df dispersion</span></span>
-<span><span class="co">#&gt; 3946 ENSG00000169252 CategorySAVI -8.207553 0.3762088 19.06436  0.2340799</span></span></code></pre></div>
+<span><span class="co">#&gt;                 gene     contrast  estimate        se       df</span></span>
+<span><span class="co">#&gt; 3946 ENSG00000169252 CategorySAVI -8.207553 0.3762088 19.06436</span></span></code></pre></div>
 <p>Because this contrast is an absolute mean, add the fixed HCA constant
 for comparison on the matched reference scale. SE is unchanged.</p>
 <div class="sourceCode" id="cb7"><pre class="downlit sourceCode r">
@@ -226,7 +229,6 @@ for comparison on the matched reference scale. SE is unchanged.</p>
 <span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span>log_mu <span class="op">=</span> <span class="va">user_log_mu</span>, se <span class="op">=</span> <span class="va">user_se</span>, n <span class="op">=</span> <span class="va">n_savi</span><span class="op">)</span></span>
 <span><span class="co">#&gt;    log_mu        se         n </span></span>
 <span><span class="co">#&gt; 6.9269402 0.3762088 5.0000000</span></span></code></pre></div>
-</div>
 <div class="section level3">
 <h3 id="accounting-for-experiment">Accounting for Experiment<a class="anchor" aria-label="anchor" href="#accounting-for-experiment"></a>
 </h3>
@@ -253,9 +255,9 @@ mean.</p>
 <span><span class="co">#&gt;                  gene                      contrast  estimate        se</span></span>
 <span><span class="co">#&gt; 3946  ENSG00000169252                  CategorySAVI -9.950765 0.4974378</span></span>
 <span><span class="co">#&gt; 21062 ENSG00000169252 CategorySAVI + ExperimentEXP2 -7.901864 0.3239370</span></span>
-<span><span class="co">#&gt;             df dispersion</span></span>
-<span><span class="co">#&gt; 3946  12.27496  0.1740734</span></span>
-<span><span class="co">#&gt; 21062 12.27496  0.1740734</span></span></code></pre></div>
+<span><span class="co">#&gt;             df</span></span>
+<span><span class="co">#&gt; 3946  12.27496</span></span>
+<span><span class="co">#&gt; 21062 12.27496</span></span></code></pre></div>
 <p>These are absolute fitted quantities, so add the fixed HCA constant
 for comparison (SE unchanged), the same as in the simple group-mean
 case.</p>
@@ -292,10 +294,6 @@ constant would cancel in the difference. Use <code>estimate</code> /
 <span><span class="co">#&gt; 3946  ENSG00000169252                CategorySAVI  -9.950765 0.4974378 12.27496</span></span>
 <span><span class="co">#&gt; 21062 ENSG00000169252                CategoryCTRL -13.255421 0.6515197 12.27496</span></span>
 <span><span class="co">#&gt; 38178 ENSG00000169252 CategorySAVI - CategoryCTRL   3.304656 0.5183783 12.27496</span></span>
-<span><span class="co">#&gt;       dispersion</span></span>
-<span><span class="co">#&gt; 3946   0.1740734</span></span>
-<span><span class="co">#&gt; 21062  0.1740734</span></span>
-<span><span class="co">#&gt; 38178  0.1740734</span></span>
 <span></span>
 <span><span class="va">est</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/stats/setNames.html" class="external-link">setNames</a></span><span class="op">(</span><span class="va">rel_fit</span><span class="op">$</span><span class="va">estimate</span>, <span class="va">rel_fit</span><span class="op">$</span><span class="va">contrast</span><span class="op">)</span></span>
 <span><span class="co"># Absolute means may be HCA-shifted; their difference is unchanged.</span></span>

@@ -191,10 +191,10 @@ Arbitrary formulas and contrasts belong in the core vignette /
 <span><span class="co">#&gt; 2617  ENSG00000169252         CategoryCTRL 7 3.333432   28.03439 0.6161250</span></span>
 <span><span class="co">#&gt; 12234 ENSG00000169252         CategorySAVI 5 6.930346 1022.84778 0.3961903</span></span>
 <span><span class="co">#&gt; 21851 ENSG00000169252 CategorySAVI_treated 5 6.285160  536.55016 0.4177957</span></span>
-<span><span class="co">#&gt;             df dispersion</span></span>
-<span><span class="co">#&gt; 2617  19.03172  0.2235231</span></span>
-<span><span class="co">#&gt; 12234 19.03172  0.2235231</span></span>
-<span><span class="co">#&gt; 21851 19.03172  0.2235231</span></span></code></pre></div>
+<span><span class="co">#&gt;             df</span></span>
+<span><span class="co">#&gt; 2617  19.03172</span></span>
+<span><span class="co">#&gt; 12234 19.03172</span></span>
+<span><span class="co">#&gt; 21851 19.03172</span></span></code></pre></div>
 <p>Optionally, fit each <code>Category</code> alone with
 <code>formula = ~ 1</code> (still a one-hot / single-group design
 supported by this wrapper):</p>
@@ -215,11 +215,7 @@ supported by this wrapper):</p>
 <span><span class="co">#&gt;              gene        group n   log_mu        mu        se        df</span></span>
 <span><span class="co">#&gt; 1 ENSG00000169252         CTRL 7 3.395667  29.83455 0.3881143 10.907503</span></span>
 <span><span class="co">#&gt; 2 ENSG00000169252         SAVI 5 6.899364 991.64355 0.2846382  4.016435</span></span>
-<span><span class="co">#&gt; 3 ENSG00000169252 SAVI_treated 5 6.294819 541.75773 0.2132725  3.953662</span></span>
-<span><span class="co">#&gt;   dispersion</span></span>
-<span><span class="co">#&gt; 1  0.2302444</span></span>
-<span><span class="co">#&gt; 2  0.3381536</span></span>
-<span><span class="co">#&gt; 3  0.2077055</span></span></code></pre></div>
+<span><span class="co">#&gt; 3 ENSG00000169252 SAVI_treated 5 6.294819 541.75773 0.2132725  3.953662</span></span></code></pre></div>
 <p><code><a href="../reference/expression_baseline_draws.html">expression_baseline_draws()</a></code> delegates model loading,
 query-grid construction and posterior generation to
 <code><a href="../reference/load_expression_fit.html">load_expression_fit()</a></code>, <code><a href="../reference/build_newdata_grid.html">build_newdata_grid()</a></code>
