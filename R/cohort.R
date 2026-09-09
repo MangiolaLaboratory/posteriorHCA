@@ -395,6 +395,17 @@ scale_to_hca_reference <- function(
 
 #' Fit edgeR QL with prior.count = 0 and explicit log-library-size offset
 #'
+#' Follows the current edgeR v4 non-legacy QL pipeline (`legacy = FALSE`):
+#' with dispersion left unspecified, [edgeR::glmQLFit()] estimates a constant
+#' NB dispersion from highly expressed genes, while gene-specific variability
+#' is captured by moderated quasi-dispersions (`s2.post`). Coefficients,
+#' fitted means, NB dispersion and `s2.post` all come from this single fit.
+#'
+#' Earlier edgeR QL workflows commonly estimated abundance-dependent trended
+#' NB dispersions with [edgeR::estimateDisp()] and supplied them to
+#' `glmQLFit()`; that formulation is retained only as a sensitivity-analysis
+#' alternative (see commented example in the function body).
+#'
 #' Passes `prior.count = 0` on Bioconductor release edgeR so coefficients are
 #' unshrunk. Bioconductor devel `glmQLFit()` already hardcodes
 #' `prior.count = 0` when calling `glmFit()` and also forwards `...`, so
@@ -436,12 +447,24 @@ fit_nb_ql <- function(counts, offset, design, robust = TRUE) {
   # Explicit edgeR inputs: raw counts + design + log(effective library size).
   # TMM factors are already inside `offset` from calculate_tmm_scaling();
   # do not recreate a DGEList or recompute norm factors here.
-  disp <- edgeR::estimateDisp(
-    y = counts,
-    design = design,
-    offset = offset_mat,
-    robust = robust
-  )
+  #
+  # edgeR v4 QL pipeline: with dispersion unspecified, glmQLFit() estimates
+  # a constant NB dispersion from highly expressed genes; gene-specific
+  # variability is captured by moderated quasi-dispersions (s2.post).
+  #
+  # Earlier edgeR QL workflows commonly estimated NB dispersion first:
+  #
+  #   disp <- edgeR::estimateDisp(
+  #     y = counts,
+  #     design = design,
+  #     offset = offset_mat,
+  #     robust = robust
+  #   )
+  #
+  # and then supplied an abundance-dependent trended NB dispersion to
+  # glmQLFit(). We currently follow the edgeR v4 default pipeline.
+  # The trended-dispersion formulation is retained as a methodological
+  # alternative for future sensitivity/validation analyses.
   ql_args <- list(
     y = counts,
     design = design,
@@ -456,16 +479,7 @@ fit_nb_ql <- function(counts, offset, design, robust = TRUE) {
   }
   fit <- do.call(edgeR::glmQLFit, ql_args)
 
-  dispersion <- if (!is.null(disp$trended.dispersion)) {
-    disp$trended.dispersion
-  } else if (!is.null(disp$tagwise.dispersion)) {
-    disp$tagwise.dispersion
-  } else {
-    rep_len(disp$common.dispersion, nrow(counts))
-  }
-  names(dispersion) <- rownames(counts)
-
-  list(fit = fit, dispersion = dispersion, design = design, offset = offset_mat)
+  list(fit = fit, design = design, offset = offset_mat)
 }
 
 #' Check whether a design is a one-hot group-mean design
@@ -531,9 +545,9 @@ assert_design_matrix <- function(design, n_samples) {
 #' Gene-specific QL coefficient covariance `s2.post * (X'WX)^{-1}`
 #'
 #' Uses the NB GLM working weights from the same `glmQLFit()` object:
-#' `w = prior_weight * mu / (1 + phi * mu)`, with `phi` equal to the NB
-#' dispersion used for the final fitted means (stored `fit$dispersion`
-#' divided by `fit$average.ql.dispersion` when the latter is present).
+#' `w = prior_weight * mu / (1 + phi * mu)`, with `phi` from
+#' [ql_fit_nb_dispersion()] (NB dispersion used for the final fitted means).
+#' Do not mix in dispersions from a separate [edgeR::estimateDisp()] fit.
 #'
 #' @return A `p x p` matrix, or `NULL` if the covariance is not estimable.
 #' @keywords internal
@@ -549,6 +563,9 @@ vcov_ql_gene <- function(fit, design, gene) {
       "QL fit is missing NB `dispersion` needed for coefficient covariance."
     )
   }
+  # Use the NB dispersion from the same glmQLFit object that produced
+  # coefficients, fitted.values and s2.post. Do not mix in dispersions from
+  # a separate estimateDisp() fit.
   phi <- ql_fit_nb_dispersion(fit, n_gene)
   if (length(phi) != n_gene) {
     cli::cli_abort(
@@ -803,9 +820,19 @@ se_group_mean_closed_form <- function(fit, design, phi) {
 }
 
 #' NB dispersion used for working weights of a QL fit
+#'
+#' Under edgeR v4 non-legacy `glmQLFit()`, the final `glmFit()` call uses
+#' `dispersion / average.ql.dispersion`, while `fit$dispersion` stores the
+#' unscaled NB dispersion. Reconstruct the working NB dispersion that matches
+#' coefficients and `fitted.values` by dividing by `average.ql.dispersion`
+#' when that field is present.
+#'
 #' @keywords internal
 #' @noRd
 ql_fit_nb_dispersion <- function(fit, n_gene) {
+  # Use the NB dispersion from the same glmQLFit object that produced
+  # coefficients, fitted.values and s2.post. Do not mix in dispersions from
+  # a separate estimateDisp() fit.
   phi <- as.numeric(fit$dispersion)
   if (!is.null(fit$average.ql.dispersion)) {
     ave_ql <- as.numeric(fit$average.ql.dispersion)[[1L]]
@@ -826,10 +853,10 @@ ql_fit_nb_dispersion <- function(fit, n_gene) {
 #' predictor and its SE. This is an **estimation** helper for comparison with
 #' the HCA posterior, not a differential-expression testing workflow.
 #'
-#' Builds `design = model.matrix(formula, data = metadata)`, fits
-#' [edgeR::estimateDisp()] / [edgeR::glmQLFit()] (`prior.count = 0` on
-#' Bioconductor release; devel already forces this) with
-#' offset `log(effective library size)`, optionally builds contrasts with
+#' Builds `design = model.matrix(formula, data = metadata)`, fits the current
+#' edgeR v4 quasi-likelihood model with [edgeR::glmQLFit()] (`prior.count = 0`
+#' on Bioconductor release; devel already forces this) and explicit
+#' `log(effective library size)` offsets, optionally builds contrasts with
 #' [limma::makeContrasts()], and returns
 #'
 #' ```
@@ -837,7 +864,16 @@ ql_fit_nb_dispersion <- function(fit, n_gene) {
 #' SE       = sqrt(c' Var(beta) c)
 #' ```
 #'
-#' with `Var(beta) = s2.post * (X'WX)^{-1}` from the same QL fit.
+#' with `Var(beta) = s2.post * (X'WX)^{-1}` from the same QL fit. Formula
+#' defines the model; contrast defines the requested linear estimand.
+#'
+#' Under the edgeR v4 non-legacy pipeline, `glmQLFit()` estimates the NB
+#' dispersion internally (constant/common backbone from highly expressed
+#' genes) while gene-specific variability is represented by moderated
+#' quasi-dispersions (`s2.post`). Earlier edgeR QL workflows commonly used
+#' abundance-dependent trended NB dispersions from [edgeR::estimateDisp()];
+#' posteriorHCA treats that formulation as a sensitivity-analysis alternative,
+#' not the supported default.
 #'
 #' The `formula` determines which effects enter the model (e.g. Category,
 #' Experiment, batch). The `contrast` selects which fitted quantity to
@@ -871,12 +907,11 @@ ql_fit_nb_dispersion <- function(fit, n_gene) {
 #'   Examples: `"CategorySAVI"`, `"CategorySAVI + ExperimentB"`,
 #'   `"(Intercept)"`, `"CategorySAVI - CategoryControl"`.
 #' @param robust Passed to edgeR.
-#' @return Data frame with `gene`, `contrast`, `estimate`, `se`, `df`,
-#'   `dispersion`. `estimate` is the requested linear predictor on the
-#'   edgeR natural-log model scale and is not necessarily an absolute
-#'   `log_mu`. Attributes `fit`, `design`, and `contrast` store the QL
-#'   fit, design matrix, and contrast matrix. Capture attributes before
-#'   subsetting the data frame.
+#' @return Data frame with `gene`, `contrast`, `estimate`, `se`, `df`.
+#'   `estimate` is the requested linear predictor on the edgeR natural-log
+#'   model scale and is not necessarily an absolute `log_mu`. Attributes
+#'   `fit`, `design`, and `contrast` store the QL fit, design matrix, and
+#'   contrast matrix. Capture attributes before subsetting the data frame.
 #' @seealso [estimate_cohort_logmu()], [calculate_tmm_scaling()],
 #'   [welch_test_means()]
 #' @export
@@ -905,7 +940,6 @@ estimate_ql <- function(
 
   ql <- fit_nb_ql(counts, offset = offset, design = design, robust = robust)
   fit <- ql$fit
-  dispersion <- ql$dispersion
 
   gene_ids <- rownames(counts)
   if (is.null(gene_ids)) {
@@ -929,7 +963,6 @@ estimate_ql <- function(
     estimate = as.numeric(est_mat),
     se = as.numeric(se_mat),
     df = rep(as.numeric(fit$df.residual.adj), times = n_contrast),
-    dispersion = rep(as.numeric(dispersion), times = n_contrast),
     stringsAsFactors = FALSE
   )
   attr(out, "fit") <- fit
@@ -958,8 +991,8 @@ estimate_ql <- function(
 #' @param gene_ensg Optional character vector of Ensembl gene ids to keep.
 #' @param assay Assay name for Seurat / SummarizedExperiment input.
 #' @param robust Passed to [estimate_ql()].
-#' @return Data frame with `gene`, `group`, `n`, `log_mu`, `mu`, `se`, `df`,
-#'   `dispersion` on the matched HCA reference effective-library-size scale.
+#' @return Data frame with `gene`, `group`, `n`, `log_mu`, `mu`, `se`, `df`
+#'   on the matched HCA reference effective-library-size scale.
 #' @seealso [estimate_ql()], [scale_to_hca_reference()],
 #'   [expression_baseline_draws()], [compare_cohort_to_hca()]
 #' @export
@@ -1057,7 +1090,6 @@ estimate_cohort_logmu <- function(
     mu = exp(log_mu),
     se = coef_estimates$se,
     df = coef_estimates$df,
-    dispersion = coef_estimates$dispersion,
     stringsAsFactors = FALSE
   )
 

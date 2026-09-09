@@ -25,29 +25,69 @@ draw_dirichlet_weights <- function(n) {
 
 #' Estimate NB dispersions (internal bootstrap path)
 #'
-#' Internal helper for the experimental bootstrap/mglm estimator. Fits an
-#' intercept-only edgeR QL model and returns gene-wise dispersions. Not part
-#' of the supported user-facing cohort-expression API; prefer
-#' [estimate_ql()] for public workflows.
+#' Internal helper for the experimental bootstrap/mglm estimator. Uses
+#' [edgeR::estimateDisp()] under an intercept-only design and returns
+#' abundance-dependent trended NB dispersions when available. This isolates
+#' the older trended-dispersion formulation inside the hidden bootstrap path;
+#' it is not part of the supported [estimate_ql()] / [edgeR::glmQLFit()]
+#' pipeline. Prefer [estimate_ql()] for public workflows.
 #'
 #' @param counts Gene-by-sample numeric count matrix.
 #' @param offset Numeric vector (length `ncol(counts)`) or matrix. Typically
 #'   `log(effective_size)` from [calculate_tmm_scaling()] for user samples.
-#' @param robust Passed to [edgeR::estimateDisp()] / [edgeR::glmQLFit()].
+#' @param robust Passed to [edgeR::estimateDisp()].
 #' @return Named numeric vector of dispersions (names = gene ids).
 #' @keywords internal
 #' @noRd
 estimate_dispersion_nb <- function(counts, offset, robust = TRUE) {
   counts <- as.matrix(counts)
+  storage.mode(counts) <- "double"
   design <- matrix(1, nrow = ncol(counts), ncol = 1L)
   colnames(design) <- "(Intercept)"
   rownames(design) <- colnames(counts)
-  fit_nb_ql(
-    counts = counts,
-    offset = offset,
+
+  if (is.matrix(offset)) {
+    if (!identical(dim(offset), dim(counts))) {
+      cli::cli_abort("Matrix `offset` must have the same dimensions as `counts`.")
+    }
+    offset_mat <- offset
+    storage.mode(offset_mat) <- "double"
+  } else {
+    offset <- as.numeric(offset)
+    if (!is.null(names(offset)) && !is.null(colnames(counts))) {
+      offset <- offset[colnames(counts)]
+      if (anyNA(offset)) {
+        cli::cli_abort("`offset` is missing values for one or more samples in `counts`.")
+      }
+    }
+    if (length(offset) != ncol(counts)) {
+      cli::cli_abort(
+        "`offset` length must match the number of columns in `counts`."
+      )
+    }
+    offset_mat <- matrix(
+      offset,
+      nrow = nrow(counts),
+      ncol = ncol(counts),
+      byrow = TRUE
+    )
+  }
+
+  disp <- edgeR::estimateDisp(
+    y = counts,
     design = design,
+    offset = offset_mat,
     robust = robust
-  )$dispersion
+  )
+  dispersion <- if (!is.null(disp$trended.dispersion)) {
+    disp$trended.dispersion
+  } else if (!is.null(disp$tagwise.dispersion)) {
+    disp$tagwise.dispersion
+  } else {
+    rep_len(disp$common.dispersion, nrow(counts))
+  }
+  names(dispersion) <- rownames(counts)
+  dispersion
 }
 
 #' Bootstrap log(μ) via weighted mglmOneGroup (internal)

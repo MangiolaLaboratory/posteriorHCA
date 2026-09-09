@@ -27,8 +27,8 @@ container with counts, `sample_role`, `log_effective_library_size`, and
 \item{robust}{Passed to [estimate_ql()].}
 }
 \value{
-Data frame with `gene`, `group`, `n`, `log_mu`, `mu`, `se`, `df`,
-  `dispersion` on the matched HCA reference effective-library-size scale.
+Data frame with `gene`, `group`, `n`, `log_mu`, `mu`, `se`, `df`
+  on the matched HCA reference effective-library-size scale.
 }
 \description{
 Opinionated convenience wrapper around [scale_to_hca_reference()] inputs

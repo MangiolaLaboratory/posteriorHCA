@@ -1,7 +1,7 @@
 Cohort expression workflow (wrappers)
 ================
 Chen Zhan
-2026-09-08
+2026-09-09
 
 SAVI case study: *ADRB2* (`ENSG00000169252`) in disease-associated
 monocytes.
@@ -107,10 +107,10 @@ cohort_estimates
 #> 2617  ENSG00000169252         CategoryCTRL 7 3.302730   27.18675 0.6161250
 #> 12234 ENSG00000169252         CategorySAVI 5 6.929494 1021.97712 0.3961903
 #> 21851 ENSG00000169252 CategorySAVI_treated 5 6.283457  535.63706 0.4177957
-#>             df dispersion
-#> 2617  19.03172  0.2235231
-#> 12234 19.03172  0.2235231
-#> 21851 19.03172  0.2235231
+#>             df
+#> 2617  19.03172
+#> 12234 19.03172
+#> 21851 19.03172
 ```
 
 Optionally, fit each `Category` alone with `formula = ~ 1` (still a
@@ -134,10 +134,6 @@ cohort_estimates_by_level
 #> 1 ENSG00000169252         CTRL 7 3.327928  27.88051 0.3881143 10.907503
 #> 2 ENSG00000169252         SAVI 5 6.898946 991.22957 0.2846382  4.016435
 #> 3 ENSG00000169252 SAVI_treated 5 6.292200 540.34074 0.2132725  3.953662
-#>   dispersion
-#> 1  0.2302444
-#> 2  0.3381536
-#> 3  0.2077055
 ```
 
 `expression_baseline_draws()` delegates model loading, query-grid

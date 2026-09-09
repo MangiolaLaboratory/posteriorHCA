@@ -310,11 +310,41 @@ test_that("estimate_ql returns coefficients for a one-hot group design", {
   ))
   expect_equal(nrow(expression_estimates), nrow(toy$user) * 2L)
   expect_setequal(expression_estimates$contrast, c("CategoryA", "CategoryB"))
-  expect_true(all(c("gene", "contrast", "estimate", "se", "df", "dispersion") %in% names(expression_estimates)))
+  expect_true(all(c("gene", "contrast", "estimate", "se", "df") %in% names(expression_estimates)))
+  expect_false("dispersion" %in% names(expression_estimates))
   expect_false("log_mu" %in% names(expression_estimates))
   expect_false("group" %in% names(expression_estimates))
   expect_true(all(is.finite(expression_estimates$estimate)))
   expect_true(all(is.finite(expression_estimates$se) & expression_estimates$se > 0))
+  # Supported path uses glmQLFit as the single source of NB + QL dispersion.
+  fit <- attr(expression_estimates, "fit")
+  expect_true(!is.null(fit$dispersion))
+  expect_true(!is.null(fit$s2.post))
+  expect_true(!is.null(fit$average.ql.dispersion))
+  expect_equal(
+    ql_fit_nb_dispersion(fit, nrow(toy$user)),
+    rep(
+      as.numeric(fit$dispersion) / as.numeric(fit$average.ql.dispersion)[[1L]],
+      nrow(toy$user)
+    ),
+    tolerance = 1e-12
+  )
+})
+
+test_that("fit_nb_ql does not call estimateDisp in the supported path", {
+  toy <- toy_counts()
+  combined <- merge_with_reference_sample(toy$user, toy$ref, reference_name = "hca_ref")
+  scaling <- calculate_tmm_scaling(combined, reference_name = "hca_ref")
+  user_offset <- scaling$log_effective_library_size[colnames(toy$user)]
+  design_matrix <- model.matrix(
+    ~ 0 + factor(c("A", "A", "B", "B")),
+    data = data.frame(row.names = colnames(toy$user))
+  )
+  ql <- fit_nb_ql(toy$user, offset = user_offset, design = design_matrix)
+  expect_null(ql$dispersion)
+  expect_true(all(c("fit", "design", "offset") %in% names(ql)))
+  # Constant/common NB dispersion backbone under edgeR v4 default pipeline.
+  expect_equal(length(unique(round(as.numeric(ql$fit$dispersion), 10))), 1L)
 })
 
 test_that("edgeR receives log(E_user), not HCA-centred offsets", {

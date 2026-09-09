@@ -165,12 +165,17 @@ posteriorHCA does not interpret the contrast and does not invent a unique
 "batch-adjusted mean"; the user owns that estimand. Return value:
 
 ```text
-gene, contrast, estimate, se, df, dispersion
+gene, contrast, estimate, se, df
 ```
 
 `estimate` is natural-log edgeR scale (`log(mu) = X beta + offset`), not
 DE-table log2 `logFC`, and not automatically named `log_mu`.
 
+`estimate_ql()` follows the current edgeR v4 QL workflow, using the NB
+dispersion estimated internally by `glmQLFit()` together with gene-specific
+moderated quasi-dispersions. Earlier edgeR QL workflows commonly used
+trended NB dispersions estimated with `estimateDisp()`; we currently treat
+that as a sensitivity-analysis alternative.
 ### Simple group mean
 
 Under `~ 0 + Category`, `CategorySAVI` is an absolute normalized group

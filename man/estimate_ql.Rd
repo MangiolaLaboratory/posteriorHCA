@@ -26,12 +26,11 @@ Examples: `"CategorySAVI"`, `"CategorySAVI + ExperimentB"`,
 \item{robust}{Passed to edgeR.}
 }
 \value{
-Data frame with `gene`, `contrast`, `estimate`, `se`, `df`,
-  `dispersion`. `estimate` is the requested linear predictor on the
-  edgeR natural-log model scale and is not necessarily an absolute
-  `log_mu`. Attributes `fit`, `design`, and `contrast` store the QL
-  fit, design matrix, and contrast matrix. Capture attributes before
-  subsetting the data frame.
+Data frame with `gene`, `contrast`, `estimate`, `se`, `df`.
+  `estimate` is the requested linear predictor on the edgeR natural-log
+  model scale and is not necessarily an absolute `log_mu`. Attributes
+  `fit`, `design`, and `contrast` store the QL fit, design matrix, and
+  contrast matrix. Capture attributes before subsetting the data frame.
 }
 \description{
 Fits a negative-binomial quasi-likelihood model that can account for
@@ -40,10 +39,10 @@ predictor and its SE. This is an **estimation** helper for comparison with
 the HCA posterior, not a differential-expression testing workflow.
 }
 \details{
-Builds `design = model.matrix(formula, data = metadata)`, fits
-[edgeR::estimateDisp()] / [edgeR::glmQLFit()] (`prior.count = 0` on
-Bioconductor release; devel already forces this) with
-offset `log(effective library size)`, optionally builds contrasts with
+Builds `design = model.matrix(formula, data = metadata)`, fits the current
+edgeR v4 quasi-likelihood model with [edgeR::glmQLFit()] (`prior.count = 0`
+on Bioconductor release; devel already forces this) and explicit
+`log(effective library size)` offsets, optionally builds contrasts with
 [limma::makeContrasts()], and returns
 
 ```
@@ -51,7 +50,16 @@ estimate = c' beta
 SE       = sqrt(c' Var(beta) c)
 ```
 
-with `Var(beta) = s2.post * (X'WX)^{-1}` from the same QL fit.
+with `Var(beta) = s2.post * (X'WX)^{-1}` from the same QL fit. Formula
+defines the model; contrast defines the requested linear estimand.
+
+Under the edgeR v4 non-legacy pipeline, `glmQLFit()` estimates the NB
+dispersion internally (constant/common backbone from highly expressed
+genes) while gene-specific variability is represented by moderated
+quasi-dispersions (`s2.post`). Earlier edgeR QL workflows commonly used
+abundance-dependent trended NB dispersions from [edgeR::estimateDisp()];
+posteriorHCA treats that formulation as a sensitivity-analysis alternative,
+not the supported default.
 
 The `formula` determines which effects enter the model (e.g. Category,
 Experiment, batch). The `contrast` selects which fitted quantity to

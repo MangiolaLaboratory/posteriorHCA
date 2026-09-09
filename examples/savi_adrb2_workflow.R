@@ -103,7 +103,7 @@ expression_estimates <- within(coef_estimates, {
 })
 expression_estimates <- expression_estimates[
   expression_estimates$gene == gene_ensg,
-  c("gene", "group", "estimate", "log_mu", "mu", "se", "df", "dispersion")
+  c("gene", "group", "estimate", "log_mu", "mu", "se", "df")
 ]
 print(expression_estimates)
 
