@@ -6,37 +6,20 @@ Chen Zhan
 SAVI case study: *ADRB2* (`ENSG00000169252`) in disease-associated
 monocytes.
 
-This report mirrors
-`vignette("cohort-expression-core", package = "posteriorHCA")`, but
-**exposes the edgeR/limma steps inline** instead of calling posteriorHCA
-helpers for scaling, offsets, fitting, contrast estimation, or SE
-extraction.
-
-Allowed posteriorHCA helpers **before** the HCA expression query:
+Same analysis as `vignette("cohort-expression-core")`, but with the
+edgeR / limma steps written out. Only `load_reference_sample()` and
+`merge_with_reference_sample()` are used from posteriorHCA before the
+HCA model query.
 
 ```
-load_reference_sample()
-merge_with_reference_sample()
+USER + HCA counts
+  → TMMwsp
+  → offset = log(E_user)
+  → glmQLFit → makeContrasts → glmQLFTest
+  → estimate + QLF SE
+  → + log(E_HCA)
+  → compare to HCA posterior
 ```
-
-Everything else on the USER side is written with ordinary `edgeR`,
-`limma`, and base R. The purpose is diagnostic:
-
-> If we remove posteriorHCA’s edgeR helper abstractions, what is the
-> simplest transparent sequence of native edgeR/limma calls that
-> reproduces our scaling, USER model fitting, contrast estimate, and the
-> proposed `glmQLFTest()`-derived uncertainty?
-
-Workflow:
-
-1.  Load / merge one HCA reference library with USER counts
-2.  Joint TMMwsp scaling (explicit `calcNormFactors`)
-3.  USER-only regression with `offset = log(E_user)`
-4.  `model.matrix()` → `glmQLFit()` → `makeContrasts()` → `glmQLFTest()`
-5.  Natural-log estimate + QLF-implied SE; shift absolute estimand by
-    `log(E_HCA)`
-6.  HCA posterior query and `welch_test_means()` (same as the core
-    report)
 
 ## Setup
 
@@ -49,38 +32,32 @@ library(edgeR)
 library(limma)
 
 cell_type <- "monocytic"
-gene_ensg <- "ENSG00000169252"
+gene <- "ENSG00000169252"
 ```
 
-## Prepare counts with Ensembl gene ids
-
-Same USER dataset and metadata as the core-function report.
+## Counts
 
 ``` r
 data(savi_mono)
 
-user_counts <- as.matrix(Seurat::GetAssayData(savi_mono, layer = "counts"))
-mapped <- AnnotationDbi::mapIds(
+counts <- as.matrix(Seurat::GetAssayData(savi_mono, layer = "counts"))
+ensembl <- AnnotationDbi::mapIds(
   org.Hs.eg.db,
-  keys = rownames(user_counts),
+  keys = rownames(counts),
   column = "ENSEMBL",
   keytype = "SYMBOL",
   multiVals = "first"
 )
-keep <- !is.na(mapped) & !duplicated(mapped)
-user_counts <- user_counts[keep, , drop = FALSE]
-rownames(user_counts) <- unname(mapped[keep])
+ok <- !is.na(ensembl) & !duplicated(ensembl)
+counts <- counts[ok, , drop = FALSE]
+rownames(counts) <- unname(ensembl[ok])
 
-sample_metadata <- data.frame(
-  Category = factor(savi_mono$Category[colnames(user_counts)]),
-  Experiment = factor(savi_mono$Experiment[colnames(user_counts)]),
-  row.names = colnames(user_counts),
-  stringsAsFactors = FALSE
+meta <- data.frame(
+  Category = factor(savi_mono$Category[colnames(counts)]),
+  Experiment = factor(savi_mono$Experiment[colnames(counts)]),
+  row.names = colnames(counts)
 )
-
-dim(user_counts)
-#> [1] 17116    17
-table(sample_metadata$Category, sample_metadata$Experiment)
+table(meta$Category, meta$Experiment)
 #>               
 #>                EXP1 EXP2 EXP3
 #>   CTRL            3    2    2
@@ -88,192 +65,46 @@ table(sample_metadata$Category, sample_metadata$Experiment)
 #>   SAVI_treated    3    2    0
 ```
 
-## Reference preparation (posteriorHCA)
+## HCA reference
 
 ``` r
-reference <- load_reference_sample(cell_type)
-reference$sample_id
-#> [1] "e11a0d767c2a97f658791b17cae25860____SC142___monocytic"
-length(reference$counts)
-#> [1] 10632
+ref <- load_reference_sample(cell_type)
+ref_id <- ref$sample_id
 
-counts_joint <- merge_with_reference_sample(
-  user_counts,
-  reference = reference$counts,
-  reference_name = reference$sample_id
+counts <- merge_with_reference_sample(
+  counts,
+  reference = ref$counts,
+  reference_name = ref_id
 )
-
-reference_name <- reference$sample_id
-dim(counts_joint)
-#> [1] 9617   18
-setdiff(colnames(counts_joint), colnames(user_counts))
-#> [1] "e11a0d767c2a97f658791b17cae25860____SC142___monocytic"
 ```
 
-The HCA reference is added only so joint TMM can put USER and HCA
-libraries on a common scale. It must not enter the USER regression.
+The reference is only for joint TMM. Drop it before fitting.
 
-## Explicit joint TMMwsp scaling
-
-Same default method as `calculate_tmm_scaling()` (`method = "TMMwsp"`).
+## TMMwsp scaling
 
 ``` r
-ref_col <- match(reference_name, colnames(counts_joint))
+nf <- calcNormFactors(counts, refColumn = match(ref_id, colnames(counts)), method = "TMMwsp")
+eff <- colSums(counts) * nf
 
-norm_factors <- edgeR::calcNormFactors(
-  counts_joint,
-  refColumn = ref_col,
-  method = "TMMwsp"
-)
-
-library_size <- colSums(counts_joint)
-effective_size <- library_size * norm_factors
-
-E_hca <- unname(effective_size[[reference_name]])
-user_names <- setdiff(colnames(counts_joint), reference_name)
-E_user <- effective_size[user_names]
-log_E_user <- log(E_user)
-log_E_hca <- log(E_hca)
-
-data.frame(
-  sample = c(user_names, reference_name),
-  library_size = c(library_size[user_names], library_size[[reference_name]]),
-  norm_factor = c(norm_factors[user_names], norm_factors[[reference_name]]),
-  effective_size = c(E_user, E_hca),
-  role = c(rep("user", length(user_names)), "hca_reference"),
-  row.names = NULL
-)
-#>                                                   sample library_size
-#> 1                    C1_17. Disease-associated monocytes       347205
-#> 2                   C10_17. Disease-associated monocytes       122614
-#> 3                   C11_17. Disease-associated monocytes       229924
-#> 4                    C2_17. Disease-associated monocytes       426861
-#> 5                    C7_17. Disease-associated monocytes        31483
-#> 6      C8-aunt-P1-STING_17. Disease-associated monocytes        49498
-#> 7    C9-mother-P1-STING_17. Disease-associated monocytes        81760
-#> 8           P1-STING-ht_17. Disease-associated monocytes        24224
-#> 9         P1-STING-ht-T_17. Disease-associated monocytes       127446
-#> 10       P1-STING-ht-T2_17. Disease-associated monocytes        71463
-#> 11          P2-STING-ht_17. Disease-associated monocytes        45098
-#> 12        P2-STING-ht-T_17. Disease-associated monocytes        40347
-#> 13          P4-STING-ht_17. Disease-associated monocytes      1527144
-#> 14        P4-STING-ht-T_17. Disease-associated monocytes       241055
-#> 15             P5-STING_17. Disease-associated monocytes       747477
-#> 16          P6-STING-ht_17. Disease-associated monocytes      6123996
-#> 17        P6-STING-ht-T_17. Disease-associated monocytes      1164357
-#> 18 e11a0d767c2a97f658791b17cae25860____SC142___monocytic      3559173
-#>    norm_factor effective_size          role
-#> 1    1.0233563      355314.42          user
-#> 2    1.3611822      166900.00          user
-#> 3    1.3847878      318395.95          user
-#> 4    1.2153675      518793.00          user
-#> 5    1.2006225       37799.20          user
-#> 6    0.9734889       48185.75          user
-#> 7    0.9818609       80276.95          user
-#> 8    1.3858786       33571.52          user
-#> 9    0.9414885      119988.94          user
-#> 10   0.8846274       63218.13          user
-#> 11   1.1663582       52600.42          user
-#> 12   1.0189958       41113.42          user
-#> 13   0.6120595      934702.92          user
-#> 14   0.8683783      209326.93          user
-#> 15   0.8085947      604405.96          user
-#> 16   0.6037752     3697516.63          user
-#> 17   0.9937728     1157106.34          user
-#> 18   1.0506977     3739615.04 hca_reference
-c(E_hca = E_hca, log_E_hca = log_E_hca)
-#>        E_hca    log_E_hca 
-#> 3.739615e+06 1.513449e+01
+user <- setdiff(colnames(counts), ref_id)
+log_E <- log(eff[user])
+log_E_hca <- log(eff[[ref_id]])
 ```
 
-## USER regression excludes the HCA reference
+## USER model
 
 ``` r
-counts_fit <- counts_joint[, user_names, drop = FALSE]
-metadata_fit <- sample_metadata[user_names, , drop = FALSE]
-stopifnot(identical(colnames(counts_fit), rownames(metadata_fit)))
+y <- counts[, user, drop = FALSE]
+meta <- meta[user, , drop = FALSE]
 
-offset_mat <- matrix(
-  log_E_user[colnames(counts_fit)],
-  nrow = nrow(counts_fit),
-  ncol = ncol(counts_fit),
-  byrow = TRUE
-)
-dim(offset_mat)
-#> [1] 9617   17
-range(offset_mat[1, ] - log_E_user[colnames(counts_fit)])
-#> [1] 0 0
-```
-
-Offset is `log(E_user)`. No `scaleOffset()`, and USER offsets are not
-centred around `E_hca`.
-
-## Design matrix
-
-Primary design matches the core report’s SAVI group-mean estimand used
-in Welch comparison: one mean per `Category`.
-
-``` r
-design <- model.matrix(~ 0 + Category, data = metadata_fit)
+offset <- matrix(log_E, nrow = nrow(y), ncol = ncol(y), byrow = TRUE)
+design <- model.matrix(~ 0 + Category, data = meta)
 colnames(design)
 #> [1] "CategoryCTRL"         "CategorySAVI"         "CategorySAVI_treated"
-head(design)
-#>                                                   CategoryCTRL CategorySAVI
-#> C1_17. Disease-associated monocytes                          1            0
-#> C10_17. Disease-associated monocytes                         1            0
-#> C11_17. Disease-associated monocytes                         1            0
-#> C2_17. Disease-associated monocytes                          1            0
-#> C7_17. Disease-associated monocytes                          1            0
-#> C8-aunt-P1-STING_17. Disease-associated monocytes            1            0
-#>                                                   CategorySAVI_treated
-#> C1_17. Disease-associated monocytes                                  0
-#> C10_17. Disease-associated monocytes                                 0
-#> C11_17. Disease-associated monocytes                                 0
-#> C2_17. Disease-associated monocytes                                  0
-#> C7_17. Disease-associated monocytes                                  0
-#> C8-aunt-P1-STING_17. Disease-associated monocytes                    0
-```
 
-## Fit with `glmQLFit()` (edgeR v4 QL)
+fit <- glmQLFit(y, design = design, offset = offset, prior.count = 0, robust = TRUE)
 
-The current non-legacy edgeR v4 QL workflow estimates the NB dispersion
-internally in `glmQLFit()`, while gene-specific variability is
-represented through moderated quasi-dispersions (`s2.post`). No separate
-`estimateDisp()` call. `prior.count = 0` matches the package helper on
-Bioconductor release edgeR.
-
-``` r
-ql_args <- list(
-  y = counts_fit,
-  design = design,
-  offset = offset_mat,
-  robust = TRUE
-)
-if (utils::packageVersion("edgeR") < "4.99.0") {
-  ql_args$prior.count <- 0
-}
-fit <- do.call(edgeR::glmQLFit, ql_args)
-
-c(
-  n_genes = nrow(fit),
-  n_coef = ncol(fit$coefficients),
-  nb_dispersion = unname(as.numeric(fit$dispersion)[[1]]),
-  average_ql_dispersion = unname(as.numeric(fit$average.ql.dispersion)[[1]])
-)
-#>               n_genes                n_coef         nb_dispersion 
-#>           9617.000000              3.000000              0.281383 
-#> average_ql_dispersion 
-#>              1.032946
-```
-
-## Contrast: absolute SAVI group mean
-
-``` r
-contrast <- limma::makeContrasts(
-  CategorySAVI,
-  levels = design
-)
-stopifnot(ncol(contrast) == 1L)
+contrast <- makeContrasts(CategorySAVI, levels = design)
 contrast
 #>                       Contrasts
 #> Levels                 CategorySAVI
@@ -282,212 +113,113 @@ contrast
 #>   CategorySAVI_treated            0
 ```
 
-Interpretation: under `~ 0 + Category`, `CategorySAVI` is the absolute
-normalized log mean for the SAVI group (not a difference, and not a
-marginal mean over Experiment).
+`CategorySAVI` is the absolute SAVI group log mean under
+`~ 0 + Category`.
 
-## `glmQLFTest()` → estimate + QLF-implied SE
+## Estimate and QLF-implied SE
+
+`glmQLFTest()` reports `logFC` on the log2 scale. Convert to natural
+log. The SE below is implied by the one-dimensional QL F statistic, not
+a coefficient-covariance SE.
 
 ``` r
-qlf <- edgeR::glmQLFTest(fit, contrast = contrast)
+qlf <- glmQLFTest(fit, contrast = contrast)
+tab <- qlf$table[gene, ]
 
-# logFC is log2; convert to natural log used by posteriorHCA.
-estimate_ln <- qlf$table$logFC * log(2)
+estimate <- tab$logFC * log(2)
+se_qlf <- abs(tab$logFC) / sqrt(tab$F) * log(2)
 
-# QLF-implied effective SE from the one-dimensional moderated QL F statistic.
-# Not an exact coefficient-covariance SE; compatibility with Bayesian
-# posterior SD is being evaluated separately.
-se_ln <- abs(qlf$table$logFC) / sqrt(qlf$table$F) * log(2)
+# Absolute estimand → place on HCA scale (SE unchanged).
+log_mu <- estimate + log_E_hca
+n_savi <- sum(meta$Category == "SAVI")
 
-user_result <- data.frame(
-  gene = rownames(qlf$table),
-  estimate = estimate_ln,
-  se = se_ln,
-  F = qlf$table$F,
-  PValue = qlf$table$PValue,
-  stringsAsFactors = FALSE
-)
-
-user_gene <- user_result[user_result$gene == gene_ensg, , drop = FALSE]
-user_gene
-#>                 gene  estimate        se        F       PValue
-#> 2617 ENSG00000169252 -8.204999 0.8109063 102.3801 5.367458e-11
+data.frame(gene, estimate, log_mu, se_qlf, n = n_savi)
+#>              gene  estimate   log_mu    se_qlf n
+#> 1 ENSG00000169252 -8.204999 6.929494 0.8109063 5
 ```
 
-## Shift absolute estimand to the HCA scale
-
-Valid here because `CategorySAVI` is an **absolute** estimand. Do not
-add `log(E_hca)` to a relative difference contrast.
+## Package Wald SE (for comparison)
 
 ``` r
-user_gene$log_mu <- user_gene$estimate + log_E_hca
-user_gene$mu <- exp(user_gene$log_mu)
-user_gene$se_log_mu <- user_gene$se
-
-n_savi <- sum(metadata_fit$Category == "SAVI")
-user_log_mu <- user_gene$log_mu
-user_se <- user_gene$se_log_mu
-
-c(log_mu = user_log_mu, se = user_se, n = n_savi)
-#>    log_mu        se         n 
-#> 6.9294944 0.8109063 5.0000000
-user_gene[, c("gene", "estimate", "log_mu", "mu", "se", "se_log_mu")]
-#>                 gene  estimate   log_mu       mu        se se_log_mu
-#> 2617 ENSG00000169252 -8.204999 6.929494 1021.977 0.8109063 0.8109063
-```
-
-## Diagnostic comparison with the core-function helpers
-
-The block below calls posteriorHCA helpers **only** for side-by-side
-diagnostics. The native path above does not depend on them.
-
-``` r
-scaling_pkg <- calculate_tmm_scaling(
-  counts_joint,
-  reference_name = reference_name
-)
-
-core_est <- estimate_ql(
-  counts = counts_fit,
-  offset = log_E_user[colnames(counts_fit)],
-  metadata = metadata_fit,
+wald <- estimate_ql(
+  counts = y,
+  offset = log_E,
+  metadata = meta,
   formula = ~ 0 + Category,
   contrast = "CategorySAVI"
 )
-core_est <- core_est[core_est$gene == gene_ensg, , drop = FALSE]
+wald <- wald[wald$gene == gene, ]
+se_wald <- wald$se
 
-scaling_check <- data.frame(
-  quantity = c("E_hca", "mean_E_user", "log_E_hca"),
-  native = c(E_hca, mean(E_user), log_E_hca),
-  package = c(
-    scaling_pkg$hca_effective_library_size,
-    mean(scaling_pkg$effective_size[user_names]),
-    scaling_pkg$hca_log_effective_library_size
-  )
+data.frame(
+  estimate_qlf = estimate,
+  estimate_wald = wald$estimate,
+  se_qlf,
+  se_wald,
+  se_ratio = se_qlf / se_wald
 )
-scaling_check$diff <- scaling_check$native - scaling_check$package
-scaling_check
-#>      quantity       native      package diff
-#> 1       E_hca 3.739615e+06 3.739615e+06    0
-#> 2 mean_E_user 4.964245e+05 4.964245e+05    0
-#> 3   log_E_hca 1.513449e+01 1.513449e+01    0
-
-comparison <- data.frame(
-  gene = gene_ensg,
-  estimate_native_qlf = user_gene$estimate,
-  estimate_core_wald = core_est$estimate,
-  estimate_diff = user_gene$estimate - core_est$estimate,
-  log_mu_native = user_gene$log_mu,
-  log_mu_core = core_est$estimate + scaling_pkg$hca_log_effective_library_size,
-  SE_QLF = user_gene$se,
-  SE_Wald_core = core_est$se,
-  SE_QLF_over_SE_Wald = user_gene$se / core_est$se,
-  stringsAsFactors = FALSE
-)
-comparison
-#>              gene estimate_native_qlf estimate_core_wald estimate_diff
-#> 1 ENSG00000169252           -8.204999          -8.204999             0
-#>   log_mu_native log_mu_core    SE_QLF SE_Wald_core SE_QLF_over_SE_Wald
-#> 1      6.929494    6.929494 0.8109063    0.3961903             2.04676
+#>   estimate_qlf estimate_wald    se_qlf   se_wald se_ratio
+#> 1    -8.204999     -8.204999 0.8109063 0.3961903  2.04676
 ```
-
-Scaling and the natural-log point estimate should agree (same counts,
-reference, TMMwsp, design, contrast, and `prior.count = 0`). The SE
-ratio is diagnostic: QLF-implied SE versus the package Wald / `c'Vc` SE
-need not be equal.
 
 ## HCA posterior
 
-Same query as the core-function report (healthy blood, 10x Genomics 3).
-The USER estimand is the SAVI Category mean under `~ 0 + Category` (no
-Experiment conditioning). The HCA query is a healthy baseline for the
-same cell type / gene; it is not conditioned on USER Experiment levels.
-
 ``` r
-expression_fit <- load_expression_fit(
-  cell_type = cell_type,
-  gene_ensg = gene_ensg
-)
-
+fit_hca <- load_expression_fit(cell_type = cell_type, gene_ensg = gene)
 newdata <- build_newdata_grid(
-  expression_fit,
+  fit_hca,
   disease_groups = "Normal",
   tissue_groups = "blood",
   assay_groups = "10x Genomics 3"
 )
-
-posterior_draws <- expression_draws(
-  expression_fit,
-  newdata = newdata,
-  quantity = "linpred",
-  collapse = "mean"
-)
+draws <- expression_draws(fit_hca, newdata = newdata, quantity = "linpred", collapse = "mean")
+hca <- summarize_posterior_draws(draws, value = log_mu)
 ```
 
-## Comparison
+## Welch tests
 
-Welch tests of the same SAVI `log_mu` against the HCA posterior, using
-either the QLF-implied SE (native path) or the Wald / `c'Vc` SE (core
-helper). Point estimates match; only the SE changes.
+Same `log_mu`, two SEs.
 
 ``` r
-posterior_summary <- summarize_posterior_draws(
-  posterior_draws,
-  value = user_log_mu
+welch_qlf <- welch_test_means(
+  mu1 = log_mu, se1 = se_qlf,
+  mu2 = hca$log_mu, se2 = hca$se,
+  n1 = n_savi, n2 = hca$n
+)
+welch_wald <- welch_test_means(
+  mu1 = log_mu, se1 = se_wald,
+  mu2 = hca$log_mu, se2 = hca$se,
+  n1 = n_savi, n2 = hca$n
 )
 
-user_log_mu_core <- core_est$estimate + log_E_hca
-user_se_core <- core_est$se
-
-test_qlf <- welch_test_means(
-  mu1 = user_log_mu,
-  se1 = user_se,
-  mu2 = posterior_summary$log_mu,
-  se2 = posterior_summary$se,
-  n1 = n_savi,
-  n2 = posterior_summary$n
-)
-test_wald <- welch_test_means(
-  mu1 = user_log_mu_core,
-  se1 = user_se_core,
-  mu2 = posterior_summary$log_mu,
-  se2 = posterior_summary$se,
-  n1 = n_savi,
-  n2 = posterior_summary$n
-)
-
-test_results <- data.frame(
-  group = c("SAVI (QLF SE)", "SAVI (Wald SE)"),
+cohort <- data.frame(
+  group = c("QLF SE", "Wald SE"),
   n = n_savi,
-  log_mu = c(test_qlf$mu1, test_wald$mu1),
-  se = c(test_qlf$se1, test_wald$se1),
-  hca_log_mu = c(test_qlf$mu2, test_wald$mu2),
-  hca_se = c(test_qlf$se2, test_wald$se2),
-  p_value = c(test_qlf$p_value, test_wald$p_value),
-  stringsAsFactors = FALSE
+  log_mu = log_mu,
+  se = c(se_qlf, se_wald),
+  hca_log_mu = hca$log_mu,
+  hca_se = hca$se,
+  p_value = c(welch_qlf$p_value, welch_wald$p_value)
 )
-test_results
-#>            group n   log_mu        se hca_log_mu    hca_se    p_value
-#> 1  SAVI (QLF SE) 5 6.929494 0.8109063    4.47276 0.8795577 0.05428090
-#> 2 SAVI (Wald SE) 5 6.929494 0.3961903    4.47276 0.8795577 0.01221892
+cohort
+#>     group n   log_mu        se hca_log_mu    hca_se    p_value
+#> 1  QLF SE 5 6.929494 0.8109063     4.5028 0.8412098 0.05324447
+#> 2 Wald SE 5 6.929494 0.3961903     4.5028 0.8412098 0.01043888
 ```
 
 ## Plots
 
 ``` r
-plot_hca_draws(
-  draws = posterior_draws,
-  subtitle = "Normal, 10x Genomics 3 healthy baseline"
-)
+plot_hca_draws(draws, subtitle = "Normal, 10x Genomics 3")
 ```
 
 ![](cohort-expression-edger-native_files/figure-gfm/plot-hca-1.png)<!-- -->
 
 ``` r
 plot_cohort_vs_hca(
-  hca_draws = posterior_draws,
-  cohort_est = test_results,
-  subtitle = "SAVI mean: QLF-implied SE vs Wald / c'Vc SE",
+  hca_draws = draws,
+  cohort_est = cohort,
+  subtitle = "SAVI mean: QLF SE vs Wald SE",
   annotate = c("group", "p_value")
 )
 ```

@@ -46,13 +46,12 @@ if (isTRUE(params$for_github_md)) {
   knitr::opts_chunk$set(fig.path = "cohort-expression-edger-native_files/figure-gfm/")
 }
 
-has_seurat <- requireNamespace("Seurat", quietly = TRUE)
-has_edb <- requireNamespace("org.Hs.eg.db", quietly = TRUE) &&
-  requireNamespace("AnnotationDbi", quietly = TRUE)
-has_brms <- requireNamespace("brms", quietly = TRUE)
-has_edger <- requireNamespace("edgeR", quietly = TRUE)
-has_limma <- requireNamespace("limma", quietly = TRUE)
-can_run <- has_seurat && has_edb && has_brms && has_edger && has_limma
+can_run <- requireNamespace("Seurat", quietly = TRUE) &&
+  requireNamespace("org.Hs.eg.db", quietly = TRUE) &&
+  requireNamespace("AnnotationDbi", quietly = TRUE) &&
+  requireNamespace("brms", quietly = TRUE) &&
+  requireNamespace("edgeR", quietly = TRUE) &&
+  requireNamespace("limma", quietly = TRUE)
 
 if (requireNamespace("devtools", quietly = TRUE)) {
   pkg_root <- if (file.exists("DESCRIPTION") && dir.exists("R")) {
@@ -70,36 +69,20 @@ if (requireNamespace("devtools", quietly = TRUE)) {
 
 SAVI case study: *ADRB2* (`ENSG00000169252`) in disease-associated monocytes.
 
-This report mirrors
-`vignette("cohort-expression-core", package = "posteriorHCA")`, but
-**exposes the edgeR/limma steps inline** instead of calling posteriorHCA
-helpers for scaling, offsets, fitting, contrast estimation, or SE
-extraction.
-
-Allowed posteriorHCA helpers **before** the HCA expression query:
+Same analysis as `vignette("cohort-expression-core")`, but with the
+edgeR / limma steps written out. Only `load_reference_sample()` and
+`merge_with_reference_sample()` are used from posteriorHCA before the HCA
+model query.
 
 ```text
-load_reference_sample()
-merge_with_reference_sample()
+USER + HCA counts
+  → TMMwsp
+  → offset = log(E_user)
+  → glmQLFit → makeContrasts → glmQLFTest
+  → estimate + QLF SE
+  → + log(E_HCA)
+  → compare to HCA posterior
 ```
-
-Everything else on the USER side is written with ordinary `edgeR`,
-`limma`, and base R. The purpose is diagnostic:
-
-> If we remove posteriorHCA's edgeR helper abstractions, what is the
-> simplest transparent sequence of native edgeR/limma calls that
-> reproduces our scaling, USER model fitting, contrast estimate, and the
-> proposed `glmQLFTest()`-derived uncertainty?
-
-Workflow:
-
-1. Load / merge one HCA reference library with USER counts
-2. Joint TMMwsp scaling (explicit `calcNormFactors`)
-3. USER-only regression with `offset = log(E_user)`
-4. `model.matrix()` → `glmQLFit()` → `makeContrasts()` → `glmQLFTest()`
-5. Natural-log estimate + QLF-implied SE; shift absolute estimand by
-   `log(E_HCA)`
-6. HCA posterior query and `welch_test_means()` (same as the core report)
 
 ## Setup
 
@@ -112,351 +95,173 @@ library(edgeR)
 library(limma)
 
 cell_type <- "monocytic"
-gene_ensg <- "ENSG00000169252"
+gene <- "ENSG00000169252"
 ```
 
-## Prepare counts with Ensembl gene ids
-
-Same USER dataset and metadata as the core-function report.
+## Counts
 
 ```{r load-savi-mono, eval = can_run}
 data(savi_mono)
 
-user_counts <- as.matrix(Seurat::GetAssayData(savi_mono, layer = "counts"))
-mapped <- AnnotationDbi::mapIds(
+counts <- as.matrix(Seurat::GetAssayData(savi_mono, layer = "counts"))
+ensembl <- AnnotationDbi::mapIds(
   org.Hs.eg.db,
-  keys = rownames(user_counts),
+  keys = rownames(counts),
   column = "ENSEMBL",
   keytype = "SYMBOL",
   multiVals = "first"
 )
-keep <- !is.na(mapped) & !duplicated(mapped)
-user_counts <- user_counts[keep, , drop = FALSE]
-rownames(user_counts) <- unname(mapped[keep])
+ok <- !is.na(ensembl) & !duplicated(ensembl)
+counts <- counts[ok, , drop = FALSE]
+rownames(counts) <- unname(ensembl[ok])
 
-sample_metadata <- data.frame(
-  Category = factor(savi_mono$Category[colnames(user_counts)]),
-  Experiment = factor(savi_mono$Experiment[colnames(user_counts)]),
-  row.names = colnames(user_counts),
-  stringsAsFactors = FALSE
+meta <- data.frame(
+  Category = factor(savi_mono$Category[colnames(counts)]),
+  Experiment = factor(savi_mono$Experiment[colnames(counts)]),
+  row.names = colnames(counts)
 )
-
-dim(user_counts)
-table(sample_metadata$Category, sample_metadata$Experiment)
+table(meta$Category, meta$Experiment)
 ```
 
-## Reference preparation (posteriorHCA)
+## HCA reference
 
 ```{r reference, eval = can_run}
-reference <- load_reference_sample(cell_type)
-reference$sample_id
-length(reference$counts)
+ref <- load_reference_sample(cell_type)
+ref_id <- ref$sample_id
 
-counts_joint <- merge_with_reference_sample(
-  user_counts,
-  reference = reference$counts,
-  reference_name = reference$sample_id
+counts <- merge_with_reference_sample(
+  counts,
+  reference = ref$counts,
+  reference_name = ref_id
 )
-
-reference_name <- reference$sample_id
-dim(counts_joint)
-setdiff(colnames(counts_joint), colnames(user_counts))
 ```
 
-The HCA reference is added only so joint TMM can put USER and HCA libraries
-on a common scale. It must not enter the USER regression.
+The reference is only for joint TMM. Drop it before fitting.
 
-## Explicit joint TMMwsp scaling
+## TMMwsp scaling
 
-Same default method as `calculate_tmm_scaling()` (`method = "TMMwsp"`).
+```{r scale, eval = can_run}
+nf <- calcNormFactors(counts, refColumn = match(ref_id, colnames(counts)), method = "TMMwsp")
+eff <- colSums(counts) * nf
 
-```{r scale-native, eval = can_run}
-ref_col <- match(reference_name, colnames(counts_joint))
-
-norm_factors <- edgeR::calcNormFactors(
-  counts_joint,
-  refColumn = ref_col,
-  method = "TMMwsp"
-)
-
-library_size <- colSums(counts_joint)
-effective_size <- library_size * norm_factors
-
-E_hca <- unname(effective_size[[reference_name]])
-user_names <- setdiff(colnames(counts_joint), reference_name)
-E_user <- effective_size[user_names]
-log_E_user <- log(E_user)
-log_E_hca <- log(E_hca)
-
-data.frame(
-  sample = c(user_names, reference_name),
-  library_size = c(library_size[user_names], library_size[[reference_name]]),
-  norm_factor = c(norm_factors[user_names], norm_factors[[reference_name]]),
-  effective_size = c(E_user, E_hca),
-  role = c(rep("user", length(user_names)), "hca_reference"),
-  row.names = NULL
-)
-c(E_hca = E_hca, log_E_hca = log_E_hca)
+user <- setdiff(colnames(counts), ref_id)
+log_E <- log(eff[user])
+log_E_hca <- log(eff[[ref_id]])
 ```
 
-## USER regression excludes the HCA reference
+## USER model
 
-```{r user-only, eval = can_run}
-counts_fit <- counts_joint[, user_names, drop = FALSE]
-metadata_fit <- sample_metadata[user_names, , drop = FALSE]
-stopifnot(identical(colnames(counts_fit), rownames(metadata_fit)))
+```{r fit, eval = can_run}
+y <- counts[, user, drop = FALSE]
+meta <- meta[user, , drop = FALSE]
 
-offset_mat <- matrix(
-  log_E_user[colnames(counts_fit)],
-  nrow = nrow(counts_fit),
-  ncol = ncol(counts_fit),
-  byrow = TRUE
-)
-dim(offset_mat)
-range(offset_mat[1, ] - log_E_user[colnames(counts_fit)])
-```
-
-Offset is `log(E_user)`. No `scaleOffset()`, and USER offsets are not
-centred around `E_hca`.
-
-## Design matrix
-
-Primary design matches the core report's SAVI group-mean estimand used in
-Welch comparison: one mean per `Category`.
-
-```{r design, eval = can_run}
-design <- model.matrix(~ 0 + Category, data = metadata_fit)
+offset <- matrix(log_E, nrow = nrow(y), ncol = ncol(y), byrow = TRUE)
+design <- model.matrix(~ 0 + Category, data = meta)
 colnames(design)
-head(design)
-```
 
-## Fit with `glmQLFit()` (edgeR v4 QL)
+fit <- glmQLFit(y, design = design, offset = offset, prior.count = 0, robust = TRUE)
 
-The current non-legacy edgeR v4 QL workflow estimates the NB dispersion
-internally in `glmQLFit()`, while gene-specific variability is represented
-through moderated quasi-dispersions (`s2.post`). No separate
-`estimateDisp()` call. `prior.count = 0` matches the package helper on
-Bioconductor release edgeR.
-
-```{r glmqlfit, eval = can_run}
-ql_args <- list(
-  y = counts_fit,
-  design = design,
-  offset = offset_mat,
-  robust = TRUE
-)
-if (utils::packageVersion("edgeR") < "4.99.0") {
-  ql_args$prior.count <- 0
-}
-fit <- do.call(edgeR::glmQLFit, ql_args)
-
-c(
-  n_genes = nrow(fit),
-  n_coef = ncol(fit$coefficients),
-  nb_dispersion = unname(as.numeric(fit$dispersion)[[1]]),
-  average_ql_dispersion = unname(as.numeric(fit$average.ql.dispersion)[[1]])
-)
-```
-
-## Contrast: absolute SAVI group mean
-
-```{r contrast, eval = can_run}
-contrast <- limma::makeContrasts(
-  CategorySAVI,
-  levels = design
-)
-stopifnot(ncol(contrast) == 1L)
+contrast <- makeContrasts(CategorySAVI, levels = design)
 contrast
 ```
 
-Interpretation: under `~ 0 + Category`, `CategorySAVI` is the absolute
-normalized log mean for the SAVI group (not a difference, and not a
-marginal mean over Experiment).
+`CategorySAVI` is the absolute SAVI group log mean under `~ 0 + Category`.
 
-## `glmQLFTest()` → estimate + QLF-implied SE
+## Estimate and QLF-implied SE
 
-```{r glmqlftest, eval = can_run}
-qlf <- edgeR::glmQLFTest(fit, contrast = contrast)
+`glmQLFTest()` reports `logFC` on the log2 scale. Convert to natural log.
+The SE below is implied by the one-dimensional QL F statistic, not a
+coefficient-covariance SE.
 
-# logFC is log2; convert to natural log used by posteriorHCA.
-estimate_ln <- qlf$table$logFC * log(2)
+```{r qlf, eval = can_run}
+qlf <- glmQLFTest(fit, contrast = contrast)
+tab <- qlf$table[gene, ]
 
-# QLF-implied effective SE from the one-dimensional moderated QL F statistic.
-# Not an exact coefficient-covariance SE; compatibility with Bayesian
-# posterior SD is being evaluated separately.
-se_ln <- abs(qlf$table$logFC) / sqrt(qlf$table$F) * log(2)
+estimate <- tab$logFC * log(2)
+se_qlf <- abs(tab$logFC) / sqrt(tab$F) * log(2)
 
-user_result <- data.frame(
-  gene = rownames(qlf$table),
-  estimate = estimate_ln,
-  se = se_ln,
-  F = qlf$table$F,
-  PValue = qlf$table$PValue,
-  stringsAsFactors = FALSE
-)
+# Absolute estimand → place on HCA scale (SE unchanged).
+log_mu <- estimate + log_E_hca
+n_savi <- sum(meta$Category == "SAVI")
 
-user_gene <- user_result[user_result$gene == gene_ensg, , drop = FALSE]
-user_gene
+data.frame(gene, estimate, log_mu, se_qlf, n = n_savi)
 ```
 
-## Shift absolute estimand to the HCA scale
+## Package Wald SE (for comparison)
 
-Valid here because `CategorySAVI` is an **absolute** estimand. Do not add
-`log(E_hca)` to a relative difference contrast.
-
-```{r hca-scale, eval = can_run}
-user_gene$log_mu <- user_gene$estimate + log_E_hca
-user_gene$mu <- exp(user_gene$log_mu)
-user_gene$se_log_mu <- user_gene$se
-
-n_savi <- sum(metadata_fit$Category == "SAVI")
-user_log_mu <- user_gene$log_mu
-user_se <- user_gene$se_log_mu
-
-c(log_mu = user_log_mu, se = user_se, n = n_savi)
-user_gene[, c("gene", "estimate", "log_mu", "mu", "se", "se_log_mu")]
-```
-
-
-## Diagnostic comparison with the core-function helpers
-
-The block below calls posteriorHCA helpers **only** for side-by-side
-diagnostics. The native path above does not depend on them.
-
-```{r compare-core, eval = can_run}
-scaling_pkg <- calculate_tmm_scaling(
-  counts_joint,
-  reference_name = reference_name
-)
-
-core_est <- estimate_ql(
-  counts = counts_fit,
-  offset = log_E_user[colnames(counts_fit)],
-  metadata = metadata_fit,
+```{r wald, eval = can_run}
+wald <- estimate_ql(
+  counts = y,
+  offset = log_E,
+  metadata = meta,
   formula = ~ 0 + Category,
   contrast = "CategorySAVI"
 )
-core_est <- core_est[core_est$gene == gene_ensg, , drop = FALSE]
+wald <- wald[wald$gene == gene, ]
+se_wald <- wald$se
 
-scaling_check <- data.frame(
-  quantity = c("E_hca", "mean_E_user", "log_E_hca"),
-  native = c(E_hca, mean(E_user), log_E_hca),
-  package = c(
-    scaling_pkg$hca_effective_library_size,
-    mean(scaling_pkg$effective_size[user_names]),
-    scaling_pkg$hca_log_effective_library_size
-  )
+data.frame(
+  estimate_qlf = estimate,
+  estimate_wald = wald$estimate,
+  se_qlf,
+  se_wald,
+  se_ratio = se_qlf / se_wald
 )
-scaling_check$diff <- scaling_check$native - scaling_check$package
-scaling_check
-
-comparison <- data.frame(
-  gene = gene_ensg,
-  estimate_native_qlf = user_gene$estimate,
-  estimate_core_wald = core_est$estimate,
-  estimate_diff = user_gene$estimate - core_est$estimate,
-  log_mu_native = user_gene$log_mu,
-  log_mu_core = core_est$estimate + scaling_pkg$hca_log_effective_library_size,
-  SE_QLF = user_gene$se,
-  SE_Wald_core = core_est$se,
-  SE_QLF_over_SE_Wald = user_gene$se / core_est$se,
-  stringsAsFactors = FALSE
-)
-comparison
 ```
-
-Scaling and the natural-log point estimate should agree (same counts,
-reference, TMMwsp, design, contrast, and `prior.count = 0`). The SE ratio
-is diagnostic: QLF-implied SE versus the package Wald / `c'Vc` SE need not
-be equal.
 
 ## HCA posterior
 
-Same query as the core-function report (healthy blood, 10x Genomics 3).
-The USER estimand is the SAVI Category mean under `~ 0 + Category` (no
-Experiment conditioning). The HCA query is a healthy baseline for the same
-cell type / gene; it is not conditioned on USER Experiment levels.
-
 ```{r hca, eval = can_run}
-expression_fit <- load_expression_fit(
-  cell_type = cell_type,
-  gene_ensg = gene_ensg
-)
-
+fit_hca <- load_expression_fit(cell_type = cell_type, gene_ensg = gene)
 newdata <- build_newdata_grid(
-  expression_fit,
+  fit_hca,
   disease_groups = "Normal",
   tissue_groups = "blood",
   assay_groups = "10x Genomics 3"
 )
-
-posterior_draws <- expression_draws(
-  expression_fit,
-  newdata = newdata,
-  quantity = "linpred",
-  collapse = "mean"
-)
+draws <- expression_draws(fit_hca, newdata = newdata, quantity = "linpred", collapse = "mean")
+hca <- summarize_posterior_draws(draws, value = log_mu)
 ```
 
-## Comparison
+## Welch tests
 
-Welch tests of the same SAVI `log_mu` against the HCA posterior, using
-either the QLF-implied SE (native path) or the Wald / `c'Vc` SE (core
-helper). Point estimates match; only the SE changes.
+Same `log_mu`, two SEs.
 
 ```{r welch, eval = can_run}
-posterior_summary <- summarize_posterior_draws(
-  posterior_draws,
-  value = user_log_mu
+welch_qlf <- welch_test_means(
+  mu1 = log_mu, se1 = se_qlf,
+  mu2 = hca$log_mu, se2 = hca$se,
+  n1 = n_savi, n2 = hca$n
+)
+welch_wald <- welch_test_means(
+  mu1 = log_mu, se1 = se_wald,
+  mu2 = hca$log_mu, se2 = hca$se,
+  n1 = n_savi, n2 = hca$n
 )
 
-user_log_mu_core <- core_est$estimate + log_E_hca
-user_se_core <- core_est$se
-
-test_qlf <- welch_test_means(
-  mu1 = user_log_mu,
-  se1 = user_se,
-  mu2 = posterior_summary$log_mu,
-  se2 = posterior_summary$se,
-  n1 = n_savi,
-  n2 = posterior_summary$n
-)
-test_wald <- welch_test_means(
-  mu1 = user_log_mu_core,
-  se1 = user_se_core,
-  mu2 = posterior_summary$log_mu,
-  se2 = posterior_summary$se,
-  n1 = n_savi,
-  n2 = posterior_summary$n
-)
-
-test_results <- data.frame(
-  group = c("SAVI (QLF SE)", "SAVI (Wald SE)"),
+cohort <- data.frame(
+  group = c("QLF SE", "Wald SE"),
   n = n_savi,
-  log_mu = c(test_qlf$mu1, test_wald$mu1),
-  se = c(test_qlf$se1, test_wald$se1),
-  hca_log_mu = c(test_qlf$mu2, test_wald$mu2),
-  hca_se = c(test_qlf$se2, test_wald$se2),
-  p_value = c(test_qlf$p_value, test_wald$p_value),
-  stringsAsFactors = FALSE
+  log_mu = log_mu,
+  se = c(se_qlf, se_wald),
+  hca_log_mu = hca$log_mu,
+  hca_se = hca$se,
+  p_value = c(welch_qlf$p_value, welch_wald$p_value)
 )
-test_results
+cohort
 ```
 
 ## Plots
 
 ```{r plot-hca, eval = can_run, fig.asp = 0.7}
-plot_hca_draws(
-  draws = posterior_draws,
-  subtitle = "Normal, 10x Genomics 3 healthy baseline"
-)
+plot_hca_draws(draws, subtitle = "Normal, 10x Genomics 3")
 ```
 
 ```{r plot-cohort, eval = can_run, fig.asp = 0.7}
 plot_cohort_vs_hca(
-  hca_draws = posterior_draws,
-  cohort_est = test_results,
-  subtitle = "SAVI mean: QLF-implied SE vs Wald / c'Vc SE",
+  hca_draws = draws,
+  cohort_est = cohort,
+  subtitle = "SAVI mean: QLF SE vs Wald SE",
   annotate = c("group", "p_value")
 )
 ```
