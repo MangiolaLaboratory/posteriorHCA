@@ -22,7 +22,8 @@ set of convenience **wrappers** built directly on those cores.
 |------|-------|----------|
 | Concise wrapper workflow | `~ 0 + Category` group means | `vignette("cohort-expression-wrappers")` |
 | Transparent core workflow | optional edgeR `formula` + `contrast` helper | `vignette("cohort-expression-core")` |
-| Native edgeR diagnostic | explicit `calcNormFactors` / `glmQLFit` / `glmQLFTest` | `vignette("cohort-expression-edger-native")` |
+| Native edgeR diagnostic | explicit `calcNormFactors` / `glmQLFit` / `glmQLFTest` (QLF SE) | `vignette("cohort-expression-edger-native")` |
+| edgeR + brms test | native QLF plus user-side NB / ZINB | `vignette("cohort-expression-brms-test")` |
 
 Matching script: `examples/savi_adrb2_workflow.R` (core path).
 

@@ -8,7 +8,7 @@ expression_draws(
   fit,
   newdata,
   quantity = c("linpred", "predict", "epred"),
-  collapse = c("mean", "pool", "sample"),
+  marginalise = c("mean", "pool", "sample"),
   ndraws = NULL,
   transform = FALSE,
   re_formula = NULL,
@@ -24,8 +24,22 @@ expression_draws(
 
 \item{quantity}{`"linpred"` (log μ), `"predict"`, or `"epred"`.}
 
-\item{collapse}{How to combine several grid rows: `"mean"`, `"pool"`,
-or `"sample"`.}
+\item{marginalise}{How to reduce several `newdata` rows (covariate
+profiles) to one draw vector. In the Bayesian sense, leaving covariates
+free in [build_newdata_grid()] expands a grid over those levels; this
+argument then \strong{marginalises} over that grid so the returned draws
+represent a baseline that is not conditioned on a single profile.
+Options:
+\describe{
+\item{`"mean"`}{For each posterior draw, average the predicted
+quantity across grid rows. Interprets every profile as equally
+weighted; typical default for a single comparable baseline.}
+\item{`"pool"`}{Concatenate (stack) predictions from all grid rows.
+Keeps between-profile spread in the returned vector.}
+\item{`"sample"`}{For each posterior draw, pick one grid row at
+random. Approximates a discrete mixture over profiles.}
+}
+When `newdata` has a single row, all three options are equivalent.}
 
 \item{ndraws}{Number of posterior draws, or `NULL` for all.}
 
@@ -36,7 +50,7 @@ or `"sample"`.}
 \item{seed}{Optional RNG seed.}
 }
 \value{
-A list with `draws`, `grid`, `quantity`, `collapse`, `n_grid`,
+A list with `draws`, `grid`, `quantity`, `marginalise`, `n_grid`,
   `cell_type`, and `gene_ensg`.
 }
 \description{

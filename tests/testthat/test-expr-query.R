@@ -134,7 +134,7 @@ test_that("expression_baseline_draws matches build_newdata_grid + expression_dra
     fit,
     newdata,
     quantity = c("linpred", "predict", "epred"),
-    collapse = c("mean", "pool", "sample"),
+    marginalise = c("mean", "pool", "sample"),
     ndraws = NULL,
     transform = FALSE,
     re_formula = NULL,
@@ -143,12 +143,12 @@ test_that("expression_baseline_draws matches build_newdata_grid + expression_dra
     seed = NULL
   ) {
     quantity <- match.arg(quantity)
-    collapse <- match.arg(collapse)
+    marginalise <- match.arg(marginalise)
     list(
       draws = rep(as.numeric(if (is.null(seed)) 0 else seed), nrow(newdata)),
       grid = newdata,
       quantity = quantity,
-      collapse = collapse,
+      marginalise = marginalise,
       n_grid = nrow(newdata),
       cell_type = NA_character_,
       gene_ensg = NA_character_
@@ -174,7 +174,7 @@ test_that("expression_baseline_draws matches build_newdata_grid + expression_dra
     fit,
     newdata = grid,
     quantity = "linpred",
-    collapse = "mean",
+    marginalise = "mean",
     seed = 42
   )
 

@@ -10,7 +10,10 @@ plot_hca_draws(
   baseline_label = "Healthy HCA",
   fill = "#4C78A8",
   title = NULL,
-  subtitle = NULL
+  subtitle = NULL,
+  query_mu = NULL,
+  query_SE = NULL,
+  query_label = NULL
 )
 }
 \arguments{
@@ -27,11 +30,21 @@ plot_hca_draws(
 \item{title}{Plot title. Default is built from gene / cell-type metadata.}
 
 \item{subtitle}{Optional subtitle.}
+
+\item{query_mu}{Optional numeric vector of cohort log(mu) estimates to
+overlay. Requires `quantity = "linpred"`.}
+
+\item{query_SE}{Optional numeric vector of SEs for `query_mu` (same length,
+or length 1 recycled). Drawn as horizontal error bars when finite.}
+
+\item{query_label}{Optional character labels for `query_mu` (same length,
+or length 1 recycled). Defaults to `"query"`, `"query2"`, ...}
 }
 \value{
 A `ggplot` object.
 }
 \description{
-Visualises posterior draws from [expression_draws()]. For cohort
-comparisons against a healthy baseline, use [plot_cohort_vs_hca()].
+Visualises posterior draws from [expression_draws()]. Optional
+`query_mu` / `query_SE` / `query_label` overlay cohort point estimates
+on the same density.
 }

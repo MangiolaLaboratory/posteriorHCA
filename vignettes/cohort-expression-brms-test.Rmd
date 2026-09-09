@@ -1,0 +1,437 @@
+---
+title: "Cohort expression workflow (brms test)"
+author: "Chen Zhan"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Cohort expression workflow (brms test)}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+params:
+  for_github_md: false
+knit: >
+    (function(x, ...){
+        proj_root <- rprojroot::find_package_root_file() |> normalizePath()
+        rmarkdown::render(
+            x,
+            output_file = "cohort-expression-brms-test.md",
+            output_format = "github_document",
+            output_dir = file.path(proj_root, "vignettes"),
+            knit_root_dir = proj_root,
+            params = list(for_github_md = TRUE),
+            envir = new.env(parent = globalenv())
+        )
+        rmarkdown::render(
+            x,
+            output_format = "rmarkdown::html_vignette",
+            params = list(for_github_md = FALSE),
+            envir = new.env(parent = globalenv())
+        )
+    })
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.width = 7,
+  fig.height = 4.5,
+  message = FALSE,
+  warning = FALSE
+)
+
+if (isTRUE(params$for_github_md)) {
+  root_dir <- knitr::opts_knit$get("root.dir")
+  if (!is.null(root_dir)) {
+    knitr::opts_knit$set(output.dir = file.path(root_dir, "vignettes"))
+  }
+  knitr::opts_chunk$set(fig.path = "cohort-expression-brms-test_files/figure-gfm/")
+}
+
+can_run <- requireNamespace("Seurat", quietly = TRUE) &&
+  requireNamespace("org.Hs.eg.db", quietly = TRUE) &&
+  requireNamespace("AnnotationDbi", quietly = TRUE) &&
+  requireNamespace("brms", quietly = TRUE) &&
+  requireNamespace("edgeR", quietly = TRUE) &&
+  requireNamespace("limma", quietly = TRUE)
+
+has_cmdstan <- requireNamespace("cmdstanr", quietly = TRUE) &&
+  isTRUE(tryCatch({
+    cmdstanr::cmdstan_version(error_on_NA = TRUE)
+    TRUE
+  }, error = function(e) FALSE))
+
+can_fit_brms <- can_run && has_cmdstan
+
+if (requireNamespace("devtools", quietly = TRUE)) {
+  pkg_root <- if (file.exists("DESCRIPTION") && dir.exists("R")) {
+    normalizePath(".")
+  } else if (file.exists("../DESCRIPTION") && dir.exists("../R")) {
+    normalizePath("..")
+  } else {
+    NULL
+  }
+  if (!is.null(pkg_root)) {
+    devtools::load_all(pkg_root, quiet = TRUE)
+  }
+}
+```
+
+SAVI case study: *ADRB2* (`ENSG00000169252`) in disease-associated monocytes.
+
+Same analysis as `vignette("cohort-expression-edger-native")`, with an extra
+user-side Bayesian step: fit `brms` negative binomial (NB) and
+zero-inflated NB (ZINB) models on the same formula / offset as edgeR, then
+summarise SAVI `posterior_linpred` draws exactly as the HCA baseline path
+does (`mean` → `log_mu`, `sd` → `se`).
+
+```text
+USER + HCA counts
+  → TMMwsp
+  → offset = log(E_user)
+  → edgeR: glmQLFit → CategorySAVI → QLF SE / package Wald SE
+  → brms NB / ZINB: counts ~ 1 + Category + offset(hca_offset)
+  → linpred(newdata = SAVI, ndraws = 400) → log_mu, se
+  → + log(E_HCA) for edgeR absolute scale
+  → compare all estimates to HCA posterior
+```
+
+`brms` fitting chunks require `cmdstanr` with a working CmdStan
+installation. Without that, the edgeR comparison still runs.
+
+## Setup
+
+```{r libraries, eval = can_run}
+library(posteriorHCA)
+library(Seurat)
+library(AnnotationDbi)
+library(org.Hs.eg.db)
+library(edgeR)
+library(limma)
+library(brms)
+library(dplyr)
+library(forcats)
+library(tibble)
+
+cell_type <- "monocytic"
+gene <- "ENSG00000169252"
+n_chains <- 2L
+n_warmup <- 400L
+n_iter <- 600L
+n_linpred_draws <- 400L
+```
+
+## Counts
+
+```{r load-savi-mono, eval = can_run}
+data(savi_mono)
+
+counts <- as.matrix(Seurat::GetAssayData(savi_mono, layer = "counts"))
+ensembl <- AnnotationDbi::mapIds(
+  org.Hs.eg.db,
+  keys = rownames(counts),
+  column = "ENSEMBL",
+  keytype = "SYMBOL",
+  multiVals = "first"
+)
+ok <- !is.na(ensembl) & !duplicated(ensembl)
+counts <- counts[ok, , drop = FALSE]
+rownames(counts) <- unname(ensembl[ok])
+
+meta <- data.frame(
+  Category = factor(savi_mono$Category[colnames(counts)]),
+  Experiment = factor(savi_mono$Experiment[colnames(counts)]),
+  row.names = colnames(counts)
+)
+table(meta$Category, meta$Experiment)
+```
+
+## HCA reference
+
+```{r reference, eval = can_run}
+ref <- load_reference_sample(cell_type)
+ref_id <- ref$sample_id
+
+counts <- merge_with_reference_sample(
+  counts,
+  reference = ref$counts,
+  reference_name = ref_id
+)
+```
+
+The reference is only for joint TMM. Drop it before fitting.
+
+## TMMwsp scaling
+
+```{r scale, eval = can_run}
+nf <- calcNormFactors(counts, refColumn = match(ref_id, colnames(counts)), method = "TMMwsp")
+eff <- colSums(counts) * nf
+
+user <- setdiff(colnames(counts), ref_id)
+log_E <- log(eff[user])
+log_E_hca <- log(eff[[ref_id]])
+hca_offset <- log(eff[user] / eff[[ref_id]])
+```
+
+## USER edgeR model
+
+```{r fit-edger, eval = can_run}
+y <- counts[, user, drop = FALSE]
+meta <- meta[user, , drop = FALSE] |>
+  mutate(Category = fct_relevel(Category, "CTRL"))
+
+offset <- matrix(log_E, nrow = nrow(y), ncol = ncol(y), byrow = TRUE)
+design <- model.matrix(~ 1 + Category, data = meta)
+colnames(design)
+
+fit <- glmQLFit(y, design = design, offset = offset, prior.count = 0, robust = TRUE)
+
+contrast <- makeContrasts('(Intercept) + CategorySAVI', levels = design)
+contrast
+```
+
+`CategorySAVI` is the SAVI effect under `~ 1 + Category` (CTRL reference).
+
+## Estimate and QLF-implied SE
+
+`glmQLFTest()` reports `logFC` on the log2 scale. Convert to natural log.
+The SE below is implied by the one-dimensional QL F statistic, not a
+coefficient-covariance SE.
+
+```{r qlf, eval = can_run}
+qlf <- glmQLFTest(fit, contrast = contrast)
+tab <- qlf$table[gene, ]
+
+estimate <- tab$logFC * log(2)
+se_qlf <- abs(tab$logFC) / sqrt(tab$F) * log(2)
+
+# Absolute estimand → place on HCA scale (SE unchanged).
+log_mu <- estimate + log_E_hca
+n_savi <- sum(meta$Category == "SAVI")
+beta_start <- as.numeric(fit$coefficients[gene, ])
+
+data.frame(gene, estimate, log_mu, se_qlf, n = n_savi)
+```
+
+## Package Wald SE (for comparison)
+
+```{r wald, eval = can_run}
+wald <- estimate_ql(
+  counts = y,
+  offset = log_E,
+  metadata = meta,
+  formula = ~ 1 + Category,
+  contrast = "CategorySAVI"
+)
+wald <- wald[wald$gene == gene, ]
+se_wald <- wald$se
+
+data.frame(
+  estimate_qlf = estimate,
+  estimate_wald = wald$estimate,
+  se_qlf,
+  se_wald,
+  se_ratio = se_qlf / se_wald
+)
+```
+
+## USER brms models (NB and ZINB)
+
+Same mean structure as edgeR: `~ 1 + Category` with posteriorHCA offset.
+
+```{r brms-data, eval = can_fit_brms}
+df_gene <- data.frame(
+  counts = as.integer(y[gene, ]),
+  Category = meta$Category,
+  hca_offset = as.numeric(hca_offset),
+  row.names = colnames(y)
+) |>
+  mutate(Category = fct_relevel(Category, "CTRL"))
+
+make_inits <- function(zi = FALSE) {
+  force(zi)
+  function(chain_id = 1) {
+    set.seed(1000L + as.integer(chain_id) + if (zi) 50L else 0L)
+    out <- list(
+      b = as.array(beta_start + stats::rnorm(length(beta_start), 0, 0.05)),
+      shape = max(5 + stats::rnorm(1, 0, 0.1), 0.5)
+    )
+    if (isTRUE(zi)) {
+      out$Intercept_zi <- -2 + stats::rnorm(1, 0, 0.1)
+    }
+    out
+  }
+}
+
+inits <- make_inits(zi = FALSE)
+inits_zi <- make_inits(zi = TRUE)
+
+form_nb <- counts ~ 1 + Category + offset(hca_offset)
+form_zinb <- brms::bf(counts ~ 1 + Category + offset(hca_offset), zi ~ 1)
+```
+
+```{r fit-brms-nb, eval = can_fit_brms}
+fit_nb <- brms::brm(
+  formula = form_nb,
+  data = df_gene,
+  family = brms::negbinomial(),
+  chains = n_chains,
+  warmup = n_warmup,
+  iter = n_iter,
+  refresh = 10,
+  backend = "cmdstanr",
+  seed = 1
+)
+fit_nb
+```
+
+```{r fit-brms-zinb, eval = can_fit_brms}
+fit_zinb <- brms::brm(
+  formula = form_zinb,
+  data = df_gene,
+  family = brms::zero_inflated_negbinomial(),
+  chains = n_chains,
+  warmup = n_warmup,
+  iter = n_iter,
+  refresh = 10,
+  backend = "cmdstanr",
+  seed = 2
+)
+fit_zinb
+```
+
+### SAVI linpred → log_mu / se
+
+Mirror the HCA baseline path: `posterior_linpred` (latent log μ), then
+`summarize_posterior_draws()` (`mean` / `sd`). Query SAVI at `hca_offset = 0`.
+
+```{r brms-linpred, eval = can_fit_brms}
+summarise_savi_linpred <- function(fit, newdata, ndraws) {
+  draws_mat <- brms::posterior_linpred(
+    fit,
+    newdata = newdata,
+    transform = FALSE,
+    ndraws = ndraws
+  )
+  draws <- as.numeric(draws_mat)
+  summarize_posterior_draws(draws)
+}
+
+newdata_brms <- list(Category = "SAVI", hca_offset = 0) |> as_tibble()
+
+nb_savi <- summarise_savi_linpred(fit_nb, newdata_brms, n_linpred_draws)
+zinb_savi <- summarise_savi_linpred(fit_zinb, newdata_brms, n_linpred_draws)
+
+data.frame(
+  method = c("brms NB", "brms ZINB"),
+  log_mu = c(nb_savi$log_mu, zinb_savi$log_mu),
+  se = c(nb_savi$se, zinb_savi$se),
+  n_draws = c(nb_savi$n, zinb_savi$n)
+)
+```
+
+```{r brms-skip-note, eval = !can_fit_brms, echo = FALSE, results = "asis"}
+cat(
+  "> **Note:** `cmdstanr` / CmdStan was not available, so NB and ZINB ",
+  "`brms` fits were skipped. Install CmdStan via `cmdstanr` to run those ",
+  "chunks locally.\n"
+)
+```
+
+## HCA posterior
+
+```{r hca, eval = can_run}
+fit_hca <- load_expression_fit(cell_type = cell_type, gene_ensg = gene)
+newdata <- build_newdata_grid(
+  fit_hca,
+  disease_groups = "Normal",
+  tissue_groups = "blood",
+  assay_groups = "10x Genomics 3"
+)
+draws <- expression_draws(fit_hca, newdata = newdata, quantity = "linpred", marginalise = "mean")
+hca <- summarize_posterior_draws(draws, value = log_mu)
+```
+
+## Welch tests (all methods)
+
+Same HCA baseline; cohort rows differ by estimator / SE.
+
+```{r welch, eval = can_run}
+welch_one <- function(mu1, se1) {
+  welch_test_means(
+    mu1 = mu1, se1 = se1,
+    mu2 = hca$log_mu, se2 = hca$se,
+    n1 = n_savi, n2 = hca$n
+  )
+}
+
+cohort <- data.frame(
+  group = c("edgeR QLF", "edgeR Wald"),
+  n = n_savi,
+  log_mu = c(log_mu, log_mu),
+  se = c(se_qlf, se_wald),
+  hca_log_mu = hca$log_mu,
+  hca_se = hca$se,
+  p_value = c(
+    welch_one(log_mu, se_qlf)$p_value,
+    welch_one(log_mu, se_wald)$p_value
+  )
+)
+
+if (isTRUE(can_fit_brms)) {
+  cohort <- rbind(
+    cohort,
+    data.frame(
+      group = c("brms NB", "brms ZINB"),
+      n = n_savi,
+      log_mu = c(nb_savi$log_mu, zinb_savi$log_mu),
+      se = c(nb_savi$se, zinb_savi$se),
+      hca_log_mu = hca$log_mu,
+      hca_se = hca$se,
+      p_value = c(
+        welch_one(nb_savi$log_mu, nb_savi$se)$p_value,
+        welch_one(zinb_savi$log_mu, zinb_savi$se)$p_value
+      )
+    )
+  )
+}
+
+cohort
+```
+
+## Plots
+
+```{r plot-hca, eval = can_run, fig.asp = 0.7}
+plot_hca_draws(
+  draws,
+  query_mu = cohort$log_mu,
+  query_SE = cohort$se,
+  query_label = as.character(cohort$group)
+)
+```
+
+Point estimates and SEs side by side:
+
+```{r plot-estimates, eval = can_run, fig.asp = 0.55}
+cohort$group <- factor(cohort$group, levels = cohort$group)
+ggplot2::ggplot(cohort, ggplot2::aes(x = log_mu, y = group)) +
+  ggplot2::geom_vline(xintercept = hca$log_mu, linetype = 2, colour = "#4C78A8") +
+  ggplot2::geom_errorbarh(
+    ggplot2::aes(xmin = log_mu - se, xmax = log_mu + se),
+    height = 0.2
+  ) +
+  ggplot2::geom_point(size = 2.5) +
+  ggplot2::labs(
+    title = paste(gene, "SAVI log(mu) estimators"),
+    subtitle = "Dashed line: healthy HCA posterior mean",
+    x = "log(mu)",
+    y = NULL
+  ) +
+  ggplot2::theme_bw()
+```
+
+## Session info
+
+```{r session-info}
+sessionInfo()
+```

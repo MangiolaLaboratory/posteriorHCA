@@ -18,7 +18,7 @@ expression_baseline_draws(
   offset = 0,
   new_study_id = "__new_study__",
   quantity = c("linpred", "predict", "epred"),
-  collapse = c("mean", "pool", "sample"),
+  marginalise = c("mean", "pool", "sample"),
   ndraws = NULL,
   transform = FALSE,
   re_formula = NULL,
@@ -41,7 +41,7 @@ expression_baseline_draws(
 
 \item{dataset_id, offset, new_study_id}{Passed to [build_newdata_grid()].}
 
-\item{quantity, collapse, ndraws, transform, re_formula, allow_new_levels, sample_new_levels, seed}{Passed to [expression_draws()].}
+\item{quantity, marginalise, ndraws, transform, re_formula, allow_new_levels, sample_new_levels, seed}{Passed to [expression_draws()].}
 
 \item{version}{`"latest"` or a container/version pin (e.g. `"V1"`).}
 

@@ -18,12 +18,14 @@ knit: >
             output_format = "github_document",
             output_dir = file.path(proj_root, "vignettes"),
             knit_root_dir = proj_root,
-            params = list(for_github_md = TRUE)
+            params = list(for_github_md = TRUE),
+            envir = new.env(parent = globalenv())
         )
         rmarkdown::render(
             x,
             output_format = "rmarkdown::html_vignette",
-            params = list(for_github_md = FALSE)
+            params = list(for_github_md = FALSE),
+            envir = new.env(parent = globalenv())
         )
     })
 ---
@@ -96,43 +98,46 @@ library(limma)
 
 cell_type <- "monocytic"
 gene <- "ENSG00000169252"
+ref_name <- "___hca_ref_sample___"
 ```
 
 ## Counts
 
 ```{r load-savi-mono, eval = can_run}
-data(savi_mono)
+data(savi_mono, overwrite = TRUE)
 
 counts <- as.matrix(Seurat::GetAssayData(savi_mono, layer = "counts"))
-ensembl <- AnnotationDbi::mapIds(
-  org.Hs.eg.db,
-  keys = rownames(counts),
-  column = "ENSEMBL",
-  keytype = "SYMBOL",
-  multiVals = "first"
-)
-ok <- !is.na(ensembl) & !duplicated(ensembl)
-counts <- counts[ok, , drop = FALSE]
-rownames(counts) <- unname(ensembl[ok])
+rn <- rownames(counts)
 
-meta <- data.frame(
-  Category = factor(savi_mono$Category[colnames(counts)]),
-  Experiment = factor(savi_mono$Experiment[colnames(counts)]),
-  row.names = colnames(counts)
+if (!all(grepl("^ENSG", rn))) {
+  known <- rn %in% AnnotationDbi::keys(org.Hs.eg.db, keytype = "SYMBOL")
+  counts <- counts[known, , drop = FALSE]
+  ensembl <- AnnotationDbi::mapIds(
+    org.Hs.eg.db,
+    keys = rownames(counts),
+    column = "ENSEMBL",
+    keytype = "SYMBOL",
+    multiVals = "first"
+  )
+  ok <- !is.na(ensembl) & !duplicated(ensembl)
+  counts <- counts[ok, , drop = FALSE]
+  rownames(counts) <- unname(ensembl[ok])
+}
+
+savi_mono <- Seurat::CreateSeuratObject(
+  counts = counts,
+  meta.data = savi_mono@meta.data
 )
-table(meta$Category, meta$Experiment)
 ```
 
 ## HCA reference
 
 ```{r reference, eval = can_run}
 ref <- load_reference_sample(cell_type)
-ref_id <- ref$sample_id
-
 counts <- merge_with_reference_sample(
   counts,
   reference = ref$counts,
-  reference_name = ref_id
+  reference_name = ref_name
 )
 ```
 
@@ -141,28 +146,31 @@ The reference is only for joint TMM. Drop it before fitting.
 ## TMMwsp scaling
 
 ```{r scale, eval = can_run}
-nf <- calcNormFactors(counts, refColumn = match(ref_id, colnames(counts)), method = "TMMwsp")
+nf <- calcNormFactors(
+  counts,
+  refColumn = match(ref_name, colnames(counts)),
+  method = "TMMwsp"
+)
 eff <- colSums(counts) * nf
 
-user <- setdiff(colnames(counts), ref_id)
-log_E <- log(eff[user])
-log_E_hca <- log(eff[[ref_id]])
+log_E <- log(eff[colnames(counts) != ref_name])
+log_E_hca <- log(eff[[ref_name]])
 ```
 
 ## USER model
 
 ```{r fit, eval = can_run}
-y <- counts[, user, drop = FALSE]
-meta <- meta[user, , drop = FALSE]
+y <- counts[, colnames(counts) != ref_name, drop = FALSE]
 
 offset <- matrix(log_E, nrow = nrow(y), ncol = ncol(y), byrow = TRUE)
-design <- model.matrix(~ 0 + Category, data = meta)
-colnames(design)
+design <- model.matrix(
+  ~ 0 + Category,
+  data = savi_mono@meta.data[colnames(y), , drop = FALSE]
+)
 
 fit <- glmQLFit(y, design = design, offset = offset, prior.count = 0, robust = TRUE)
 
 contrast <- makeContrasts(CategorySAVI, levels = design)
-contrast
 ```
 
 `CategorySAVI` is the absolute SAVI group log mean under `~ 0 + Category`.
@@ -175,38 +183,12 @@ coefficient-covariance SE.
 
 ```{r qlf, eval = can_run}
 qlf <- glmQLFTest(fit, contrast = contrast)
-tab <- qlf$table[gene, ]
 
-estimate <- tab$logFC * log(2)
-se_qlf <- abs(tab$logFC) / sqrt(tab$F) * log(2)
+estimate <- qlf$table[gene, "logFC"] * log(2)
+se_qlf <- abs(qlf$table[gene, "logFC"]) / sqrt(qlf$table[gene, "F"]) * log(2)
 
 # Absolute estimand → place on HCA scale (SE unchanged).
 log_mu <- estimate + log_E_hca
-n_savi <- sum(meta$Category == "SAVI")
-
-data.frame(gene, estimate, log_mu, se_qlf, n = n_savi)
-```
-
-## Package Wald SE (for comparison)
-
-```{r wald, eval = can_run}
-wald <- estimate_ql(
-  counts = y,
-  offset = log_E,
-  metadata = meta,
-  formula = ~ 0 + Category,
-  contrast = "CategorySAVI"
-)
-wald <- wald[wald$gene == gene, ]
-se_wald <- wald$se
-
-data.frame(
-  estimate_qlf = estimate,
-  estimate_wald = wald$estimate,
-  se_qlf,
-  se_wald,
-  se_ratio = se_qlf / se_wald
-)
 ```
 
 ## HCA posterior
@@ -219,50 +201,22 @@ newdata <- build_newdata_grid(
   tissue_groups = "blood",
   assay_groups = "10x Genomics 3"
 )
-draws <- expression_draws(fit_hca, newdata = newdata, quantity = "linpred", collapse = "mean")
-hca <- summarize_posterior_draws(draws, value = log_mu)
+draws <- expression_draws(
+  fit_hca,
+  newdata = newdata,
+  quantity = "linpred",
+  marginalise = "mean"
+)
 ```
 
-## Welch tests
-
-Same `log_mu`, two SEs.
-
-```{r welch, eval = can_run}
-welch_qlf <- welch_test_means(
-  mu1 = log_mu, se1 = se_qlf,
-  mu2 = hca$log_mu, se2 = hca$se,
-  n1 = n_savi, n2 = hca$n
-)
-welch_wald <- welch_test_means(
-  mu1 = log_mu, se1 = se_wald,
-  mu2 = hca$log_mu, se2 = hca$se,
-  n1 = n_savi, n2 = hca$n
-)
-
-cohort <- data.frame(
-  group = c("QLF SE", "Wald SE"),
-  n = n_savi,
-  log_mu = log_mu,
-  se = c(se_qlf, se_wald),
-  hca_log_mu = hca$log_mu,
-  hca_se = hca$se,
-  p_value = c(welch_qlf$p_value, welch_wald$p_value)
-)
-cohort
-```
-
-## Plots
+## Plot
 
 ```{r plot-hca, eval = can_run, fig.asp = 0.7}
-plot_hca_draws(draws, subtitle = "Normal, 10x Genomics 3")
-```
-
-```{r plot-cohort, eval = can_run, fig.asp = 0.7}
-plot_cohort_vs_hca(
-  hca_draws = draws,
-  cohort_est = cohort,
-  subtitle = "SAVI mean: QLF SE vs Wald SE",
-  annotate = c("group", "p_value")
+plot_hca_draws(
+  draws,
+  query_mu = log_mu,
+  query_SE = se_qlf,
+  query_label = "SAVI"
 )
 ```
 

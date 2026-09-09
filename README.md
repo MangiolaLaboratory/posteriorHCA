@@ -234,7 +234,7 @@ posterior_draws <- expression_draws(
   expression_fit,
   newdata = newdata,
   quantity = "linpred",
-  collapse = "mean"
+  marginalise = "mean"
 )
 ```
 

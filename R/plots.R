@@ -55,73 +55,6 @@ normalize_draws_input <- function(x, quantity = NULL) {
   )
 }
 
-#' Normalise cohort estimates or test results for plotting
-#' @keywords internal
-#' @noRd
-normalize_cohort_plot_df <- function(
-  cohort_results,
-  exclude_groups = character(0)
-) {
-  if (is.null(cohort_results)) {
-    cli::cli_abort("`cohort_results` is missing.")
-  }
-  if (!is.data.frame(cohort_results) || nrow(cohort_results) == 0L) {
-    cli::cli_abort("`cohort_results` must be a non-empty data frame.")
-  }
-
-  if (!all(c("group", "log_mu") %in% names(cohort_results))) {
-    cli::cli_abort(
-      "`cohort_results` must contain `group` and `log_mu` columns."
-    )
-  }
-
-  out <- data.frame(
-    group = as.character(cohort_results$group),
-    log_mu = as.numeric(cohort_results$log_mu),
-    se = if ("se" %in% names(cohort_results)) {
-      as.numeric(cohort_results$se)
-    } else {
-      NA_real_
-    },
-    method = if ("method" %in% names(cohort_results)) {
-      as.character(cohort_results$method)
-    } else {
-      "ql"
-    },
-    direction = if ("direction" %in% names(cohort_results)) {
-      as.character(cohort_results$direction)
-    } else {
-      NA_character_
-    },
-    p_value = if ("p_value" %in% names(cohort_results)) {
-      as.numeric(cohort_results$p_value)
-    } else {
-      NA_real_
-    },
-    empirical_rank = if ("empirical_rank" %in% names(cohort_results)) {
-      as.numeric(cohort_results$empirical_rank)
-    } else {
-      NA_real_
-    },
-    stringsAsFactors = FALSE
-  )
-
-  if (!is.null(exclude_groups) && length(exclude_groups)) {
-    out <- out[!out$group %in% exclude_groups, , drop = FALSE]
-  }
-
-  if (nrow(out) == 0L) {
-    cli::cli_abort("No cohort rows left to plot after applying `exclude_groups`.")
-  }
-
-  out
-}
-
-#' @rdname normalize_cohort_plot_df
-#' @keywords internal
-#' @noRd
-normalize_test_results_plot_df <- normalize_cohort_plot_df
-
 #' X-axis label for an expression-model quantity
 #' @keywords internal
 #' @noRd
@@ -362,8 +295,9 @@ add_cohort_overlay <- function(
 
 #' Density plot of healthy HCA posterior draws
 #'
-#' Visualises posterior draws from [expression_draws()]. For cohort
-#' comparisons against a healthy baseline, use [plot_cohort_vs_hca()].
+#' Visualises posterior draws from [expression_draws()]. Optional
+#' `query_mu` / `query_SE` / `query_label` overlay cohort point estimates
+#' on the same density.
 #'
 #' @param draws Posterior draws: numeric vector, or list from
 #'   [expression_draws()].
@@ -373,6 +307,12 @@ add_cohort_overlay <- function(
 #' @param fill Fill colour for the HCA density.
 #' @param title Plot title. Default is built from gene / cell-type metadata.
 #' @param subtitle Optional subtitle.
+#' @param query_mu Optional numeric vector of cohort log(mu) estimates to
+#'   overlay. Requires `quantity = "linpred"`.
+#' @param query_SE Optional numeric vector of SEs for `query_mu` (same length,
+#'   or length 1 recycled). Drawn as horizontal error bars when finite.
+#' @param query_label Optional character labels for `query_mu` (same length,
+#'   or length 1 recycled). Defaults to `"query"`, `"query2"`, ...
 #' @return A `ggplot` object.
 #' @export
 #' @import ggplot2
@@ -384,96 +324,88 @@ plot_hca_draws <- function(
   baseline_label = "Healthy HCA",
   fill = "#4C78A8",
   title = NULL,
-  subtitle = NULL
+  subtitle = NULL,
+  query_mu = NULL,
+  query_SE = NULL,
+  query_label = NULL
 ) {
   norm <- normalize_draws_input(draws, quantity = quantity)
+
+  if (!is.null(query_mu)) {
+    if (!identical(norm$quantity, "linpred")) {
+      cli::cli_abort(
+        "`query_mu` overlays require `quantity = \"linpred\"` draws."
+      )
+    }
+  }
+
   p <- build_hca_density_plot(
     draws_vec = norm$draws,
     quantity = norm$quantity,
     fill = fill
   )
 
-  if (is.null(title)) {
-    title <- default_hca_draws_title(norm, norm$quantity, comparison = FALSE)
-  }
+  if (!is.null(query_mu)) {
+    query_mu <- as.numeric(query_mu)
+    n <- length(query_mu)
+    if (n < 1L || any(!is.finite(query_mu))) {
+      cli::cli_abort("`query_mu` must be a non-empty numeric vector of finite values.")
+    }
 
-  p + labs(title = title, subtitle = subtitle, caption = baseline_label)
-}
+    if (is.null(query_label)) {
+      query_label <- if (n == 1L) "query" else paste0("query", seq_len(n))
+    } else {
+      query_label <- as.character(query_label)
+      if (length(query_label) == 1L && n > 1L) {
+        query_label <- rep(query_label, n)
+      }
+      if (length(query_label) != n) {
+        cli::cli_abort("`query_label` must have length 1 or match `query_mu`.")
+      }
+    }
 
-#' Plot cohort log(mu) estimates against healthy HCA posterior draws
-#'
-#' Visualises cohort log(mu) estimates against healthy HCA posterior draws.
-#' Pass a data frame with at least `group` and `log_mu` (and optionally `se`,
-#' `p_value`, `direction`).
-#'
-#' @param hca_draws Posterior draws from [expression_draws()].
-#'   Must use `quantity = "linpred"` because cohort tests are on log(mu).
-#' @param cohort_est Data frame with cohort estimates (`group`, `log_mu`, ...).
-#' @param exclude_groups Character vector of cohort labels to omit.
-#' @param show_se If `TRUE`, draw horizontal error bars for cohort `log_mu +/- se`.
-#' @param stagger_heights If `TRUE`, place each cohort marker at a different
-#'   height above the density to reduce overlap.
-#' @param colour_by Colour cohort markers by `"cohort"` or `"direction"`.
-#' @param cohort_palette Optional colour vector when `colour_by = "cohort"`.
-#' @param annotate Character vector of label fields: `"group"`, `"p_value"`,
-#'   `"direction"`, `"empirical_rank"`, `"method"`.
-#' @param fill Fill colour for the HCA density curve.
-#' @param title Plot title. Default is built from gene / cell-type metadata.
-#' @param subtitle Optional subtitle.
-#' @return A `ggplot` object.
-#' @export
-#' @import ggplot2
-#' @importFrom cli cli_abort
-plot_cohort_vs_hca <- function(
-  hca_draws,
-  cohort_est,
-  exclude_groups = character(0),
-  show_se = TRUE,
-  stagger_heights = TRUE,
-  colour_by = c("cohort", "direction"),
-  cohort_palette = NULL,
-  annotate = c("group", "p_value"),
-  fill = "#4C78A8",
-  title = NULL,
-  subtitle = NULL
-) {
-  norm <- normalize_draws_input(hca_draws)
-  if (!identical(norm$quantity, "linpred")) {
-    cli::cli_abort(
-      "`plot_cohort_vs_hca()` requires `quantity = \"linpred\"` draws from [expression_draws()]."
+    if (is.null(query_SE)) {
+      se <- rep(NA_real_, n)
+    } else {
+      se <- as.numeric(query_SE)
+      if (length(se) == 1L && n > 1L) {
+        se <- rep(se, n)
+      }
+      if (length(se) != n) {
+        cli::cli_abort("`query_SE` must have length 1 or match `query_mu`.")
+      }
+    }
+
+    cohort_df <- data.frame(
+      group = query_label,
+      log_mu = query_mu,
+      se = se,
+      method = NA_character_,
+      direction = NA_character_,
+      p_value = NA_real_,
+      empirical_rank = NA_real_,
+      stringsAsFactors = FALSE
+    )
+    p <- add_cohort_overlay(
+      plot = p,
+      cohort_df = cohort_df,
+      draws_vec = norm$draws,
+      show_se = TRUE,
+      stagger_heights = TRUE,
+      colour_by = "cohort",
+      annotate = "group"
     )
   }
 
-  cohort_df <- normalize_cohort_plot_df(
-    cohort_est,
-    exclude_groups = exclude_groups
-  )
-
-  p <- build_hca_density_plot(
-    draws_vec = norm$draws,
-    quantity = norm$quantity,
-    fill = fill
-  )
-  p <- add_cohort_overlay(
-    plot = p,
-    cohort_df = cohort_df,
-    draws_vec = norm$draws,
-    show_se = show_se,
-    stagger_heights = stagger_heights,
-    colour_by = colour_by,
-    cohort_palette = cohort_palette,
-    annotate = annotate
-  )
-
   if (is.null(title)) {
-    title <- default_hca_draws_title(norm, norm$quantity, comparison = TRUE)
+    title <- default_hca_draws_title(
+      norm,
+      norm$quantity,
+      comparison = !is.null(query_mu)
+    )
   }
 
-  p + labs(
-    title = title,
-    subtitle = subtitle,
-    caption = "Healthy HCA posterior with cohort estimates"
-  )
+  p + labs(title = title, subtitle = subtitle, caption = baseline_label)
 }
 
 #' Arcsine square-root transform for composition proportions

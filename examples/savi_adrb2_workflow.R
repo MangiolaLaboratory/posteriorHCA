@@ -148,7 +148,7 @@ posterior_draws <- expression_draws(
   expression_fit,
   newdata = newdata,
   quantity = "linpred",
-  collapse = "mean"
+  marginalise = "mean"
 )
 
 cli::cli_alert_info(
@@ -218,9 +218,29 @@ print(plot_hca_draws(
   draws = posterior_draws,
   subtitle = "Normal, 10x Genomics 3 healthy baseline"
 ))
-print(plot_cohort_vs_hca(
-  hca_draws = posterior_draws,
-  cohort_est = test_results,
-  subtitle = "QL cohort estimates",
-  annotate = c("group", "p_value")
-))
+plot_df <- data.frame(value = posterior_draws$draws)
+print(
+  ggplot2::ggplot(plot_df, ggplot2::aes(x = value)) +
+    ggplot2::geom_density(fill = "#4C78A8", colour = NA, alpha = 0.45) +
+    ggplot2::geom_point(
+      data = test_results,
+      ggplot2::aes(x = log_mu, y = 0),
+      inherit.aes = FALSE,
+      size = 2.8,
+      colour = "#E45756"
+    ) +
+    ggplot2::geom_linerange(
+      data = test_results,
+      ggplot2::aes(xmin = log_mu - se, xmax = log_mu + se, y = 0),
+      inherit.aes = FALSE,
+      colour = "#E45756",
+      linewidth = 1
+    ) +
+    ggplot2::theme_minimal() +
+    ggplot2::labs(
+      x = "log(mu)",
+      y = "Density",
+      title = "Cohort vs healthy HCA posterior",
+      subtitle = "QL cohort estimates"
+    )
+)

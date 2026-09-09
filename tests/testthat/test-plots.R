@@ -39,47 +39,30 @@ test_that("plot_hca_draws builds for predict quantity", {
   expect_s3_class(p, "ggplot")
 })
 
-test_that("plot_cohort_vs_hca overlays cohort estimates", {
+test_that("plot_hca_draws overlays query_mu estimates", {
   set.seed(2)
   draws_obj <- list(
     draws = rnorm(200, mean = 0, sd = 0.2),
     quantity = "linpred",
     gene_ensg = "ENSG00000000001"
   )
-  cohort_est <- data.frame(
-    group = c("case_a", "case_b"),
-    log_mu = c(0.5, -0.4),
-    se = c(0.08, 0.07),
-    direction = c("above_hca", "below_hca"),
-    p_value = c(0.01, 0.02),
-    stringsAsFactors = FALSE
-  )
 
-  p <- plot_cohort_vs_hca(draws_obj, cohort_est = cohort_est)
+  p <- plot_hca_draws(
+    draws_obj,
+    query_mu = c(0.5, -0.4),
+    query_SE = c(0.08, 0.07),
+    query_label = c("case_a", "case_b")
+  )
   expect_s3_class(p, "ggplot")
   built <- ggplot2::ggplot_build(p)
   expect_gt(length(built$data), 1L)
 })
 
-test_that("plot_cohort_vs_hca errors for non-linpred draws", {
+test_that("plot_hca_draws errors for non-linpred query overlay", {
   draws_obj <- list(draws = rnbinom(100, mu = 10, size = 5), quantity = "predict")
-  cohort_est <- data.frame(
-    group = "case",
-    log_mu = 2,
-    se = 0.1,
-    stringsAsFactors = FALSE
-  )
 
   expect_error(
-    plot_cohort_vs_hca(draws_obj, cohort_est = cohort_est),
-    "requires `quantity = \"linpred\"`"
-  )
-})
-
-test_that("plot_cohort_vs_hca validates cohort_est columns", {
-  draws_obj <- list(draws = rnorm(100), quantity = "linpred")
-  expect_error(
-    plot_cohort_vs_hca(draws_obj, cohort_est = data.frame(x = 1)),
-    "must contain `group` and `log_mu`"
+    plot_hca_draws(draws_obj, query_mu = 2, query_SE = 0.1, query_label = "case"),
+    "require `quantity = \"linpred\"`"
   )
 })

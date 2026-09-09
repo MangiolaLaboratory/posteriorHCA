@@ -216,13 +216,27 @@ build_newdata_grid <- function(
 #' @param fit A `brmsfit` or [load_expression_fit()] object.
 #' @param newdata Covariate grid from [build_newdata_grid()].
 #' @param quantity `"linpred"` (log μ), `"predict"`, or `"epred"`.
-#' @param collapse How to combine several grid rows: `"mean"`, `"pool"`,
-#'   or `"sample"`.
+#' @param marginalise How to reduce several `newdata` rows (covariate
+#'   profiles) to one draw vector. In the Bayesian sense, leaving covariates
+#'   free in [build_newdata_grid()] expands a grid over those levels; this
+#'   argument then **marginalises** over that grid so the returned draws
+#'   represent a baseline that is not conditioned on a single profile.
+#'   Options:
+#'   \describe{
+#'     \item{`"mean"`}{For each posterior draw, average the predicted
+#'       quantity across grid rows. Interprets every profile as equally
+#'       weighted; typical default for a single comparable baseline.}
+#'     \item{`"pool"`}{Concatenate (stack) predictions from all grid rows.
+#'       Keeps between-profile spread in the returned vector.}
+#'     \item{`"sample"`}{For each posterior draw, pick one grid row at
+#'       random. Approximates a discrete mixture over profiles.}
+#'   }
+#'   When `newdata` has a single row, all three options are equivalent.
 #' @param ndraws Number of posterior draws, or `NULL` for all.
 #' @param transform Passed to `posterior_linpred` only.
 #' @param re_formula,allow_new_levels,sample_new_levels Passed to brms.
 #' @param seed Optional RNG seed.
-#' @return A list with `draws`, `grid`, `quantity`, `collapse`, `n_grid`,
+#' @return A list with `draws`, `grid`, `quantity`, `marginalise`, `n_grid`,
 #'   `cell_type`, and `gene_ensg`.
 #' @seealso [expression_baseline_draws()], [build_newdata_grid()],
 #'   [load_expression_fit()]
@@ -232,7 +246,7 @@ expression_draws <- function(
   fit,
   newdata,
   quantity = c("linpred", "predict", "epred"),
-  collapse = c("mean", "pool", "sample"),
+  marginalise = c("mean", "pool", "sample"),
   ndraws = NULL,
   transform = FALSE,
   re_formula = NULL,
@@ -241,7 +255,7 @@ expression_draws <- function(
   seed = NULL
 ) {
   quantity <- match.arg(quantity)
-  collapse <- match.arg(collapse)
+  marginalise <- match.arg(marginalise)
   brms_fit <- as_brms_fit(fit)
   newdata <- as.data.frame(newdata)
 
@@ -271,9 +285,9 @@ expression_draws <- function(
 
   if (is.null(dim(draw_matrix)) || ncol(draw_matrix) <= 1L) {
     draws <- as.numeric(draw_matrix)
-  } else if (collapse == "mean") {
+  } else if (marginalise == "mean") {
     draws <- as.numeric(rowMeans(draw_matrix))
-  } else if (collapse == "pool") {
+  } else if (marginalise == "pool") {
     draws <- as.numeric(draw_matrix)
   } else {
     idx <- sample.int(ncol(draw_matrix), nrow(draw_matrix), replace = TRUE)
@@ -284,7 +298,7 @@ expression_draws <- function(
     draws = draws,
     grid = newdata,
     quantity = quantity,
-    collapse = collapse,
+    marginalise = marginalise,
     n_grid = nrow(newdata),
     cell_type = if (is_expression_fit(fit)) fit$cell_type else NA_character_,
     gene_ensg = if (is_expression_fit(fit)) fit$gene_ensg else NA_character_
@@ -351,7 +365,7 @@ load_expression_fit <- function(
 #' @param age_decade,sex,disease_groups,ethnicity_groups,assay_groups,tissue_groups
 #'   Passed to [build_newdata_grid()].
 #' @param dataset_id,offset,new_study_id Passed to [build_newdata_grid()].
-#' @param quantity,collapse,ndraws,transform,re_formula,allow_new_levels,sample_new_levels,seed
+#' @param quantity,marginalise,ndraws,transform,re_formula,allow_new_levels,sample_new_levels,seed
 #'   Passed to [expression_draws()].
 #' @inheritParams load_expression_fit
 #' @return A list from [expression_draws()].
@@ -373,7 +387,7 @@ expression_baseline_draws <- function(
   offset = 0,
   new_study_id = "__new_study__",
   quantity = c("linpred", "predict", "epred"),
-  collapse = c("mean", "pool", "sample"),
+  marginalise = c("mean", "pool", "sample"),
   ndraws = NULL,
   transform = FALSE,
   re_formula = NULL,
@@ -385,7 +399,7 @@ expression_baseline_draws <- function(
   use_cache = TRUE
 ) {
   quantity <- match.arg(quantity)
-  collapse <- match.arg(collapse)
+  marginalise <- match.arg(marginalise)
 
   if (is.null(fit)) {
     if (is.null(cell_type) || is.null(gene_ensg)) {
@@ -417,7 +431,7 @@ expression_baseline_draws <- function(
     fit,
     newdata = newdata,
     quantity = quantity,
-    collapse = collapse,
+    marginalise = marginalise,
     ndraws = ndraws,
     transform = transform,
     re_formula = re_formula,

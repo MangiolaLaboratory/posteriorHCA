@@ -182,12 +182,30 @@ plot_hca_draws(
 ![](cohort-expression-wrappers_files/figure-gfm/plot-hca-1.png)<!-- -->
 
 ``` r
-plot_cohort_vs_hca(
-  hca_draws = hca_draws,
-  cohort_est = test_results,
-  subtitle = "QL cohort estimates (wrapper path)",
-  annotate = c("group", "p_value")
-)
+plot_df <- data.frame(value = hca_draws$draws)
+ggplot(plot_df, aes(x = value)) +
+  geom_density(fill = "#4C78A8", colour = NA, alpha = 0.45) +
+  geom_point(
+    data = test_results,
+    aes(x = log_mu, y = 0),
+    inherit.aes = FALSE,
+    size = 2.8,
+    colour = "#E45756"
+  ) +
+  geom_linerange(
+    data = test_results,
+    aes(xmin = log_mu - se, xmax = log_mu + se, y = 0),
+    inherit.aes = FALSE,
+    colour = "#E45756",
+    linewidth = 1
+  ) +
+  theme_minimal() +
+  labs(
+    x = "log(mu)",
+    y = "Density",
+    title = "Cohort vs healthy HCA posterior",
+    subtitle = "QL cohort estimates (wrapper path)"
+  )
 ```
 
 ![](cohort-expression-wrappers_files/figure-gfm/plot-cohort-1.png)<!-- -->

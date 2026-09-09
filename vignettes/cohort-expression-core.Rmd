@@ -18,12 +18,14 @@ knit: >
             output_format = "github_document",
             output_dir = file.path(proj_root, "vignettes"),
             knit_root_dir = proj_root,
-            params = list(for_github_md = TRUE)
+            params = list(for_github_md = TRUE),
+            envir = new.env(parent = globalenv())
         )
         rmarkdown::render(
             x,
             output_format = "rmarkdown::html_vignette",
-            params = list(for_github_md = FALSE)
+            params = list(for_github_md = FALSE),
+            envir = new.env(parent = globalenv())
         )
     })
 ---
@@ -94,6 +96,7 @@ library(posteriorHCA)
 library(Seurat)
 library(AnnotationDbi)
 library(org.Hs.eg.db)
+library(ggplot2)
 
 cell_type <- "monocytic"
 gene_ensg <- "ENSG00000169252"
@@ -285,7 +288,7 @@ posterior_draws <- expression_draws(
   expression_fit,
   newdata = newdata,
   quantity = "linpred",
-  collapse = "mean"
+  marginalise = "mean"
 )
 ```
 
@@ -343,12 +346,30 @@ plot_hca_draws(
 ```
 
 ```{r plot-cohort, eval = can_run, fig.asp = 0.7}
-plot_cohort_vs_hca(
-  hca_draws = posterior_draws,
-  cohort_est = test_results,
-  subtitle = "SAVI Category mean via edgeR formula + contrast",
-  annotate = c("group", "p_value")
-)
+plot_df <- data.frame(value = posterior_draws$draws)
+ggplot(plot_df, aes(x = value)) +
+  geom_density(fill = "#4C78A8", colour = NA, alpha = 0.45) +
+  geom_point(
+    data = test_results,
+    aes(x = log_mu, y = 0),
+    inherit.aes = FALSE,
+    size = 2.8,
+    colour = "#E45756"
+  ) +
+  geom_linerange(
+    data = test_results,
+    aes(xmin = log_mu - se, xmax = log_mu + se, y = 0),
+    inherit.aes = FALSE,
+    colour = "#E45756",
+    linewidth = 1
+  ) +
+  theme_minimal() +
+  labs(
+    x = "log(mu)",
+    y = "Density",
+    title = "SAVI vs healthy HCA posterior",
+    subtitle = "SAVI Category mean via edgeR formula + contrast"
+  )
 ```
 
 ## Session info
