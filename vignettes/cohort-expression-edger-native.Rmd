@@ -96,25 +96,22 @@ gene <- "ENSG00000169252"
 ref_name <- "___hca_ref_sample___"
 ```
 
-## Counts (Ensembl ids)
+## Map gene name to Ensembl ids
 
 ```{r load-savi-mono, eval = can_run}
 data(savi_mono, overwrite = TRUE)
 
-counts <- as.matrix(GetAssayData(savi_mono, layer = "counts"))
-if (!all(grepl("^ENSG", rownames(counts)))) {
-  ensembl <- mapIds(
-    org.Hs.eg.db,
-    keys = rownames(counts),
-    column = "ENSEMBL",
-    keytype = "SYMBOL",
-    multiVals = "first"
-  )
-  ok <- !is.na(ensembl) & !duplicated(ensembl)
-  counts <- counts[ok, , drop = FALSE]
-  rownames(counts) <- unname(ensembl[ok])
-  savi_mono <- CreateSeuratObject(counts, meta.data = savi_mono[[]])
-}
+ensembl <- mapIds(
+  org.Hs.eg.db,
+  keys = rownames(savi_mono),
+  column = "ENSEMBL",
+  keytype = "SYMBOL",
+  multiVals = "first"
+)
+ok <- !is.na(ensembl) & !duplicated(ensembl)
+savi_mono <- savi_mono[ok, , drop = FALSE]
+rownames(savi_mono) <- ensembl[ok] |> unname()
+  
 ```
 
 ## Joint TMMwsp with one HCA library
@@ -180,16 +177,9 @@ log_mu <- estimate + log_E_hca
 fit_hca <- load_expression_fit(cell_type = cell_type, gene_ensg = gene)
 draws <- expression_draws(
   fit_hca,
-  newdata = build_newdata_grid(
-    fit_hca,
-    disease_groups = "Normal",
-    tissue_groups = "blood",
-    assay_groups = "10x Genomics 3"
-  ),
-  quantity = "linpred",
-  marginalise = "mean"
+  newdata = build_newdata_grid(fit_hca, tissue_groups = "blood" )
 )
-hca <- summarize_posterior_draws(draws, value = log_mu)
+hca <- summarize_posterior_draws(draws)
 ```
 
 ## Welch test
