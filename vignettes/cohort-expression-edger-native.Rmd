@@ -71,19 +71,14 @@ if (requireNamespace("devtools", quietly = TRUE)) {
 
 SAVI case study: *ADRB2* (`ENSG00000169252`) in disease-associated monocytes.
 
-Same analysis as `vignette("cohort-expression-core")`, but with the
-edgeR / limma steps written out. Only `load_reference_sample()` and
-`merge_with_reference_sample()` are used from posteriorHCA before the HCA
-model query.
+Same analysis as `vignette("cohort-expression-core")`, with edgeR / limma
+written out. Before the HCA query, only `load_reference_sample()` and
+`merge_with_reference_sample()` come from posteriorHCA.
 
 ```text
-USER + HCA counts
-  → TMMwsp
-  → offset = log(E_user)
+USER + HCA counts → TMMwsp → offset = log(E_user)
   → glmQLFit → makeContrasts → glmQLFTest
-  → estimate + QLF SE
-  → + log(E_HCA)
-  → compare to HCA posterior
+  → estimate + QLF SE → + log(E_HCA) → HCA posterior
 ```
 
 ## Setup
@@ -101,18 +96,14 @@ gene <- "ENSG00000169252"
 ref_name <- "___hca_ref_sample___"
 ```
 
-## Counts
+## Counts (Ensembl ids)
 
 ```{r load-savi-mono, eval = can_run}
 data(savi_mono, overwrite = TRUE)
 
-counts <- as.matrix(Seurat::GetAssayData(savi_mono, layer = "counts"))
-rn <- rownames(counts)
-
-if (!all(grepl("^ENSG", rn))) {
-  known <- rn %in% AnnotationDbi::keys(org.Hs.eg.db, keytype = "SYMBOL")
-  counts <- counts[known, , drop = FALSE]
-  ensembl <- AnnotationDbi::mapIds(
+counts <- as.matrix(GetAssayData(savi_mono, layer = "counts"))
+if (!all(grepl("^ENSG", rownames(counts)))) {
+  ensembl <- mapIds(
     org.Hs.eg.db,
     keys = rownames(counts),
     column = "ENSEMBL",
@@ -122,53 +113,46 @@ if (!all(grepl("^ENSG", rn))) {
   ok <- !is.na(ensembl) & !duplicated(ensembl)
   counts <- counts[ok, , drop = FALSE]
   rownames(counts) <- unname(ensembl[ok])
+  savi_mono <- CreateSeuratObject(counts, meta.data = savi_mono[[]])
 }
-
-savi_mono <- Seurat::CreateSeuratObject(
-  counts = counts,
-  meta.data = savi_mono@meta.data
-)
 ```
 
-## HCA reference
+## Joint TMMwsp with one HCA library
 
-```{r reference, eval = can_run}
+```{r scale, eval = can_run}
 ref <- load_reference_sample(cell_type)
 counts <- merge_with_reference_sample(
-  counts,
+  GetAssayData(savi_mono, layer = "counts"),
   reference = ref$counts,
   reference_name = ref_name
 )
-```
 
-The reference is only for joint TMM. Drop it before fitting.
-
-## TMMwsp scaling
-
-```{r scale, eval = can_run}
-nf <- calcNormFactors(
+eff <- colSums(counts) * calcNormFactors(
   counts,
   refColumn = match(ref_name, colnames(counts)),
   method = "TMMwsp"
 )
-eff <- colSums(counts) * nf
 
-log_E <- log(eff[colnames(counts) != ref_name])
+# USER libraries only → store on savi_mono; HCA size kept for the later shift
+savi_mono$eff <- unname(eff[match(colnames(savi_mono), names(eff))])
+savi_mono$log_E <- log(savi_mono$eff)
 log_E_hca <- log(eff[[ref_name]])
 ```
 
-## USER model
+The HCA column is only for TMM. Fitting uses `savi_mono` alone.
+
+## Fit
 
 ```{r fit, eval = can_run}
-y <- counts[, colnames(counts) != ref_name, drop = FALSE]
+design <- model.matrix(~ 0 + Category, data = savi_mono[[]])
 
-offset <- matrix(log_E, nrow = nrow(y), ncol = ncol(y), byrow = TRUE)
-design <- model.matrix(
-  ~ 0 + Category,
-  data = savi_mono@meta.data[colnames(y), , drop = FALSE]
+fit <- glmQLFit(
+  GetAssayData(savi_mono, layer = "counts"),
+  design = design,
+  offset = savi_mono$log_E,
+  prior.count = 0,
+  robust = TRUE
 )
-
-fit <- glmQLFit(y, design = design, offset = offset, prior.count = 0, robust = TRUE)
 
 contrast <- makeContrasts(CategorySAVI, levels = design)
 ```
@@ -177,9 +161,8 @@ contrast <- makeContrasts(CategorySAVI, levels = design)
 
 ## Estimate and QLF-implied SE
 
-`glmQLFTest()` reports `logFC` on the log2 scale. Convert to natural log.
-The SE below is implied by the one-dimensional QL F statistic, not a
-coefficient-covariance SE.
+`logFC` is log2; convert to natural log. The SE is implied by the
+one-dimensional QL F statistic (not a coefficient-covariance SE).
 
 ```{r qlf, eval = can_run}
 qlf <- glmQLFTest(fit, contrast = contrast)
@@ -187,7 +170,7 @@ qlf <- glmQLFTest(fit, contrast = contrast)
 estimate <- qlf$table[gene, "logFC"] * log(2)
 se_qlf <- abs(qlf$table[gene, "logFC"]) / sqrt(qlf$table[gene, "F"]) * log(2)
 
-# Absolute estimand → place on HCA scale (SE unchanged).
+# Absolute estimand → HCA scale (SE unchanged)
 log_mu <- estimate + log_E_hca
 ```
 
@@ -195,18 +178,32 @@ log_mu <- estimate + log_E_hca
 
 ```{r hca, eval = can_run}
 fit_hca <- load_expression_fit(cell_type = cell_type, gene_ensg = gene)
-newdata <- build_newdata_grid(
-  fit_hca,
-  disease_groups = "Normal",
-  tissue_groups = "blood",
-  assay_groups = "10x Genomics 3"
-)
 draws <- expression_draws(
   fit_hca,
-  newdata = newdata,
+  newdata = build_newdata_grid(
+    fit_hca,
+    disease_groups = "Normal",
+    tissue_groups = "blood",
+    assay_groups = "10x Genomics 3"
+  ),
   quantity = "linpred",
   marginalise = "mean"
 )
+hca <- summarize_posterior_draws(draws, value = log_mu)
+```
+
+## Welch test
+
+```{r welch, eval = can_run}
+test_res <-
+  welch_test_means(
+    mu1 = log_mu,
+    se1 = se_qlf,
+    n1 = sum(savi_mono$Category == "SAVI"),
+    mu2 = hca$log_mu,
+    se2 = hca$se,
+    n2 = hca$n
+  )
 ```
 
 ## Plot
@@ -216,7 +213,7 @@ plot_hca_draws(
   draws,
   query_mu = log_mu,
   query_SE = se_qlf,
-  query_label = "SAVI"
+  query_label = paste0("SAVI", '\n', 'p-value:', round(test_res$p_value, digits = 2))
 )
 ```
 
