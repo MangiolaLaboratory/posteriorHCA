@@ -22,6 +22,8 @@ Imports:
     qs2,
     brms,
     readr,
+    rlang,
+    stringr,
     edgeR,
     limma
 LazyData: true
