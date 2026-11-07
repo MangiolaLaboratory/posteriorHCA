@@ -37,7 +37,7 @@ expression_baseline_draws(
 
 \item{fit}{Optional pre-loaded fit from [load_expression_fit()].}
 
-\item{age_decade, sex, disease_groups, ethnicity_groups, assay_groups, tissue_groups}{Passed to [build_newdata_grid()].}
+\item{age_decade, sex, disease_groups, ethnicity_groups, assay_groups, tissue_groups}{Passed to [build_newdata_grid()], including filter expressions such as `str_detect("10x")` and `between(6, 8)`.}
 
 \item{dataset_id, offset, new_study_id}{Passed to [build_newdata_grid()].}
 

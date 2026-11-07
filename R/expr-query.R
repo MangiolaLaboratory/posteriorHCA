@@ -6,9 +6,12 @@
 #     expression_baseline_draws()
 #
 # Metadata choices for each covariate:
-#   NA            -> expand over every level the model knows
+#   NA / NULL     -> expand over every level the model knows
 #   "A"           -> fix that level
 #   c("A", "B")   -> expand only over those levels
+#   str_detect("10x"), between(6, 8), ...
+#                 -> filter levels. The covariate is inserted as the first
+#                    argument, then evaluated like dplyr::filter().
 #
 # dataset_id is a random intercept: NA means a new unseen study.
 
@@ -80,18 +83,152 @@ expression_model_levels <- function(fit, variable) {
   unique(c(from_data, from_coef))
 }
 
+#' Decide whether a captured metadata expression is "use every level"
+#' @keywords internal
+#' @noRd
+metadata_quo_is_blank <- function(quo) {
+  if (rlang::quo_is_missing(quo) || rlang::quo_is_null(quo)) {
+    return(TRUE)
+  }
+  expr <- rlang::quo_get_expr(quo)
+  if (is.symbol(expr)) {
+    return(as.character(expr) %in% c(
+      "NA", "NA_character_", "NA_integer_", "NA_real_", "NA_complex_", "NULL"
+    ))
+  }
+  is.atomic(expr) && length(expr) == 1L && is.na(expr)
+}
+
+#' A value the caller already computed, as opposed to a filter expression
+#' @keywords internal
+#' @noRd
+is_concrete_metadata <- function(x) {
+  if (is.null(x) || is.factor(x)) {
+    return(TRUE)
+  }
+  is.atomic(x) && !is.language(x)
+}
+
+#' Insert the covariate as the first argument of a filter call
+#' @keywords internal
+#' @noRd
+metadata_predicate_expr <- function(expr, arg_name) {
+  if (!is.call(expr)) {
+    cli::cli_abort(
+      "`{arg_name}` must be a value or a filter expression such as `str_detect(...)`."
+    )
+  }
+  if (arg_name %in% all.names(expr)) {
+    return(expr)
+  }
+  as.call(c(list(expr[[1]]), as.symbol(arg_name), as.list(expr)[-1]))
+}
+
+#' Keep model levels selected by an exact value or a filter expression
+#'
+#' Exact values (`"female"`, `c("4", "7")`) are matched literally. A call such
+#' as `str_detect("10x")` or `between(6, 8)` is applied like
+#' `dplyr::filter()` on the covariate's levels, with the covariate inserted
+#' as the first argument. `str_detect()` is case-sensitive, so `"10x"` matches
+#' `"10x Genomics 3"` and `"10X"` does not; use `"(?i)10X"` for either case.
+#' @keywords internal
+#' @noRd
+resolve_metadata_levels <- function(quo, levels, arg_name) {
+  blank <- list(chosen = levels, missing = TRUE)
+  if (metadata_quo_is_blank(quo)) {
+    return(blank)
+  }
+
+  evaluated <- tryCatch(
+    rlang::eval_tidy(quo),
+    error = function(e) e
+  )
+  eval_failed <- inherits(evaluated, "error")
+  if (!eval_failed && is_concrete_metadata(evaluated)) {
+    if (is.null(evaluated) || (length(evaluated) == 1L && is.na(evaluated))) {
+      return(blank)
+    }
+    chosen <- as.character(evaluated)
+    chosen <- chosen[!is.na(chosen) & nzchar(chosen)]
+    if (length(chosen) == 0L) {
+      return(list(chosen = levels, missing = FALSE))
+    }
+    unknown <- setdiff(chosen, levels)
+    if (length(unknown) > 0L) {
+      cli::cli_abort(c(
+        "Unknown {arg_name} value{?s}: {unknown}.",
+        "i" = "This model includes: {levels}."
+      ))
+    }
+    return(list(chosen = unique(chosen), missing = FALSE))
+  }
+
+  expr <- rlang::quo_get_expr(quo)
+  if (!eval_failed || !is.call(expr)) {
+    cli::cli_abort(
+      "`{arg_name}` must be a value or a filter expression such as `str_detect(...)`."
+    )
+  }
+
+  predicate <- metadata_predicate_expr(expr, arg_name)
+  filter_levels <- as.character(levels)
+  numeric_levels <- suppressWarnings(as.numeric(filter_levels))
+  column <- if (length(filter_levels) > 0L && !anyNA(numeric_levels)) {
+    numeric_levels
+  } else {
+    filter_levels
+  }
+  data <- stats::setNames(data.frame(column, stringsAsFactors = FALSE), arg_name)
+  helper_env <- rlang::new_environment(
+    list(str_detect = stringr::str_detect, between = dplyr::between),
+    parent = rlang::quo_get_env(quo)
+  )
+  keep <- tryCatch(
+    rlang::eval_tidy(
+      rlang::new_quosure(predicate, env = helper_env),
+      data = data
+    ),
+    error = function(e) {
+      label <- rlang::expr_deparse(expr)
+      cli::cli_abort(c(
+        "Could not apply the `{arg_name}` filter `{label}`.",
+        "x" = conditionMessage(e)
+      ))
+    }
+  )
+  if (!is.logical(keep) || length(keep) != length(levels)) {
+    cli::cli_abort(
+      "The `{arg_name}` filter must return one TRUE or FALSE per level."
+    )
+  }
+  chosen <- levels[which(keep & !is.na(keep))]
+  if (length(chosen) == 0L) {
+    cli::cli_abort(c(
+      "No `{arg_name}` levels matched that expression.",
+      "i" = "This model includes: {levels}."
+    ))
+  }
+  list(chosen = unique(as.character(chosen)), missing = FALSE)
+}
+
 #' Build a covariate grid for an expression-model query
 #'
 #' Each metadata argument is one of:
 #' * `NA` — marginalise over every level in the model
 #' * a single value — fix that level
 #' * several values — marginalise over only those levels
+#' * a filter expression such as `str_detect("10x")` or `between(6, 8)` —
+#'   keep the levels for which the expression is true. The covariate is
+#'   inserted as the first argument and evaluated like `dplyr::filter()`.
+#'   `str_detect()` is case-sensitive: `str_detect("10x")` selects
+#'   `"10x Genomics 3"` and `"10x Genomics 5"`; `str_detect("10X")` selects
+#'   neither. `str_detect("(?i)10X")` ignores case.
 #'
 #' `dataset_id` is a random intercept. `NA` stamps a new unseen-study label.
 #'
 #' @param fit A `brmsfit` or [load_expression_fit()] object.
 #' @param age_decade,sex,disease_groups,ethnicity_groups,assay_groups,tissue_groups
-#'   See the rules above.
+#'   Level, vector of levels, or a filter expression. See the rules above.
 #' @param dataset_id Existing dataset id, or `NA` for a new study.
 #' @param offset Numeric offset. Atlas queries usually use `0`.
 #' @param new_study_id Label used when `dataset_id` is `NA`.
@@ -110,54 +247,50 @@ build_newdata_grid <- function(
   offset = 0,
   new_study_id = "__new_study__"
 ) {
+  .build_newdata_grid(
+    fit = fit,
+    metadata = list(
+      age_decade = rlang::enquo(age_decade),
+      sex = rlang::enquo(sex),
+      disease_groups = rlang::enquo(disease_groups),
+      ethnicity_groups = rlang::enquo(ethnicity_groups),
+      assay_groups = rlang::enquo(assay_groups),
+      tissue_groups = rlang::enquo(tissue_groups)
+    ),
+    dataset_id = dataset_id,
+    offset = offset,
+    new_study_id = new_study_id
+  )
+}
+
+#' @keywords internal
+#' @noRd
+.build_newdata_grid <- function(fit, metadata, dataset_id, offset, new_study_id) {
   fit <- as_brms_fit(fit)
   if (is.null(fit$data)) {
     cli_abort("`fit` must have a `$data` element.")
   }
-
-  user_choices <- list(
-    age_decade = age_decade,
-    sex = sex,
-    disease_groups = disease_groups,
-    ethnicity_groups = ethnicity_groups,
-    assay_groups = assay_groups,
-    tissue_groups = tissue_groups
-  )
 
   expand_list <- list()
   available_by_col <- list()
   fixed_vars <- character(0)
   marginalised_vars <- character(0)
 
-  for (var in names(user_choices)) {
+  for (var in names(metadata)) {
     column <- find_fit_column(fit, .expression_meta_map[[var]])
-    choice <- user_choices[[var]]
-    missing_choice <- is.null(choice) || (length(choice) == 1L && is.na(choice))
+    quo <- metadata[[var]]
 
     if (is.na(column)) {
-      if (!missing_choice) {
+      if (!metadata_quo_is_blank(quo)) {
         cli_abort("This model has no `{var}` column, but `{var}` was specified.")
       }
       next
     }
 
     available <- expression_model_levels(fit, var)
-    if (missing_choice) {
-      chosen <- available
-    } else {
-      chosen <- as.character(choice)
-      chosen <- chosen[!is.na(chosen) & nzchar(chosen)]
-      if (length(chosen) == 0L) {
-        chosen <- available
-      }
-      unknown <- setdiff(chosen, available)
-      if (length(unknown) > 0L) {
-        cli_abort(c(
-          "Unknown {var} value{?s}: {unknown}.",
-          "i" = "This model includes: {available}."
-        ))
-      }
-    }
+    resolved <- resolve_metadata_levels(quo, available, var)
+    chosen <- resolved$chosen
+    missing_choice <- resolved$missing
 
     expand_list[[column]] <- chosen
     available_by_col[[column]] <- available
@@ -363,7 +496,8 @@ load_expression_fit <- function(
 #' @param gene_ensg Ensembl gene id (required when `fit` is `NULL`).
 #' @param fit Optional pre-loaded fit from [load_expression_fit()].
 #' @param age_decade,sex,disease_groups,ethnicity_groups,assay_groups,tissue_groups
-#'   Passed to [build_newdata_grid()].
+#'   Passed to [build_newdata_grid()], including filter expressions such as
+#'   `str_detect("10x")` and `between(6, 8)`.
 #' @param dataset_id,offset,new_study_id Passed to [build_newdata_grid()].
 #' @param quantity,marginalise,ndraws,transform,re_formula,allow_new_levels,sample_new_levels,seed
 #'   Passed to [expression_draws()].
@@ -414,14 +548,16 @@ expression_baseline_draws <- function(
     )
   }
 
-  newdata <- build_newdata_grid(
-    fit,
-    age_decade = age_decade,
-    sex = sex,
-    disease_groups = disease_groups,
-    ethnicity_groups = ethnicity_groups,
-    assay_groups = assay_groups,
-    tissue_groups = tissue_groups,
+  newdata <- .build_newdata_grid(
+    fit = fit,
+    metadata = list(
+      age_decade = rlang::enquo(age_decade),
+      sex = rlang::enquo(sex),
+      disease_groups = rlang::enquo(disease_groups),
+      ethnicity_groups = rlang::enquo(ethnicity_groups),
+      assay_groups = rlang::enquo(assay_groups),
+      tissue_groups = rlang::enquo(tissue_groups)
+    ),
     dataset_id = dataset_id,
     offset = offset,
     new_study_id = new_study_id

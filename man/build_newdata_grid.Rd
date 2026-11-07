@@ -36,6 +36,12 @@ Each metadata argument is one of:
 * `NA` — marginalise over every level in the model
 * a single value — fix that level
 * several values — marginalise over only those levels
+* a filter expression such as `str_detect("10x")` or `between(6, 8)` —
+  keep levels for which the expression is true. The covariate is inserted
+  as the first argument and evaluated like `dplyr::filter()`.
+  `str_detect()` is case-sensitive: `str_detect("10x")` selects
+  `"10x Genomics 3"` and `"10x Genomics 5"`; `str_detect("10X")` selects
+  neither. `str_detect("(?i)10X")` ignores case.
 }
 \details{
 `dataset_id` is a random intercept. `NA` stamps a new unseen-study label.
