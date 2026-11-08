@@ -11,7 +11,8 @@
 #'
 #' @param proportions A data frame of observed cell type proportions.
 #' @param sex,age_decade,ethnicity_groups,assay_groups,tissue_groups Metadata
-#'   for the healthy query profile. Use `NULL`/`NA` to marginalise.
+#'   for the healthy query profile. Use `NULL`/`NA` to marginalise, or a dplyr
+#'   filter expression such as `str_detect("10x")`.
 #' @param disease_groups Deprecated and ignored.
 #' @param load_model_to_global_env Deprecated and ignored.
 #' @param fit Optional `posteriorHCA_sccomp_fit` from [load_sccomp_fit()].
@@ -46,18 +47,24 @@ composition_posterior_test <- function(
     unique(normalize_proportions(proportions)$sample_id)
   }
 
+  age_decade <- rlang::enquo(age_decade)
+  sex <- rlang::enquo(sex)
+  ethnicity_groups <- rlang::enquo(ethnicity_groups)
+  assay_groups <- rlang::enquo(assay_groups)
+  tissue_groups <- rlang::enquo(tissue_groups)
+
   newdata <- do.call(
     rbind,
     lapply(sample_ids, function(sid) {
-      build_sccomp_newdata(
+      rlang::inject(build_sccomp_newdata(
         fit,
         sample_id = sid,
-        age_decade = age_decade,
-        sex = sex,
-        ethnicity_groups = ethnicity_groups,
-        assay_groups = assay_groups,
-        tissue_groups = tissue_groups
-      )
+        age_decade = !!age_decade,
+        sex = !!sex,
+        ethnicity_groups = !!ethnicity_groups,
+        assay_groups = !!assay_groups,
+        tissue_groups = !!tissue_groups
+      ))
     })
   )
 

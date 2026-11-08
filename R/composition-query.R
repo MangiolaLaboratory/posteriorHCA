@@ -63,32 +63,11 @@ sccomp_count_data <- function(fit) {
   as.data.frame(cd)
 }
 
-#' @keywords internal
-#' @noRd
-is_missing_sccomp_choice <- function(x) {
-  is.null(x) || (length(x) == 1L && is.na(x))
-}
-
-#' Validate one metadata value against the training data
-#' @keywords internal
-#' @noRd
-validate_sccomp_metadata_value <- function(fit, column, value, arg_name) {
-  if (is_missing_sccomp_choice(value)) {
-    return(invisible(NULL))
-  }
-  cd <- sccomp_count_data(fit)
-  valid <- unique(as.character(cd[[column]]))
-  value <- as.character(value[[1]])
-  if (!value %in% valid) {
-    cli_abort("`{arg_name}` = `{value}` is not in the sccomp training data.")
-  }
-  invisible(NULL)
-}
-
-#' Build a one-row sccomp query metadata table
+#' Build sccomp query metadata
 #'
-#' `NA` values are passed through so sccomp can marginalise over unknown
-#' covariates automatically.
+#' Each metadata argument is `NA`/`NULL` (leave for sccomp to marginalise),
+#' an exact level, or a dplyr filter expression such as `str_detect("10x")`.
+#' Several matched levels expand to several rows.
 #'
 #' @keywords internal
 #' @noRd
@@ -102,37 +81,51 @@ build_sccomp_newdata <- function(
   tissue_groups = NA
 ) {
   fit <- sccomp_fit_object(fit)
+  cd <- sccomp_count_data(fit)
 
-  validate_sccomp_metadata_value(fit, "age_decade", age_decade, "age_decade")
-  validate_sccomp_metadata_value(fit, "sex", sex, "sex")
-  validate_sccomp_metadata_value(
-    fit,
-    "ethnicity_groups_imputed",
-    ethnicity_groups,
-    "ethnicity_groups"
+  metadata <- list(
+    age_decade = list(quo = rlang::enquo(age_decade), column = "age_decade"),
+    sex = list(quo = rlang::enquo(sex), column = "sex"),
+    ethnicity_groups = list(
+      quo = rlang::enquo(ethnicity_groups),
+      column = "ethnicity_groups_imputed"
+    ),
+    assay_groups = list(
+      quo = rlang::enquo(assay_groups),
+      column = "assay_groups___altered"
+    ),
+    tissue_groups = list(quo = rlang::enquo(tissue_groups), column = "tissue_groups")
   )
-  validate_sccomp_metadata_value(
-    fit,
-    "assay_groups___altered",
-    assay_groups,
-    "assay_groups"
-  )
-  validate_sccomp_metadata_value(fit, "tissue_groups", tissue_groups, "tissue_groups")
 
-  as_chr_or_na <- function(x) {
-    if (is_missing_sccomp_choice(x)) NA_character_ else as.character(x[[1]])
+  expand_list <- list()
+  for (var in names(metadata)) {
+    column <- metadata[[var]]$column
+    quo <- metadata[[var]]$quo
+    if (!column %in% names(cd)) {
+      cli_abort("This sccomp model has no `{column}` column.")
+    }
+
+    levels <- unique(as.character(cd[[column]]))
+    levels <- levels[!is.na(levels) & nzchar(levels)]
+    resolved <- pick_metadata_levels(quo, levels, var)
+    # blank → NA for sccomp marginalisation (not expand-all)
+    expand_list[[column]] <- if (resolved$NA_expand) NA_character_ else resolved$chosen
   }
 
-  data.frame(
-    sample_id = as.character(sample_id[[1]]),
-    age_decade = as_chr_or_na(age_decade),
-    sex = as_chr_or_na(sex),
-    ethnicity_groups_imputed = as_chr_or_na(ethnicity_groups),
-    assay_groups___altered = as_chr_or_na(assay_groups),
-    dataset_id___altered = NA_character_,
-    tissue_groups = as_chr_or_na(tissue_groups),
-    stringsAsFactors = FALSE
-  )
+  grid <- as.data.frame(tidyr::expand_grid(!!!expand_list))
+  n <- nrow(grid)
+  sid <- as.character(sample_id[[1]])
+  grid$sample_id <- if (n <= 1L) sid else paste0(sid, "__", seq_len(n))
+  grid$dataset_id___altered <- NA_character_
+  grid[, c(
+    "sample_id",
+    "age_decade",
+    "sex",
+    "ethnicity_groups_imputed",
+    "assay_groups___altered",
+    "dataset_id___altered",
+    "tissue_groups"
+  )]
 }
 
 #' Load a pre-trained healthy-reference sccomp composition model
@@ -182,7 +175,8 @@ load_sccomp_fit <- function(
 #'   is built from the scalar metadata arguments below.
 #' @param sample_id Sample identifier used when `newdata` is `NULL`.
 #' @param age_decade,sex,ethnicity_groups,assay_groups,tissue_groups Metadata
-#'   choices for the query profile. Use `NA` to marginalise over that covariate.
+#'   for the query profile: `NA` to marginalise, an exact level, or a dplyr
+#'   filter expression such as `str_detect("10x")`.
 #' @param summary_instead_of_draws Passed to [sccomp::sccomp_predict()].
 #' @param ... Additional arguments passed to [sccomp::sccomp_predict()].
 #' @return A list with `draws` (tibble of posterior predictive proportions),
@@ -212,15 +206,15 @@ composition_draws <- function(
   }
 
   if (is.null(newdata)) {
-    newdata <- build_sccomp_newdata(
+    newdata <- rlang::inject(build_sccomp_newdata(
       fit_obj,
       sample_id = sample_id,
-      age_decade = age_decade,
-      sex = sex,
-      ethnicity_groups = ethnicity_groups,
-      assay_groups = assay_groups,
-      tissue_groups = tissue_groups
-    )
+      age_decade = !!rlang::enquo(age_decade),
+      sex = !!rlang::enquo(sex),
+      ethnicity_groups = !!rlang::enquo(ethnicity_groups),
+      assay_groups = !!rlang::enquo(assay_groups),
+      tissue_groups = !!rlang::enquo(tissue_groups)
+    ))
   } else {
     newdata <- as.data.frame(newdata)
     if (!"sample_id" %in% names(newdata)) {

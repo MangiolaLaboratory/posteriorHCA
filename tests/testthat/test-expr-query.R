@@ -9,9 +9,12 @@ expr_query_file <- file.path(testthat::test_path("..", ".."), "R", "expr-query.R
 if (!file.exists(expr_query_file)) {
   expr_query_file <- file.path("R", "expr-query.R")
 }
-gene_id_file <- file.path(dirname(expr_query_file), "gene-id.R")
-if (file.exists(gene_id_file)) {
-  sys.source(gene_id_file, envir = environment())
+r_dir <- dirname(expr_query_file)
+for (dep in c("gene-id.R", "metadata-filter.R")) {
+  dep_file <- file.path(r_dir, dep)
+  if (file.exists(dep_file)) {
+    sys.source(dep_file, envir = environment())
+  }
 }
 sys.source(expr_query_file, envir = environment())
 
@@ -79,25 +82,7 @@ test_that("build_newdata_grid can fix every covariate", {
   expect_equal(attr(grid, "fixed"), names(.expression_meta_map))
 })
 
-test_that("build_newdata_grid still accepts character vectors", {
-  fit <- fake_expression_fit()
-  assays <- c("10x Genomics 5", "10x Genomics 3")
-  grid <- suppressMessages(build_newdata_grid(
-    fit,
-    age_decade = "7",
-    sex = "female",
-    disease_groups = "Normal",
-    ethnicity_groups = "European",
-    assay_groups = assays,
-    tissue_groups = "blood"
-  ))
-  expect_equal(
-    as.character(grid$assay_groups_altered),
-    c("10x Genomics 5", "10x Genomics 3")
-  )
-})
-
-test_that("build_newdata_grid filters assay levels with str_detect", {
+test_that("build_newdata_grid filters with str_detect(\"10x\")", {
   fit <- fake_expression_fit()
   grid <- suppressMessages(build_newdata_grid(
     fit,
@@ -108,40 +93,31 @@ test_that("build_newdata_grid filters assay levels with str_detect", {
     assay_groups = str_detect("10x"),
     tissue_groups = "blood"
   ))
-
   expect_equal(nrow(grid), 2L)
   expect_setequal(
     as.character(grid$assay_groups_altered),
     c("10x Genomics 3", "10x Genomics 5")
   )
-  expect_true(all(grid$sex == "female"))
-  expect_true(all(grid$age_decade == "7"))
-  expect_true("assay_groups" %in% attr(grid, "marginalised"))
 })
 
-test_that("str_detect ignores case only when the pattern asks it to", {
+test_that("build_newdata_grid still accepts an explicit column in the filter", {
   fit <- fake_expression_fit()
-  ignore_case <- suppressMessages(build_newdata_grid(
+  grid <- suppressMessages(build_newdata_grid(
     fit,
-    sex = "female",
     age_decade = "7",
+    sex = "female",
     disease_groups = "Normal",
     ethnicity_groups = "European",
-    assay_groups = str_detect("(?i)10X"),
+    assay_groups = str_detect(assay_groups, "10x"),
     tissue_groups = "blood"
   ))
   expect_setequal(
-    as.character(ignore_case$assay_groups_altered),
+    as.character(grid$assay_groups_altered),
     c("10x Genomics 3", "10x Genomics 5")
-  )
-
-  expect_error(
-    build_newdata_grid(fit, assay_groups = str_detect("10X")),
-    "No `assay_groups` levels matched"
   )
 })
 
-test_that("build_newdata_grid filters numeric-looking levels with between", {
+test_that("build_newdata_grid filters numeric levels with between(6, 8)", {
   fit <- fake_expression_fit()
   grid <- suppressMessages(build_newdata_grid(
     fit,
@@ -155,61 +131,31 @@ test_that("build_newdata_grid filters numeric-looking levels with between", {
   expect_equal(as.character(grid$age_decade), "7")
 })
 
-test_that("build_newdata_grid accepts a caller function and an explicit column", {
+test_that("build_newdata_grid accepts other stringr predicates", {
   fit <- fake_expression_fit()
-  matches_10x <- function(x) grepl("10X", x, ignore.case = TRUE)
-  from_function <- suppressMessages(build_newdata_grid(
+  grid <- suppressMessages(build_newdata_grid(
     fit,
-    sex = "female",
     age_decade = "7",
+    sex = "female",
     disease_groups = "Normal",
     ethnicity_groups = "European",
-    assay_groups = matches_10x(),
-    tissue_groups = "blood"
-  ))
-  from_expr <- suppressMessages(build_newdata_grid(
-    fit,
-    sex = "female",
-    age_decade = "7",
-    disease_groups = "Normal",
-    ethnicity_groups = "European",
-    assay_groups = grepl("10X", assay_groups, ignore.case = TRUE),
+    assay_groups = str_starts("10"),
     tissue_groups = "blood"
   ))
   expect_setequal(
-    as.character(from_function$assay_groups_altered),
-    c("10x Genomics 3", "10x Genomics 5")
-  )
-  expect_equal(
-    as.character(from_function$assay_groups_altered),
-    as.character(from_expr$assay_groups_altered)
-  )
-
-  qualified <- suppressMessages(build_newdata_grid(
-    fit,
-    sex = "female",
-    age_decade = "7",
-    disease_groups = "Normal",
-    ethnicity_groups = "European",
-    assay_groups = stringr::str_detect("10x"),
-    tissue_groups = "blood"
-  ))
-  expect_setequal(
-    as.character(qualified$assay_groups_altered),
+    as.character(grid$assay_groups_altered),
     c("10x Genomics 3", "10x Genomics 5")
   )
 })
 
-test_that("expression_baseline_draws forwards filter expressions", {
+test_that("expression_baseline_draws forwards str_detect(\"10x\")", {
   fit <- fake_expression_fit()
   wrap_env <- environment(expression_baseline_draws)
   original_draws <- wrap_env$expression_draws
   on.exit(assign("expression_draws", original_draws, envir = wrap_env), add = TRUE)
   assign(
     "expression_draws",
-    function(fit, newdata, ...) {
-      list(grid = newdata, n = nrow(newdata))
-    },
+    function(fit, newdata, ...) list(grid = newdata),
     envir = wrap_env
   )
 

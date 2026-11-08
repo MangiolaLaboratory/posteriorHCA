@@ -20,7 +20,8 @@ composition_posterior_test(
 \item{proportions}{A data frame of observed cell type proportions.}
 
 \item{sex, age_decade, ethnicity_groups, assay_groups, tissue_groups}{Metadata
-for the healthy query profile. Use `NULL`/`NA` to marginalise.}
+for the healthy query profile. Use `NULL`/`NA` to marginalise, or a dplyr
+filter expression such as `str_detect("10x")`.}
 
 \item{disease_groups}{Deprecated and ignored.}
 
