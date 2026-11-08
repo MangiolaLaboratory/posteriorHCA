@@ -22,12 +22,15 @@ Imports:
     qs2,
     brms,
     readr,
+    rlang,
+    stringr,
     edgeR,
     limma
 LazyData: true
 Collate:
     'utlis.R'
     'gene-id.R'
+    'metadata-filter.R'
     'cohort.R'
     'expr-query.R'
     'composition-query.R'

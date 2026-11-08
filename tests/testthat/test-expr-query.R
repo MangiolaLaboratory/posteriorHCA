@@ -9,9 +9,12 @@ expr_query_file <- file.path(testthat::test_path("..", ".."), "R", "expr-query.R
 if (!file.exists(expr_query_file)) {
   expr_query_file <- file.path("R", "expr-query.R")
 }
-gene_id_file <- file.path(dirname(expr_query_file), "gene-id.R")
-if (file.exists(gene_id_file)) {
-  sys.source(gene_id_file, envir = environment())
+r_dir <- dirname(expr_query_file)
+for (dep in c("gene-id.R", "metadata-filter.R")) {
+  dep_file <- file.path(r_dir, dep)
+  if (file.exists(dep_file)) {
+    sys.source(dep_file, envir = environment())
+  }
 }
 sys.source(expr_query_file, envir = environment())
 
@@ -77,6 +80,98 @@ test_that("build_newdata_grid can fix every covariate", {
   ))
   expect_equal(nrow(grid), 1L)
   expect_equal(attr(grid, "fixed"), names(.expression_meta_map))
+})
+
+test_that("build_newdata_grid filters with str_detect(\"10x\")", {
+  fit <- fake_expression_fit()
+  grid <- suppressMessages(build_newdata_grid(
+    fit,
+    age_decade = "7",
+    sex = "female",
+    disease_groups = "Normal",
+    ethnicity_groups = "European",
+    assay_groups = str_detect("10x"),
+    tissue_groups = "blood"
+  ))
+  expect_equal(nrow(grid), 2L)
+  expect_setequal(
+    as.character(grid$assay_groups_altered),
+    c("10x Genomics 3", "10x Genomics 5")
+  )
+})
+
+test_that("build_newdata_grid still accepts an explicit column in the filter", {
+  fit <- fake_expression_fit()
+  grid <- suppressMessages(build_newdata_grid(
+    fit,
+    age_decade = "7",
+    sex = "female",
+    disease_groups = "Normal",
+    ethnicity_groups = "European",
+    assay_groups = str_detect(assay_groups, "10x"),
+    tissue_groups = "blood"
+  ))
+  expect_setequal(
+    as.character(grid$assay_groups_altered),
+    c("10x Genomics 3", "10x Genomics 5")
+  )
+})
+
+test_that("build_newdata_grid filters numeric levels with between(6, 8)", {
+  fit <- fake_expression_fit()
+  grid <- suppressMessages(build_newdata_grid(
+    fit,
+    age_decade = between(6, 8),
+    sex = "female",
+    disease_groups = "Normal",
+    ethnicity_groups = "European",
+    assay_groups = "10x Genomics 3",
+    tissue_groups = "blood"
+  ))
+  expect_equal(as.character(grid$age_decade), "7")
+})
+
+test_that("build_newdata_grid accepts other stringr predicates", {
+  fit <- fake_expression_fit()
+  grid <- suppressMessages(build_newdata_grid(
+    fit,
+    age_decade = "7",
+    sex = "female",
+    disease_groups = "Normal",
+    ethnicity_groups = "European",
+    assay_groups = str_starts("10"),
+    tissue_groups = "blood"
+  ))
+  expect_setequal(
+    as.character(grid$assay_groups_altered),
+    c("10x Genomics 3", "10x Genomics 5")
+  )
+})
+
+test_that("expression_baseline_draws forwards str_detect(\"10x\")", {
+  fit <- fake_expression_fit()
+  wrap_env <- environment(expression_baseline_draws)
+  original_draws <- wrap_env$expression_draws
+  on.exit(assign("expression_draws", original_draws, envir = wrap_env), add = TRUE)
+  assign(
+    "expression_draws",
+    function(fit, newdata, ...) list(grid = newdata),
+    envir = wrap_env
+  )
+
+  out <- suppressMessages(expression_baseline_draws(
+    fit = fit,
+    age_decade = "7",
+    sex = "female",
+    disease_groups = "Normal",
+    ethnicity_groups = "European",
+    assay_groups = str_detect("10x"),
+    tissue_groups = "blood"
+  ))
+  expect_setequal(
+    as.character(out$grid$assay_groups_altered),
+    c("10x Genomics 3", "10x Genomics 5")
+  )
 })
 
 test_that("build_newdata_grid errors on unknown levels", {

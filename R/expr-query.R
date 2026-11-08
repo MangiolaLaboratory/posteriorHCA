@@ -9,6 +9,8 @@
 #   NA            -> expand over every level the model knows
 #   "A"           -> fix that level
 #   c("A", "B")   -> expand only over those levels
+#   str_detect("10x"), between(6, 8), ...
+#                 -> covariate inserted as 1st arg if missing, then dplyr::filter()
 #
 # dataset_id is a random intercept: NA means a new unseen study.
 
@@ -86,12 +88,14 @@ expression_model_levels <- function(fit, variable) {
 #' * `NA` — marginalise over every level in the model
 #' * a single value — fix that level
 #' * several values — marginalise over only those levels
+#' * a dplyr filter expression, e.g. `str_detect("10x")` or `between(6, 8)`
+#'   (the covariate is inserted as the first argument if omitted)
 #'
 #' `dataset_id` is a random intercept. `NA` stamps a new unseen-study label.
 #'
 #' @param fit A `brmsfit` or [load_expression_fit()] object.
 #' @param age_decade,sex,disease_groups,ethnicity_groups,assay_groups,tissue_groups
-#'   See the rules above.
+#'   Level, vector of levels, or a filter expression. See the rules above.
 #' @param dataset_id Existing dataset id, or `NA` for a new study.
 #' @param offset Numeric offset. Atlas queries usually use `0`.
 #' @param new_study_id Label used when `dataset_id` is `NA`.
@@ -115,13 +119,13 @@ build_newdata_grid <- function(
     cli_abort("`fit` must have a `$data` element.")
   }
 
-  user_choices <- list(
-    age_decade = age_decade,
-    sex = sex,
-    disease_groups = disease_groups,
-    ethnicity_groups = ethnicity_groups,
-    assay_groups = assay_groups,
-    tissue_groups = tissue_groups
+  metadata <- list(
+    age_decade = rlang::enquo(age_decade),
+    sex = rlang::enquo(sex),
+    disease_groups = rlang::enquo(disease_groups),
+    ethnicity_groups = rlang::enquo(ethnicity_groups),
+    assay_groups = rlang::enquo(assay_groups),
+    tissue_groups = rlang::enquo(tissue_groups)
   )
 
   expand_list <- list()
@@ -129,39 +133,24 @@ build_newdata_grid <- function(
   fixed_vars <- character(0)
   marginalised_vars <- character(0)
 
-  for (var in names(user_choices)) {
+  for (var in names(metadata)) {
     column <- find_fit_column(fit, .expression_meta_map[[var]])
-    choice <- user_choices[[var]]
-    missing_choice <- is.null(choice) || (length(choice) == 1L && is.na(choice))
+    quo <- metadata[[var]]
 
     if (is.na(column)) {
-      if (!missing_choice) {
+      if (!pick_metadata_levels(quo, character(), var)$NA_expand) {
         cli_abort("This model has no `{var}` column, but `{var}` was specified.")
       }
       next
     }
 
     available <- expression_model_levels(fit, var)
-    if (missing_choice) {
-      chosen <- available
-    } else {
-      chosen <- as.character(choice)
-      chosen <- chosen[!is.na(chosen) & nzchar(chosen)]
-      if (length(chosen) == 0L) {
-        chosen <- available
-      }
-      unknown <- setdiff(chosen, available)
-      if (length(unknown) > 0L) {
-        cli_abort(c(
-          "Unknown {var} value{?s}: {unknown}.",
-          "i" = "This model includes: {available}."
-        ))
-      }
-    }
+    resolved <- pick_metadata_levels(quo, available, var)
+    chosen <- if (resolved$NA_expand) available else resolved$chosen
 
     expand_list[[column]] <- chosen
     available_by_col[[column]] <- available
-    if (missing_choice || length(chosen) > 1L) {
+    if (resolved$NA_expand || length(chosen) > 1L) {
       marginalised_vars <- c(marginalised_vars, var)
     } else {
       fixed_vars <- c(fixed_vars, var)
@@ -363,7 +352,8 @@ load_expression_fit <- function(
 #' @param gene_ensg Ensembl gene id (required when `fit` is `NULL`).
 #' @param fit Optional pre-loaded fit from [load_expression_fit()].
 #' @param age_decade,sex,disease_groups,ethnicity_groups,assay_groups,tissue_groups
-#'   Passed to [build_newdata_grid()].
+#'   Passed to [build_newdata_grid()], including filter expressions such as
+#'   `str_detect("10x")`.
 #' @param dataset_id,offset,new_study_id Passed to [build_newdata_grid()].
 #' @param quantity,marginalise,ndraws,transform,re_formula,allow_new_levels,sample_new_levels,seed
 #'   Passed to [expression_draws()].
@@ -414,18 +404,18 @@ expression_baseline_draws <- function(
     )
   }
 
-  newdata <- build_newdata_grid(
+  newdata <- rlang::inject(build_newdata_grid(
     fit,
-    age_decade = age_decade,
-    sex = sex,
-    disease_groups = disease_groups,
-    ethnicity_groups = ethnicity_groups,
-    assay_groups = assay_groups,
-    tissue_groups = tissue_groups,
+    age_decade = !!rlang::enquo(age_decade),
+    sex = !!rlang::enquo(sex),
+    disease_groups = !!rlang::enquo(disease_groups),
+    ethnicity_groups = !!rlang::enquo(ethnicity_groups),
+    assay_groups = !!rlang::enquo(assay_groups),
+    tissue_groups = !!rlang::enquo(tissue_groups),
     dataset_id = dataset_id,
     offset = offset,
     new_study_id = new_study_id
-  )
+  ))
 
   expression_draws(
     fit,

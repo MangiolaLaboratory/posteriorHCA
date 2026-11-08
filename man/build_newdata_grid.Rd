@@ -20,7 +20,7 @@ build_newdata_grid(
 \arguments{
 \item{fit}{A `brmsfit` or [load_expression_fit()] object.}
 
-\item{age_decade, sex, disease_groups, ethnicity_groups, assay_groups, tissue_groups}{See the rules above.}
+\item{age_decade, sex, disease_groups, ethnicity_groups, assay_groups, tissue_groups}{Level, vector of levels, or a filter expression. See the rules above.}
 
 \item{dataset_id}{Existing dataset id, or `NA` for a new study.}
 
@@ -36,6 +36,8 @@ Each metadata argument is one of:
 * `NA` — marginalise over every level in the model
 * a single value — fix that level
 * several values — marginalise over only those levels
+* a dplyr filter expression, e.g. `str_detect("10x")` or `between(6, 8)`
+  (the covariate is inserted as the first argument if omitted)
 }
 \details{
 `dataset_id` is a random intercept. `NA` stamps a new unseen-study label.

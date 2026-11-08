@@ -29,7 +29,8 @@ is built from the scalar metadata arguments below.}
 \item{sample_id}{Sample identifier used when `newdata` is `NULL`.}
 
 \item{age_decade, sex, ethnicity_groups, assay_groups, tissue_groups}{Metadata
-choices for the query profile. Use `NA` to marginalise over that covariate.}
+for the query profile: `NA` to marginalise, an exact level, or a dplyr
+filter expression such as `str_detect("10x")`.}
 
 \item{summary_instead_of_draws}{Passed to [sccomp::sccomp_predict()].}
 
